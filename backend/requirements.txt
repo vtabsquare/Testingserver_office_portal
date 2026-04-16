@@ -8,6 +8,8 @@ PyPDF2==3.0.1
 reportlab==4.0.7
 xhtml2pdf==0.2.13
 
+supabase>=2.0.0
+
 SQLAlchemy==2.0.36
 psycopg[binary]
 

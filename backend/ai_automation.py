@@ -3989,7 +3989,7 @@ def execute_automation_action(action: Dict[str, Any], token: str) -> Dict[str, A
             if field_map['doj']:
                 payload[field_map['doj']] = doj
             if field_map['active']:
-                payload[field_map['active']] = "Active"
+                payload[field_map['active']] = True
             if field_map.get('employee_flag'):
                 payload[field_map['employee_flag']] = employee_flag
             
@@ -3999,7 +3999,7 @@ def execute_automation_action(action: Dict[str, Any], token: str) -> Dict[str, A
                 payload[field_map['experience']] = str(experience)
             
             if field_map.get('quota_hours'):
-                payload[field_map['quota_hours']] = "9"
+                payload[field_map['quota_hours']] = 9.0
             
             # Create the employee record
             created = create_record(entity_set, payload)
@@ -4019,7 +4019,7 @@ def execute_automation_action(action: Dict[str, Any], token: str) -> Dict[str, A
                         "crc6f_userid": user_id,
                         "crc6f_employeename": f"{first_name} {last_name}".strip(),
                         "crc6f_user_status": "Active",
-                        "crc6f_loginattempts": "0"
+                        "crc6f_loginattempts": 0
                     }
                     create_record(login_table, login_payload)
 

@@ -147,7 +147,7 @@ def get_or_create_conversation(user_id, target_id):
         conv_payload = {
             "crc6f_conversationid": conversation_id,
             "crc6f_empname": f"{user_id} → {target_id}",
-            "crc6f_isgroup": "false",
+            "crc6f_isgroup": False,
         }
         _apply_conv_rpt(conv_payload)
         dataverse_create(CONV_ENTITY_SET, conv_payload)
@@ -974,7 +974,7 @@ def start_direct_chat():
         conv_payload = {
             "crc6f_conversationid": conversation_id,
             "crc6f_empname": f"{u1} → {u2}",
-            "crc6f_isgroup": "false",
+            "crc6f_isgroup": False,
         }
         _apply_conv_rpt(conv_payload)
         dataverse_create(CONV_ENTITY_SET, conv_payload)
@@ -1031,7 +1031,7 @@ def create_group():
         conv_payload = {
             "crc6f_conversationid": cid,
             "crc6f_empname": name,
-            "crc6f_isgroup": "true",
+            "crc6f_isgroup": True,
         }
         # Best-effort: store creator_id for "created by" info
         if creator:
@@ -1044,7 +1044,7 @@ def create_group():
             fallback_conv = {
                 "crc6f_conversationid": cid,
                 "crc6f_empname": name,
-                "crc6f_isgroup": "true",
+                "crc6f_isgroup": True,
             }
             _apply_conv_rpt(fallback_conv)
             dataverse_create(CONV_ENTITY_SET, fallback_conv)

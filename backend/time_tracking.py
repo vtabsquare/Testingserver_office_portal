@@ -618,7 +618,7 @@ def set_exact_log():
             return jsonify({"success": False, "error": "forbidden"}), 403
 
         hours_worked = round(seconds / 3600, 2)
-        hours_worked_str = str(hours_worked)
+        hours_worked_val = hours_worked
         manual_marker = "[MANUAL]"
         desc_for_save = description
         if manual_marker not in desc_for_save:
@@ -680,7 +680,7 @@ def set_exact_log():
 
         if dv_id:
             # Use proven update_record helper from dataverse_helper.py
-            update_data = {"crc6f_hoursworked": hours_worked_str, "crc6f_workdescription": desc_for_save}
+            update_data = {"crc6f_hoursworked": hours_worked_val, "crc6f_workdescription": desc_for_save}
             if b.get("task_name"):
                 update_data["crc6f_taskname"] = str(b.get("task_name")).strip()
             print(f"[TEAM_TS_EDIT] Updating {dv_id} with {update_data}")
@@ -697,7 +697,7 @@ def set_exact_log():
             create_data = {
                 "crc6f_employeeid": employee_id,
                 "crc6f_workdate": work_date,
-                "crc6f_hoursworked": hours_worked_str,
+                "crc6f_hoursworked": hours_worked_val,
                 "crc6f_workdescription": desc_for_save,
                 "crc6f_approvalstatus": "Pending",
             }
@@ -1313,7 +1313,7 @@ def create_task_log():
                 "crc6f_taskid": task_id,
                 "crc6f_taskguid": task_guid,
                 "crc6f_taskname": task_name,
-                "crc6f_hoursworked": str(hours_worked),
+                "crc6f_hoursworked": round(hours_worked, 4),
                 "crc6f_workdescription": work_desc,
                 "crc6f_approvalstatus": "Pending",
                 # Dataverse work date field (Date Only)
@@ -1379,7 +1379,7 @@ def create_task_log():
                         prev_hours = 0.0
                     merged_hours = round(prev_hours + hours_worked, 4)
                     update_payload = {
-                        "crc6f_hoursworked": str(merged_hours),
+                        "crc6f_hoursworked": round(merged_hours, 4),
                         "crc6f_workdescription": work_desc,
                     }
                     patch_url = f"{RESOURCE}{DV_API}/crc6f_hr_timesheetlogs({dv_id})"

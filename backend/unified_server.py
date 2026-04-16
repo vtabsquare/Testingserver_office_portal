@@ -31,7 +31,7 @@ from google_auth_oauthlib.flow import Flow
 from google_token_store import load_google_token, save_google_token
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
-from dataverse_helper import create_record, update_record, delete_record, get_access_token, get_employee_name, get_employee_email, get_record, get_dataverse_session
+from dataverse_helper import create_record, update_record, delete_record, get_access_token, get_employee_name, get_employee_email, get_record, get_dataverse_session, get_supabase
 from flask_mail import Mail, Message
 from mail_app import send_email
 from project_contributors import bp as contributors_bp
@@ -609,10 +609,10 @@ def _apply_holiday_rpt(payload: dict) -> dict:
     return payload
 
 # ================== CLIENTS CONFIGURATION ==================
-CLIENTS_ENTITY = os.getenv("CLIENTS_ENTITY", "crc6f_hr_clientses")
+CLIENTS_ENTITY = os.getenv("CLIENTS_ENTITY", "crc6f_hr_clients")
 CLIENTS_ENTITY_CANDIDATES = [
-    "crc6f_hr_clientses",
     "crc6f_hr_clients",
+    "crc6f_hr_clientses",
     "crc6f_clients"
 ]
 CLIENTS_ENTITY_RESOLVED = None
@@ -666,8 +666,9 @@ def _apply_asset_rpt(payload: dict) -> dict:
     return payload
 
 # ================== TIMESHEET/TIME TRACKER CONFIGURATION ==================
-TIMESHEET_ENTITY = os.getenv("TIMESHEET_ENTITY", "crc6f_hr_timesheets")
+TIMESHEET_ENTITY = os.getenv("TIMESHEET_ENTITY", "crc6f_hr_timesheetlogs")
 TIMESHEET_ENTITY_CANDIDATES = [
+    "crc6f_hr_timesheetlogs",
     "crc6f_hr_timesheets",
     "crc6f_hr_timesheet",
     "crc6f_timesheets",
@@ -1213,7 +1214,7 @@ def _maybe_mark_thresholds(emp_key: str, record_id: str, total_seconds_today: in
     hours_val = round(max(0, total_seconds_today) / 3600.0, 2)
     status = _classify_hours(hours_val)
     update_payload = {
-        FIELD_DURATION: str(hours_val),
+        FIELD_DURATION: round(hours_val, 2),
         FIELD_DURATION_INTEXT: _format_duration_text_from_hours(hours_val),
     }
     if FIELD_STATUS:
@@ -1635,7 +1636,7 @@ def _auto_close_stale_login_sessions(employee_id: str):
                         if att_id:
                             att_patch = {
                                 FIELD_CHECKOUT: next_midnight_local.strftime("%H:%M:%S"),
-                                FIELD_DURATION: str(hours_val),
+                                FIELD_DURATION: round(hours_val, 2),
                                 FIELD_DURATION_INTEXT: _format_duration_text_from_hours(hours_val),
                             }
                             if FIELD_STATUS:
@@ -3498,7 +3499,7 @@ def login():
             now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
             payload = {
                 "crc6f_last_login": now_iso,
-                "crc6f_loginattempts": "0",
+                "crc6f_loginattempts": 0,
                 "crc6f_user_status": "Active"
             }
 
@@ -3616,6 +3617,11 @@ def login():
             print("[FACEAUTH] CALLBACK URL:", callback_url)
             print("[FACEAUTH] FINAL URL:", face_verify_url[:120], "...")
             
+            # Allow skipping face auth for local development
+            skip_face_auth_env = os.getenv("SKIP_FACE_AUTH", "false").lower() == "true"
+            if skip_face_auth_env:
+                face_auth_required_for_employee = False
+
             # If face auth is NOT required for this employee, skip face verification
             if not face_auth_required_for_employee:
                 # Generate token with face_verified=True (bypass face auth)
@@ -3659,7 +3665,7 @@ def login():
         # RULE 3: WRONG PASSWORD
         # ======================================================
         attempts += 1
-        update_payload = {"crc6f_loginattempts": str(attempts)}
+        update_payload = {"crc6f_loginattempts": attempts}
 
         admin_email = os.getenv("ADMIN_EMAIL")
 
@@ -4238,7 +4244,7 @@ def reset_password():
 
         patch_body = {
             "crc6f_password": hashed_password,
-            "crc6f_loginattempts": "0"   # reset attempts
+            "crc6f_loginattempts": 0   # reset attempts
         }
 
         patch_headers = dict(headers)
@@ -4306,7 +4312,7 @@ def reset_attempts():
 
     try:
         _update_login_record(record_id, {
-            "crc6f_loginattempts": "0",
+            "crc6f_loginattempts": 0,
             "crc6f_user_status": "Active"
         }, headers, token)
     except Exception as e:
@@ -4413,7 +4419,7 @@ def create_login_account():
             "crc6f_employeename": employee_name,
             "crc6f_accesslevel": access_level,
             "crc6f_user_status": user_status,
-            "crc6f_loginattempts": str(login_attempts_int),
+            "crc6f_loginattempts": login_attempts_int,
         }
         if last_login:
             payload["crc6f_last_login"] = last_login
@@ -4473,7 +4479,7 @@ def update_login_account(login_id):
                 attempts_int = int(data.get("login_attempts"))
             except Exception:
                 attempts_int = 0
-            payload["crc6f_loginattempts"] = str(attempts_int)
+            payload["crc6f_loginattempts"] = attempts_int
         if "user_id" in data:
             payload["crc6f_userid"] = str(data.get("user_id") or "")
         if not payload:
@@ -4980,7 +4986,7 @@ def checkout():
             try:
                 update_payload = {
                     FIELD_CHECKOUT: checkout_time_str,
-                    FIELD_DURATION: str(total_hours_today),
+                    FIELD_DURATION: round(total_hours_today, 2),
                     FIELD_DURATION_INTEXT: readable_duration,
                 }
                 if FIELD_STATUS:
@@ -5116,7 +5122,7 @@ def auto_status_update():
         
         # Update the attendance record with new status and duration
         update_payload = {
-            FIELD_DURATION: str(total_hours),
+            FIELD_DURATION: round(total_hours, 2),
             FIELD_DURATION_INTEXT: readable_duration,
         }
         if FIELD_STATUS:
@@ -5977,7 +5983,7 @@ def manual_edit_attendance():
             print(f"[ATT_EDIT] Using existing record_id: {record_id}")
 
         payload = {
-            FIELD_DURATION: str(int(duration_hours)),
+            FIELD_DURATION: float(int(duration_hours)),
             FIELD_DURATION_INTEXT: f"{int(duration_hours)} hour(s) 0 minute(s) [MANUAL]",
             FIELD_CHECKIN: checkin_val,
             FIELD_CHECKOUT: checkout_val,
@@ -5995,7 +6001,7 @@ def manual_edit_attendance():
                 FIELD_EMPLOYEE_ID: normalized_emp_id,
                 FIELD_DATE: date_str,
                 FIELD_ATTENDANCE_ID_CUSTOM: new_att_id,
-                FIELD_DURATION: str(int(duration_hours)),
+                FIELD_DURATION: float(int(duration_hours)),
                 FIELD_DURATION_INTEXT: f"{int(duration_hours)} hour(s) 0 minute(s) [MANUAL]",
             }
             if FIELD_STATUS:
@@ -6204,7 +6210,7 @@ def apply_leave():
                     "crc6f_enddate": paid_end_dt.date().isoformat(),
                     "crc6f_paidunpaid": "Paid",
                     "crc6f_status": status,
-                    "crc6f_totaldays": str(int(paid_days)),
+                    "crc6f_totaldays": int(paid_days),
                     "crc6f_employeeid": applied_by,
                     "crc6f_approvedby": "",
                     "crc6f_rejectionreason": reason or "",
@@ -6229,7 +6235,7 @@ def apply_leave():
                     "crc6f_enddate": end_dt.date().isoformat(),
                     "crc6f_paidunpaid": "Unpaid",
                     "crc6f_status": status,
-                    "crc6f_totaldays": str(int(unpaid_days)),
+                    "crc6f_totaldays": int(unpaid_days),
                     "crc6f_employeeid": applied_by,
                     "crc6f_approvedby": "",
                     "crc6f_rejectionreason": reason or "",
@@ -6305,7 +6311,7 @@ def apply_leave():
             "crc6f_enddate": end_date,
             "crc6f_paidunpaid": paid_unpaid,
             "crc6f_status": status,
-            "crc6f_totaldays": str(leave_days),
+            "crc6f_totaldays": int(leave_days),
             "crc6f_employeeid": applied_by,
             "crc6f_approvedby": "",
             "crc6f_rejectionreason": reason or "",
@@ -6644,8 +6650,8 @@ def create_project():
             "crc6f_projectstatus": data.get("crc6f_projectstatus"),
             "crc6f_startdate": data.get("crc6f_startdate"),
             "crc6f_enddate": data.get("crc6f_enddate"),
-            "crc6f_estimationcost": data.get("crc6f_estimationcost"),
-            "crc6f_noofcontributors": data.get("crc6f_noofcontributors"),
+            "crc6f_estimationcost": float(data.get("crc6f_estimationcost") or 0),
+            "crc6f_noofcontributors": int(data.get("crc6f_noofcontributors") or 0),
             "crc6f_projectdescription": data.get("crc6f_projectdescription"),
         }
         created = create_record(entity_set, payload)
@@ -6674,7 +6680,18 @@ def update_project(record_id):
             "crc6f_projectdescription",
         ]:
             if k in data:
-                payload[k] = data.get(k)
+                val = data.get(k)
+                if k == "crc6f_noofcontributors" and val is not None:
+                    try:
+                        val = int(val)
+                    except (ValueError, TypeError):
+                        val = 0
+                elif k == "crc6f_estimationcost" and val is not None:
+                    try:
+                        val = float(val)
+                    except (ValueError, TypeError):
+                        val = 0.0
+                payload[k] = val
         update_record(entity_set, record_id, payload)
         return jsonify({"success": True})
     except Exception as e:
@@ -6725,11 +6742,14 @@ def bulk_create_projects():
                 client = (row.get("crc6f_client") or "").strip()
                 status = (row.get("crc6f_projectstatus") or "").strip()
                 contributors_raw = row.get("crc6f_noofcontributors")
-                contributors = "" if contributors_raw is None else str(contributors_raw).strip()
+                try:
+                    contributors = int(contributors_raw) if contributors_raw is not None else None
+                except (ValueError, TypeError):
+                    contributors = 0
 
                 start_dt = (row.get("crc6f_startdate") or "").strip()
                 end_dt = (row.get("crc6f_enddate") or "").strip()
-                if not pid or not pname or not client or contributors == "" or not status or not start_dt:
+                if not pid or not pname or not client or contributors is None or not status or not start_dt:
                     raise ValueError("Missing required fields (projectid, projectname, client, contributors, status, startdate)")
 
                 # Ensure unique project id
@@ -7263,7 +7283,7 @@ def debug_create_test_intern():
         if field_map.get("designation"):
             emp_payload[field_map["designation"]] = "Intern"
         if field_map.get("active"):
-            emp_payload[field_map["active"]] = "Active"
+            emp_payload[field_map["active"]] = True
         if field_map.get("employee_flag"):
             emp_payload[field_map["employee_flag"]] = "Intern"
 
@@ -7439,7 +7459,7 @@ def test_login_leave_tables():
                 "crc6f_userid": "USER-999",
                 "crc6f_employeename": "Test User",
                 "crc6f_user_status": "Active",
-                "crc6f_loginattempts": "0"
+                "crc6f_loginattempts": 0
             }
             create_result = create_record(login_table, test_login)
             results["test_login_creation"] = {"success": True, "result": create_result}
@@ -8794,13 +8814,12 @@ def create_employee():
         if field_map['doj']:
             payload[field_map['doj']] = doj
         if field_map['active']:
-            # Convert boolean to string format expected by Dataverse
+            # Convert to boolean for Supabase
             active_value = data.get("active")
             if isinstance(active_value, bool):
-                payload[field_map['active']] = "Active" if active_value else "Inactive"
+                payload[field_map['active']] = active_value
             else:
-                # Handle string values
-                payload[field_map['active']] = "Active" if str(active_value).lower() in ['true', '1', 'active'] else "Inactive"
+                payload[field_map['active']] = str(active_value).lower() in ['true', '1', 'active']
 
         # Employee flag (e.g., Intern / Employee)
         if field_map.get('employee_flag') and employee_flag:
@@ -8821,7 +8840,7 @@ def create_employee():
         
         # Set quota hours to 9 for all employees
         if field_map.get('quota_hours'):
-            payload[field_map['quota_hours']] = "9"
+            payload[field_map['quota_hours']] = 9.0
             print(f"   [ALARM] Set quota hours: 9")
         
         _apply_employee_rpt(payload)
@@ -8864,7 +8883,7 @@ def create_employee():
                         "crc6f_userid": user_id,
                         "crc6f_employeename": f"{first_name} {last_name}".strip(),
                         "crc6f_user_status": "Active",
-                        "crc6f_loginattempts": "0"
+                        "crc6f_loginattempts": 0
                     }
                     
                     print(f"   [LOG] Login payload: {login_payload}")
@@ -9234,6 +9253,11 @@ def update_intern(intern_id):
         if not record_id:
             return jsonify({"success": False, "error": "Unable to resolve intern record ID"}), 500
 
+        # Fields that are integer in Supabase
+        _INTERN_INT_FIELDS = {"unpaid_duration", "paid_duration", "probation_duration", "postprob_duration"}
+        # Fields that are numeric (float) in Supabase
+        _INTERN_NUM_FIELDS = {"paid_salary", "probation_salary", "postprob_salary"}
+
         payload = {}
         for friendly, logical in INTERN_FIELDS.items():
             if friendly in ("primary", "created_by"):
@@ -9241,6 +9265,16 @@ def update_intern(intern_id):
             if logical and friendly in data:
                 value = data.get(friendly)
                 if value not in (None, ""):
+                    if friendly in _INTERN_INT_FIELDS:
+                        try:
+                            value = int(value)
+                        except (ValueError, TypeError):
+                            value = 0
+                    elif friendly in _INTERN_NUM_FIELDS:
+                        try:
+                            value = float(value)
+                        except (ValueError, TypeError):
+                            value = 0.0
                     payload[logical] = value
 
         if not payload:
@@ -9565,9 +9599,9 @@ def update_employee_api(employee_id):
         if field_map['active'] and "active" in data:
             active_value = data.get("active")
             if isinstance(active_value, bool):
-                payload[field_map['active']] = "Active" if active_value else "Inactive"
+                payload[field_map['active']] = active_value
             else:
-                payload[field_map['active']] = "Active" if str(active_value).lower() in ['true', '1', 'active'] else "Inactive"
+                payload[field_map['active']] = str(active_value).lower() in ['true', '1', 'active']
 
         # Handle employee flag update
         if field_map.get('employee_flag') and data.get('employee_flag'):
@@ -9889,13 +9923,12 @@ def bulk_create_employees():
                 if field_map['doj']:
                     payload[field_map['doj']] = doj_val
                 if field_map['active']:
-                    # Convert boolean to string format expected by Dataverse
+                    # Convert to boolean for Supabase
                     active_value = emp_data.get("active")
                     if isinstance(active_value, bool):
-                        payload[field_map['active']] = "Active" if active_value else "Inactive"
+                        payload[field_map['active']] = active_value
                     else:
-                        # Handle string values
-                        payload[field_map['active']] = "Active" if str(active_value).lower() in ['true', '1', 'active'] else "Inactive"
+                        payload[field_map['active']] = str(active_value).lower() in ['true', '1', 'active']
                 
                 # Calculate and add experience
                 if field_map.get('experience') and doj_val:
@@ -9904,7 +9937,7 @@ def bulk_create_employees():
                 
                 # Set quota hours to 9
                 if field_map.get('quota_hours'):
-                    payload[field_map['quota_hours']] = "9"
+                    payload[field_map['quota_hours']] = 9.0
                 
                 print(f"\n[LOG] Row {idx + 1}: {emp_data.get('employee_id')} - {emp_data.get('first_name')} {emp_data.get('last_name')}")
                 print(f"   Payload: {payload}")
@@ -9942,7 +9975,7 @@ def bulk_create_employees():
                                 "crc6f_username": email_val.lower(),
                                 "crc6f_password": hashed,
                                 "crc6f_user_status": "Active",
-                                "crc6f_loginattempts": "0",
+                                "crc6f_loginattempts": 0,
                                 "crc6f_employeename": name_val or emp_data.get("employee_id"),
                                 "crc6f_accesslevel": access_level,
                                 "crc6f_userid": user_id
@@ -10899,7 +10932,7 @@ def restore_deleted_employees():
                 if field_map['doj']:
                     payload[field_map['doj']] = emp.get('doj')
                 if field_map['active']:
-                    payload[field_map['active']] = "Active" if emp.get('active', 'false').lower() == 'true' else "Inactive"
+                    payload[field_map['active']] = emp.get('active', 'false').lower() == 'true'
                 
                 create_record(entity_set, payload)
                 restored_count += 1
@@ -11789,7 +11822,7 @@ def reject_attendance_submission(marker_id):
 
 # ==================== ONBOARDING MODULE ====================
 # Configuration
-ONBOARDING_ENTITY = "crc6f_hr_onboardings"  # Dataverse table for onboarding
+ONBOARDING_ENTITY = "crc6f_hr_onboardings"  # Supabase table for onboarding
 ONBOARDING_ENTITY_CANDIDATES = [
     "crc6f_hr_onboardings",
     "crc6f_hr_onboarding",
@@ -11803,6 +11836,10 @@ PROGRESS_LOG_ENTITY_CANDIDATES = [
     "crc6f_hr_onboardingprogresslog",
 ]
 PROGRESS_LOG_ENTITY_RESOLVED = None
+
+# Local directory for onboarding document uploads (replaces Dataverse File Column)
+ONBOARDING_UPLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", "onboarding")
+os.makedirs(ONBOARDING_UPLOADS_DIR, exist_ok=True)
 
 def get_onboarding_entity_set(token):
     """Auto-resolve the correct onboarding entity set name."""
@@ -11999,41 +12036,29 @@ def _fill_stage_ts_fallbacks(formatted_item: dict, raw_record: dict):
 def generate_employee_id():
     """Generate sequential Employee ID in format EMP### by inspecting existing records."""
     try:
-        token = get_access_token()
-        entity_set = get_employee_entity_set(token)
-        field_map = get_field_map(entity_set)
-        id_field = field_map.get('id') or 'crc6f_employeeid'
+        sb = get_supabase()
+        id_field = 'crc6f_employeeid'
+        entity_set = EMPLOYEE_ENTITY
 
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0"
-        }
-
-        url = f"{RESOURCE}/api/data/v9.2/{entity_set}?$select={id_field}&$orderby=createdon desc&$top=200"
-        response = get_dataverse_session().get(url, headers=headers, timeout=15)
+        resp = sb.table(entity_set).select(id_field).order('createdon', desc=True).limit(200).execute()
+        rows = resp.data or []
 
         max_num = 0
-        if response.status_code == 200:
-            rows = response.json().get('value', [])
-            for row in rows:
-                raw_id = str(row.get(id_field) or '').strip().upper()
-                if not raw_id:
-                    continue
-                if not raw_id.startswith('EMP'):
-                    continue
-                match = re.search(r"(\d+)$", raw_id)
-                if not match:
-                    continue
-                try:
-                    num = int(match.group(1))
-                    if num > max_num:
-                        max_num = num
-                except ValueError:
-                    continue
-        else:
-            print(f"[WARN] Could not fetch existing employee IDs (status {response.status_code}): {response.text[:120]}")
+        for row in rows:
+            raw_id = str(row.get(id_field) or '').strip().upper()
+            if not raw_id:
+                continue
+            if not raw_id.startswith('EMP'):
+                continue
+            match = re.search(r"(\d+)$", raw_id)
+            if not match:
+                continue
+            try:
+                num = int(match.group(1))
+                if num > max_num:
+                    max_num = num
+            except ValueError:
+                continue
 
         next_num = max_num + 1
         return format_employee_id(next_num)
@@ -12215,6 +12240,15 @@ def serve_upload(filename):
         os.makedirs(UPLOADS_DIR, exist_ok=True)
         from flask import send_from_directory
         return send_from_directory(UPLOADS_DIR, filename, as_attachment=False)
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 404
+
+# Serve onboarding document uploads
+@app.route('/uploads/onboarding/<path:filename>', methods=['GET'])
+def serve_onboarding_upload(filename):
+    try:
+        from flask import send_from_directory
+        return send_from_directory(ONBOARDING_UPLOADS_DIR, filename, as_attachment=False)
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 404
 
@@ -13819,7 +13853,7 @@ def verify_documents_and_complete(record_id):
 
 @app.route('/api/onboarding/<record_id>/documents', methods=['POST'])
 def upload_onboarding_documents(record_id):
-    """Upload files to Dataverse File column (crc6f_documentsuploaded)"""
+    """Upload files to local storage and store paths in crc6f_documentsuploaded"""
     try:
         token = get_access_token()
         onboarding_entity = get_onboarding_entity_set(token)
@@ -13829,12 +13863,9 @@ def upload_onboarding_documents(record_id):
             return jsonify({'success': False, 'message': 'No files provided'}), 400
 
         uploaded_files = []
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0"
-        }
+        # Ensure per-record upload directory exists
+        record_upload_dir = os.path.join(ONBOARDING_UPLOADS_DIR, str(record_id))
+        os.makedirs(record_upload_dir, exist_ok=True)
 
         for f in files:
             if not f or not getattr(f, 'filename', ''):
@@ -13845,57 +13876,40 @@ def upload_onboarding_documents(record_id):
                 continue
 
             try:
-                # Read file content
-                file_content = f.read()
-                
-                # Upload to Dataverse File column using PATCH with file data
-                # Reference: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/file-column-data
-                file_upload_url = f"{BASE_URL}/{onboarding_entity}({record_id})/crc6f_documentsuploaded"
-                
-                file_headers = headers.copy()
-                file_headers["Content-Type"] = "application/octet-stream"
-                file_headers["x-ms-file-name"] = name
-                
-                # Try upload without If-Match first (for new uploads)
-                upload_resp = get_dataverse_session().patch(file_upload_url, headers=file_headers, data=file_content, timeout=30)
-                
-                # If it fails with 412 Precondition Failed, retry with If-Match: * (for re-upload)
-                if upload_resp.status_code == 412:
-                    print(f"[INFO] File exists, retrying with If-Match for {name}")
-                    file_headers["If-Match"] = "*"
-                    upload_resp = get_dataverse_session().patch(file_upload_url, headers=file_headers, data=file_content, timeout=30)
-                
-                if upload_resp.status_code in [200, 204]:
-                    uploaded_files.append(name)
-                    print(f"[OK] Uploaded file to Dataverse: {name}")
-                else:
-                    print(f"[WARN] Failed to upload {name}: {upload_resp.status_code} - {upload_resp.text}")
-                    
+                # Save file to local uploads directory
+                safe_name = name.replace('..', '_').replace('/', '_').replace('\\', '_')
+                dest_path = os.path.join(record_upload_dir, safe_name)
+                f.save(dest_path)
+                uploaded_files.append(safe_name)
+                print(f"[OK] Uploaded file locally: {safe_name}")
             except Exception as file_err:
                 print(f"[ERROR] Error uploading file {name}: {file_err}")
                 continue
 
         if not uploaded_files:
-            return jsonify({'success': False, 'message': 'No files were successfully uploaded to Dataverse'}), 400
+            return jsonify({'success': False, 'message': 'No files were successfully uploaded'}), 400
 
-        # Update document status and progress (if candidate already accepted offer)
+        # Build comma-separated list of all files in the record folder
+        try:
+            all_files = os.listdir(record_upload_dir)
+            files_str = ','.join(all_files) if all_files else ''
+        except Exception:
+            files_str = ','.join(uploaded_files)
+
+        # Fetch current mail reply to decide whether to advance progress step
         mail_reply_value = ''
         try:
-            detail_headers = {
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json"
-            }
-            detail_url = f"{BASE_URL}/{onboarding_entity}({record_id})?$select=crc6f_offerpmailreply"
-            detail_resp = get_dataverse_session().get(detail_url, headers=detail_headers, timeout=20)
-            if detail_resp.status_code == 200:
-                detail_json = detail_resp.json()
-                mail_reply_value = (detail_json.get('crc6f_offerpmailreply') or '').strip().lower()
+            sb = get_supabase()
+            detail_resp = sb.table(onboarding_entity).select('crc6f_offerpmailreply').eq('crc6f_hr_onboardingid', record_id).limit(1).execute()
+            if detail_resp.data:
+                mail_reply_value = (detail_resp.data[0].get('crc6f_offerpmailreply') or '').strip().lower()
         except Exception as fetch_err:
             print(f"[WARN] Could not read onboarding record before updating progress: {fetch_err}")
 
         try:
             update_payload = {
-                'crc6f_documentsstatus': 'Pending'
+                'crc6f_documentsstatus': 'Pending',
+                'crc6f_documentsuploaded': files_str,
             }
             moved_to_stage4 = False
             if mail_reply_value == 'yes':
@@ -13915,7 +13929,7 @@ def upload_onboarding_documents(record_id):
         return jsonify({
             'success': True, 
             'uploaded': uploaded_files,
-            'message': f'Successfully uploaded {len(uploaded_files)} file(s) to Dataverse'
+            'message': f'Successfully uploaded {len(uploaded_files)} file(s)'
         }), 200
         
     except Exception as e:
@@ -13929,56 +13943,34 @@ def delete_onboarding_documents(record_id):
         token = get_access_token()
         onboarding_entity = get_onboarding_entity_set(token)
 
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0",
-        }
-
-        # Try to retrieve file metadata so we can use the DeleteFile action with FileId
-        file_id = None
+        # Delete local files for this record
+        record_upload_dir = os.path.join(ONBOARDING_UPLOADS_DIR, str(record_id))
+        deleted_files = []
         try:
-            detail_headers = {
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-            }
-            detail_url = f"{BASE_URL}/{onboarding_entity}({record_id})?$select=crc6f_documentsuploaded"
-            detail_resp = get_dataverse_session().get(detail_url, headers=detail_headers, timeout=20)
-            if detail_resp.status_code == 200:
-                record = detail_resp.json()
-                meta = record.get("crc6f_documentsuploaded")
-                if isinstance(meta, dict):
-                    file_id = meta.get("fileId") or meta.get("fileid") or meta.get("FileId")
-                elif isinstance(meta, str):
-                    file_id = meta
-        except Exception as meta_err:
-            print(f"[WARN] Could not read file metadata before delete: {meta_err}")
+            if os.path.isdir(record_upload_dir):
+                import shutil
+                for fname in os.listdir(record_upload_dir):
+                    fpath = os.path.join(record_upload_dir, fname)
+                    try:
+                        os.remove(fpath)
+                        deleted_files.append(fname)
+                    except Exception:
+                        pass
+                # Remove the directory itself
+                try:
+                    shutil.rmtree(record_upload_dir, ignore_errors=True)
+                except Exception:
+                    pass
+        except Exception as del_err:
+            print(f"[WARN] Error deleting local document files: {del_err}")
 
-        if file_id:
-            # Recommended approach: use DeleteFile action with the FileId
-            delete_action_url = f"{BASE_URL}/DeleteFile"
-            action_headers = headers.copy()
-            action_headers["Content-Type"] = "application/json"
-            resp = get_dataverse_session().post(delete_action_url, headers=action_headers, json={"FileId": file_id}, timeout=15)
-        else:
-            # Fallback: delete the file column directly using DELETE on the property
-            delete_headers = headers.copy()
-            delete_headers["If-None-Match"] = "null"
-            delete_url = f"{BASE_URL}/{onboarding_entity}({record_id})/crc6f_documentsuploaded"
-            resp = get_dataverse_session().delete(delete_url, headers=delete_headers, timeout=15)
-
-        if resp.status_code not in (200, 204):
-            try:
-                err_json = resp.json()
-                err_msg = (err_json.get('error') or {}).get('message') or resp.text
-            except Exception:
-                err_msg = resp.text
-            print(f"[WARN] Failed to delete documents file column: {resp.status_code} - {err_msg}")
-            return jsonify({'success': False, 'message': f'Failed to delete documents: {err_msg}'}), resp.status_code
-
+        # Clear the document reference in Supabase and reset status
         try:
-            update_record(onboarding_entity, record_id, {'crc6f_documentsstatus': 'Pending'})
+            sb = get_supabase()
+            sb.table(onboarding_entity).update({
+                'crc6f_documentsuploaded': None,
+                'crc6f_documentsstatus': 'Pending'
+            }).eq('crc6f_hr_onboardingid', record_id).execute()
         except Exception as upd_err:
             print(f"[WARN] Could not reset documents status after delete: {upd_err}")
 
@@ -14395,7 +14387,7 @@ def create_comp_off_request():
                 "crc6f_enddate": leave_date,
                 "crc6f_paidunpaid": "Paid",
                 "crc6f_status": "Pending",
-                "crc6f_totaldays": str(total_days),
+                "crc6f_totaldays": int(total_days),
             }
             if reason:
                 payload["crc6f_rejectionreason"] = reason
@@ -14403,7 +14395,7 @@ def create_comp_off_request():
             payload = {
                 "crc6f_employeeid": employee_id,
                 "crc6f_status": "Pending",
-                "crc6f_totaldays": str(total_days),
+                "crc6f_totaldays": int(total_days),
             }
             if reason:
                 payload["crc6f_reason"] = reason
@@ -14425,13 +14417,13 @@ def create_comp_off_request():
                     "crc6f_enddate": leave_date,
                     "crc6f_paidunpaid": "Paid",
                     "crc6f_status": "Pending",
-                    "crc6f_totaldays": str(total_days),
+                    "crc6f_totaldays": int(total_days),
                 })
             else:
                 created = create_record(compoff_entity, {
                     "crc6f_employeeid": employee_id,
                     "crc6f_status": "Pending",
-                    "crc6f_totaldays": str(total_days),
+                    "crc6f_totaldays": int(total_days),
                 })
 
         created = created if isinstance(created, dict) else {}
@@ -14439,7 +14431,7 @@ def create_comp_off_request():
             **created,
             "crc6f_employeeid": created.get("crc6f_employeeid") or employee_id,
             "crc6f_status": created.get("crc6f_status") or "Pending",
-            "crc6f_totaldays": created.get("crc6f_totaldays") or str(total_days),
+            "crc6f_totaldays": created.get("crc6f_totaldays") or int(total_days),
         }
         if is_leave_backed:
             normalized_seed.update({
@@ -15784,3 +15776,12 @@ def update_leave_allocation_type(type_name):
         return jsonify({"success": True}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+if __name__ == '__main__':
+    print('\n' + '== ' * 30)
+    print('UNIFIED OFFICE TOOL SERVER STARTING...')
+    print('== ' * 30 + '\n')
+    print('Server running on: http://localhost:5000')
+    print('Frontend should connect to: http://localhost:5000/api/*')
+    print('\n' + '='*80 + '\n')
+    app.run(host='0.0.0.0', port=5000, debug=True)

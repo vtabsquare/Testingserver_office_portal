@@ -1,10 +1,9 @@
 # server.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from dataverse_helper import create_record, update_record, get_access_token
+from supabase_helper import create_record, update_record, get_access_token, query_records, upsert_record, get_supabase
 from datetime import datetime, timezone
 import os
-import requests
 from dotenv import load_dotenv
 
 try:
@@ -16,10 +15,8 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for React frontend
 
 load_dotenv("id.env")
-RESOURCE = os.getenv("RESOURCE")
-BASE_URL = (RESOURCE or "").rstrip("/") + "/api/data/v9.2" if RESOURCE else None
 
-# ✅ CORRECT FIELD NAMES from your Dataverse schema
+# Field names (same as Dataverse schema, now in Supabase)
 ENTITY_NAME = "crc6f_table13s"
 FIELD_EMPLOYEE_ID = "crc6f_employeeid"
 FIELD_DATE = "crc6f_date"
@@ -30,7 +27,6 @@ FIELD_ATTENDANCE_ID = "crc6f_table13id"
 
 # Store active check-in sessions (in production, use Redis or database)
 active_sessions = {}
-
 
 LOGIN_ACTIVITY_ENTITY = "crc6f_hr_loginactivitytbs"
 LOGIN_ACTIVITY_PRIMARY_FIELD = "crc6f_hr_loginactivitytbid"
@@ -81,61 +77,45 @@ def _location_to_string(location) -> str | None:
     return None
 
 
-def _fetch_login_activity_record(token: str, employee_id: str, date_str: str):
-    if not BASE_URL:
-        return None
+def _fetch_login_activity_record(employee_id: str, date_str: str):
     emp = (employee_id or "").strip().upper()
     dt = (date_str or "").strip()
     if not emp or not dt:
         return None
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-        "OData-MaxVersion": "4.0",
-        "OData-Version": "4.0",
-    }
-    url = (
-        f"{BASE_URL}/{LOGIN_ACTIVITY_ENTITY}"
-        f"?$top=1&$select={LOGIN_ACTIVITY_PRIMARY_FIELD}&$filter={LA_FIELD_EMPLOYEE_ID} eq '{_safe_odata_string(emp)}' and {LA_FIELD_DATE} eq '{_safe_odata_string(dt)}'"
-    )
-    r = get_dataverse_session().get(url, headers=headers, timeout=20)
-    if r.status_code == 200:
-        vals = r.json().get("value", [])
-        return vals[0] if vals else None
-    return None
+    try:
+        sb = get_supabase()
+        response = (sb.table(LOGIN_ACTIVITY_ENTITY)
+                    .select(LOGIN_ACTIVITY_PRIMARY_FIELD)
+                    .eq(LA_FIELD_EMPLOYEE_ID, emp)
+                    .eq(LA_FIELD_DATE, dt)
+                    .limit(1)
+                    .execute())
+        if response.data and len(response.data) > 0:
+            return response.data[0]
+        return None
+    except Exception:
+        return None
 
 
 def _upsert_login_activity(employee_id: str, date_str: str, payload: dict):
-    token = get_access_token()
     emp = (employee_id or "").strip().upper()
     dt = (date_str or "").strip()
     if not emp or not dt:
         return None
 
-    existing = _fetch_login_activity_record(token, emp, dt)
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "OData-MaxVersion": "4.0",
-        "OData-Version": "4.0",
-    }
+    existing = _fetch_login_activity_record(emp, dt)
 
-    if existing and existing.get(LOGIN_ACTIVITY_PRIMARY_FIELD) and BASE_URL:
+    if existing and existing.get(LOGIN_ACTIVITY_PRIMARY_FIELD):
         rid = str(existing.get(LOGIN_ACTIVITY_PRIMARY_FIELD)).strip("{}")
-        url = f"{BASE_URL}/{LOGIN_ACTIVITY_ENTITY}({rid})"
-        r = get_dataverse_session().patch(url, headers={**headers, "If-Match": "*"}, json=payload, timeout=20)
-        if r.status_code in (204, 200):
-            return rid
-        raise Exception(f"Login activity update failed ({r.status_code}): {r.text}")
+        update_record(LOGIN_ACTIVITY_ENTITY, rid, payload)
+        return rid
 
-    # Create
+    # Create new record
     create_payload = {
         LA_FIELD_EMPLOYEE_ID: emp,
         LA_FIELD_DATE: dt,
         **(payload or {}),
     }
-    # Use helper for create to keep consistent with existing code
     created = create_record(LOGIN_ACTIVITY_ENTITY, create_payload)
     rid = created.get(LOGIN_ACTIVITY_PRIMARY_FIELD) or created.get("id")
     return str(rid).strip("{}") if rid else None
@@ -160,11 +140,12 @@ def checkin():
                 "error": "Already checked in. Please check out first."
             }), 400
         
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         formatted_date = now.date().isoformat()
         formatted_time = now.strftime("%H:%M:%S")
+        formatted_timestamp = now.isoformat()
 
-        # Punch login activity (Dataverse) using client-local date as key
+        # Punch login activity using client-local date as key
         la_date = _event_local_date(client_time, timezone_str)
         la_location = _location_to_string(location_data)
         try:
@@ -175,11 +156,11 @@ def checkin():
         except Exception as e:
             print(f"[WARN] Login activity check-in punch failed: {e}")
         
-        # ✅ Create record with CORRECT field names
+        # Create attendance record
         record_data = {
             FIELD_EMPLOYEE_ID: employee_id,
             FIELD_DATE: formatted_date,
-            FIELD_CHECKIN: formatted_time
+            FIELD_CHECKIN: formatted_timestamp
         }
         
         print(f"\n{'='*60}")
@@ -188,7 +169,7 @@ def checkin():
         print(f"Employee: {employee_id}")
         print(f"Date: {formatted_date}")
         print(f"Time: {formatted_time}")
-        print(f"Sending to Dataverse...")
+        print(f"Sending to Supabase...")
         
         created = create_record(ENTITY_NAME, record_data)
         
@@ -248,10 +229,11 @@ def checkout():
                 "error": "No active check-in found. Please check in first."
             }), 400
         
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         checkout_time_str = now.strftime("%H:%M:%S")
+        checkout_timestamp = now.isoformat()
 
-        # Punch login activity (Dataverse) using client-local date as key
+        # Punch login activity using client-local date as key
         la_date = _event_local_date(client_time, timezone_str)
         la_location = _location_to_string(location_data)
         try:
@@ -270,16 +252,14 @@ def checkout():
         minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60
 
-        # 📝 Formatted duration for display (e.g. "2h 15m 30s")
+        # Formatted duration for display (e.g. "2h 15m 30s")
         formatted_duration = f"{hours}h {minutes}m {seconds}s"
 
-        # For Dataverse: convert total hours to string
         total_hours = round(total_seconds / 3600)
-        total_hours_str = str(total_hours)  # ✅ Fix for Dataverse
 
         update_data = {
-            FIELD_CHECKOUT: checkout_time_str,
-            FIELD_DURATION: total_hours_str   # ✅ send as string
+            FIELD_CHECKOUT: checkout_timestamp,
+            FIELD_DURATION: total_hours
         }
 
         print(f"\n{'='*60}")
@@ -289,7 +269,7 @@ def checkout():
         print(f"Record ID: {session['record_id']}")
         print(f"Check-out: {checkout_time_str}")
         print(f"Duration: {formatted_duration}")
-        print(f"Updating Dataverse...")
+        print(f"Updating Supabase...")
 
         update_record(ENTITY_NAME, session["record_id"], update_data)
         
@@ -312,7 +292,6 @@ def checkout():
             "success": False,
             "error": str(e)
         }), 500
-
 
 
 @app.route('/api/status/<employee_id>', methods=['GET'])
@@ -338,61 +317,35 @@ def get_status(employee_id):
 def get_monthly_attendance(employee_id, year, month):
     """Get attendance records for a specific month"""
     try:
-        import requests
-        from dataverse_helper import get_access_token
-        import os
-        from dotenv import load_dotenv
-        
-        load_dotenv("id.env")
-        RESOURCE = os.getenv("RESOURCE")
-        
-        token = get_access_token()
-        
-        # Build date filter for the month
         from calendar import monthrange
         _, last_day = monthrange(year, month)
         
         start_date = f"{year}-{str(month).zfill(2)}-01"
         end_date = f"{year}-{str(month).zfill(2)}-{str(last_day).zfill(2)}"
         
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "OData-MaxVersion": "4.0",
-            "OData-Version": "4.0"
-        }
+        sb = get_supabase()
+        response = (sb.table(ENTITY_NAME)
+                    .select(f"{FIELD_DATE},{FIELD_CHECKIN},{FIELD_CHECKOUT},{FIELD_DURATION}")
+                    .eq(FIELD_EMPLOYEE_ID, employee_id)
+                    .gte(FIELD_DATE, start_date)
+                    .lte(FIELD_DATE, end_date)
+                    .execute())
         
-        filter_query = (f"?$filter={FIELD_EMPLOYEE_ID} eq '{employee_id}' "
-                       f"and {FIELD_DATE} ge '{start_date}' "
-                       f"and {FIELD_DATE} le '{end_date}'")
-        
-        url = f"{RESOURCE}/api/data/v9.2/{ENTITY_NAME}{filter_query}"
-        
-        response = get_dataverse_session().get(url, headers=headers)
-        
-        if response.status_code == 200:
-            records = response.json().get("value", [])
-            
-            # Format records for frontend
-            formatted_records = []
-            for record in records:
-                formatted_records.append({
-                    "date": record.get(FIELD_DATE),
-                    "checkin": record.get(FIELD_CHECKIN),
-                    "checkout": record.get(FIELD_CHECKOUT),
-                    "duration": record.get(FIELD_DURATION)
-                })
-            
-            return jsonify({
-                "success": True,
-                "records": formatted_records,
-                "count": len(formatted_records)
+        records = response.data or []
+        formatted_records = []
+        for record in records:
+            formatted_records.append({
+                "date": record.get(FIELD_DATE),
+                "checkin": record.get(FIELD_CHECKIN),
+                "checkout": record.get(FIELD_CHECKOUT),
+                "duration": record.get(FIELD_DURATION)
             })
-        else:
-            return jsonify({
-                "success": False,
-                "error": f"Failed to fetch records: {response.status_code}"
-            }), 500
+        
+        return jsonify({
+            "success": True,
+            "records": formatted_records,
+            "count": len(formatted_records)
+        })
             
     except Exception as e:
         print(f"Error fetching monthly attendance: {str(e)}")
@@ -400,7 +353,8 @@ def get_monthly_attendance(employee_id, year, month):
             "success": False,
             "error": str(e)
         }), 500
-        
+
+
 @app.route('/ping', methods=['GET'])
 def ping():
     return jsonify({"message": "Backend is connected ✅"}), 200
