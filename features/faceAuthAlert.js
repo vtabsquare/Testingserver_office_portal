@@ -860,6 +860,28 @@ function checkAndUpdate() {
  * Initialize the FaceAuth alert system
  */
 export function initFaceAuthAlerts() {
+    // ===== FACE VERIFICATION BYPASS =====
+    // Face verification re-check is temporarily disabled for all users.
+    // Remove this block to re-enable the 2-hour re-verification alert flow.
+    console.log('[FACEAUTH-ALERT] BYPASSED: Face verification alerts disabled for all users');
+
+    // Clear any existing alert UI / overlays from a previous session
+    try {
+        const existingBanner = document.getElementById('faceauth-alert-banner');
+        if (existingBanner) existingBanner.remove();
+        const existingOverlay = document.getElementById('faceauth-blocking-overlay');
+        if (existingOverlay) existingOverlay.remove();
+    } catch (_) {}
+    alertElement = null;
+    overlayElement = null;
+    isBlockingEnabled = false;
+
+    // Stop any running timers/title flash
+    if (checkIntervalId) { clearInterval(checkIntervalId); checkIntervalId = null; }
+    stopTitleFlash();
+    return;
+    // ===== END BYPASS =====
+
     console.log('[FACEAUTH-ALERT] Initializing face auth alert system');
     
     // Inject styles
@@ -928,6 +950,12 @@ export function cleanupFaceAuthAlerts() {
  * Force refresh status (call after successful re-verification)
  */
 export function refreshFaceAuthStatus() {
+    // ===== FACE VERIFICATION BYPASS =====
+    // Face verification re-check is temporarily disabled for all users.
+    // Remove this early return to re-enable alert refresh.
+    console.log('[FACEAUTH-ALERT] BYPASSED: refreshFaceAuthStatus is a no-op');
+    return;
+    // ===== END BYPASS =====
     console.log('[FACEAUTH-ALERT] Forcing status refresh');
     checkAndUpdate();
 }
