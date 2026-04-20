@@ -12112,7 +12112,8 @@ VTab Pvt. Ltd.
 """
 
         # Use existing mail system – plain text only (no HTML template)
-        success = send_email(subject, [recipient], body)
+        # Async dispatch: prevents gateway timeout on slow/blocked SMTP
+        success = send_email(subject, [recipient], body, async_send=True)
         return success
     except Exception as e:
         print(f"[WARN] Error sending offer letter: {e}")
@@ -12163,7 +12164,7 @@ VTab Pvt. Ltd.
         </html>
         """
 
-        return send_email(subject, [recipient], body)
+        return send_email(subject, [recipient], body, async_send=True)
     except Exception as e:
         print(f"[WARN] Error sending rejection email: {e}")
         return False
@@ -12226,7 +12227,7 @@ VTab Pvt. Ltd.
         </html>
         """
         
-        success = send_email(subject, [recipient], body)
+        success = send_email(subject, [recipient], body, async_send=True)
         return success
     except Exception as e:
         print(f"[WARN] Error sending login credentials: {e}")
@@ -12702,8 +12703,8 @@ VTab Pvt. Ltd.
         <p>Regards,<br/>HR Team<br/>VTab Pvt. Ltd.</p>
         """
 
-        # Send email (plain text only)
-        sent = send_email(subject="Interview Schedule - VTab Pvt. Ltd.", recipients=[recipient], body=body)
+        # Send email (plain text only) - async to prevent 502 gateway timeout
+        sent = send_email(subject="Interview Schedule - VTab Pvt. Ltd.", recipients=[recipient], body=body, async_send=True)
 
         # Persist interview date and mark progress as scheduled
         try:
@@ -13038,7 +13039,8 @@ VTab Pvt. Ltd.
 
         html_address = '<br/>'.join(postal_address.split('\n'))
         # Email now sent as plain text only; HTML version is no longer used.
-        ok = send_email(subject=subject, recipients=[recipient], body=body)
+        # Async dispatch to prevent 502 gateway timeout on slow SMTP.
+        ok = send_email(subject=subject, recipients=[recipient], body=body, async_send=True)
         return jsonify({'success': True, 'message': 'Documents mail sent' if ok else 'Documents mail send attempted'}), 200
     except Exception as e:
         print(f"[ERROR] Error sending documents mail: {e}")
@@ -13188,7 +13190,7 @@ HR Team
 VTab Pvt. Ltd.
 """
                         # Send plain-text confirmation email (HTML version no longer used)
-                        send_email(subject=subject, recipients=[recipient], body=body)
+                        send_email(subject=subject, recipients=[recipient], body=body, async_send=True)
             except Exception as mail_err:
                 print(f"[WARN] Failed to send documents received email: {mail_err}")
 
@@ -13475,9 +13477,11 @@ def send_policy_letter(record_id):
         html = _render(html_tpl, ctx)
 
         # Send email with PDF attachments (plain-text body only)
+        # Async dispatch: PDF generation + SMTP can easily exceed gateway timeout
         print("[POLICY LETTER] Sending email with two PDF attachments (Offer, Policy)...")
         try:
             send_email(
+                async_send=True,
                 subject=subject,
                 recipients=[recipient],
                 body=body,
@@ -13608,8 +13612,10 @@ def send_policy_letter_with_upload(record_id):
             return jsonify({'success': False, 'message': 'Candidate email not found'}), 400
 
         # Send email with uploaded attachments (plain-text body only)
+        # Async dispatch: attachments + SMTP can easily exceed gateway timeout
         print("[POLICY LETTER UPLOAD] Sending email with user-uploaded attachments ...")
         ok = send_email(
+            async_send=True,
             subject=subject,
             recipients=[recipient],
             body=body,
@@ -13668,7 +13674,7 @@ Regards,
 HR Team
 VTab Pvt. Ltd.
 """
-        send_email(subject=subject, recipients=[recipient], body=body)
+        send_email(subject=subject, recipients=[recipient], body=body, async_send=True)
         try:
             create_progress_log_row(token, record_id, "Onboarding", 5, _now_iso())
         except Exception:

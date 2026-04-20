@@ -153,13 +153,29 @@ def send_email_resend(subject, recipients, body, html=None):
         return False
 
 
-def send_email(subject, recipients, body, html=None, cc=None, attachments=None):
+def send_email(subject, recipients, body, html=None, cc=None, attachments=None, async_send=False):
     """
     Send email - tries multiple providers in order:
     1. Brevo API (300 free emails/day, no domain verification)
     2. Resend API (requires domain verification for non-self emails)
     3. Flask-Mail SMTP (for local dev or attachments)
+
+    If async_send=True, the email is dispatched in a background thread and the
+    function returns True immediately. Useful for HTTP handlers that must not
+    block on slow/blocked SMTP (prevents 502 gateway timeouts).
     """
+    if async_send:
+        import threading
+        def _worker():
+            try:
+                send_email(subject, recipients, body, html=html, cc=cc, attachments=attachments, async_send=False)
+            except Exception as _e:
+                print(f"[MAIL-ASYNC] Background send failed: {_e}", flush=True)
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        print(f"[MAIL] Dispatched async email to={recipients}, subject={subject}", flush=True)
+        return True
+
     print(f"[MAIL] send_email called: to={recipients}, subject={subject}, attachments={len(attachments) if attachments else 0}", flush=True)
     
     # Try Brevo first (supports attachments via base64)
