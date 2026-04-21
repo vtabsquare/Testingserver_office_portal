@@ -7582,7 +7582,8 @@ def approve_leave(leave_id):
             send_email(
                 subject=f"[OK] Leave Approved for {employee_id}",
                 recipients=[employee_email],
-                body=f"Hello{employee_name} {employee_id}, your leave from {start_date} to {end_date} has been approved by {approved_by}."
+                body=f"Hello{employee_name} {employee_id}, your leave from {start_date} to {end_date} has been approved by {approved_by}.",
+                async_send=True
             )
         else:
             print(f"[WARN] Could not send mail — no email found for {employee_id}")
@@ -7709,7 +7710,8 @@ def reject_leave(leave_id):
             send_email(
                 subject=f"[REJECTED] Leave Rejected for {employee_id}",
                 recipients=[employee_email],
-                body=f"Hello {employee_name} {employee_id}, your leave from {start_date} to {end_date} has been rejected by {rejected_by}.{reason_text}"
+                body=f"Hello {employee_name} {employee_id}, your leave from {start_date} to {end_date} has been rejected by {rejected_by}.{reason_text}",
+                async_send=True
             )
         else:
             print(f"[WARN] Could not send mail — no email found for {employee_id}")

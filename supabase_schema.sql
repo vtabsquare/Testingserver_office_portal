@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS crc6f_table14s (
     crc6f_status VARCHAR(50) DEFAULT 'pending',
     crc6f_approvedby VARCHAR(50),
     crc6f_rejectionreason TEXT,
+    crc6f_approvalcomments VARCHAR(200),
     crc6f_reason TEXT,
     metadata JSONB,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,

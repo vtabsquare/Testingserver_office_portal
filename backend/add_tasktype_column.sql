@@ -42,5 +42,11 @@ ALTER TABLE crc6f_hr_projectheaders
 ALTER TABLE crc6f_hr_assetdetailses
     ADD COLUMN IF NOT EXISTS crc6f_client VARCHAR(200);
 
+-- 4. Leave approval comments: crc6f_table14s is missing crc6f_approvalcomments.
+--    Used by /api/leaves/approve/<id> when an approver types a comment.
+--    Without this column, approval fails with PGRST204.
+ALTER TABLE crc6f_table14s
+    ADD COLUMN IF NOT EXISTS crc6f_approvalcomments VARCHAR(200);
+
 -- Refresh PostgREST schema cache so new/renamed columns are visible immediately.
 NOTIFY pgrst, 'reload schema';
