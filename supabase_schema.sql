@@ -310,6 +310,7 @@ CREATE TABLE IF NOT EXISTS crc6f_hr_taskdetailses (
     crc6f_taskid VARCHAR(50) UNIQUE,
     crc6f_taskname VARCHAR(200) NOT NULL,
     crc6f_taskdescription TEXT,
+    crc6f_tasktype VARCHAR(50) DEFAULT 'Task',
     crc6f_taskpriority VARCHAR(50) DEFAULT 'medium',
     crc6f_taskstatus VARCHAR(50) DEFAULT 'todo',
     crc6f_assignedto VARCHAR(50),
