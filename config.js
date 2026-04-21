@@ -17,7 +17,16 @@ const runtimeApi = (typeof window !== 'undefined' && window.API_BASE_URL)
 
 const fallbackHosted = '';
 
-export const API_BASE_URL = (envApi || runtimeApi || fallbackHosted || 'http://localhost:5000').replace(/\/$/, '');
+// Treat any non-local hostname as production (use same origin). Previously
+// non-prod subdomains like testsite.officeportal.vtabsquare.com fell through
+// to localhost:5000 and broke fetches from the browser.
+const _host = (typeof window !== 'undefined' && window.location && window.location.hostname) || '';
+const _isLocal = _host === 'localhost' || _host === '127.0.0.1' || _host === '';
+const sameOrigin = (!_isLocal && typeof window !== 'undefined' && window.location)
+  ? window.location.origin
+  : '';
+
+export const API_BASE_URL = (envApi || runtimeApi || fallbackHosted || sameOrigin || 'http://localhost:5000').replace(/\/$/, '');
 
 export const apiBase = API_BASE_URL;
 

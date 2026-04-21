@@ -48,5 +48,23 @@ ALTER TABLE crc6f_hr_assetdetailses
 ALTER TABLE crc6f_table14s
     ADD COLUMN IF NOT EXISTS crc6f_approvalcomments VARCHAR(200);
 
+-- 5. Compensatory Off requests (crc6f_compensatoryrequests)
+--    Schema is missing several fields the /api/comp-off/requests POST sends:
+--      - crc6f_totaldays   (integer, e.g. 1)
+--      - crc6f_dateworked  (DATE)
+--      - crc6f_applieddate (DATE)
+--    Additionally, crc6f_workdate is declared NOT NULL but the code never
+--    sends it (it uses crc6f_dateworked instead), so the column must be
+--    nullable to allow inserts. Without these changes comp-off creation
+--    fails with PGRST204 or 23502 NOT NULL violations.
+ALTER TABLE crc6f_compensatoryrequests
+    ADD COLUMN IF NOT EXISTS crc6f_totaldays INTEGER DEFAULT 1;
+ALTER TABLE crc6f_compensatoryrequests
+    ADD COLUMN IF NOT EXISTS crc6f_dateworked DATE;
+ALTER TABLE crc6f_compensatoryrequests
+    ADD COLUMN IF NOT EXISTS crc6f_applieddate DATE;
+ALTER TABLE crc6f_compensatoryrequests
+    ALTER COLUMN crc6f_workdate DROP NOT NULL;
+
 -- Refresh PostgREST schema cache so new/renamed columns are visible immediately.
 NOTIFY pgrst, 'reload schema';

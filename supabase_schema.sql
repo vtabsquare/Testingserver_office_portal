@@ -158,7 +158,10 @@ CREATE INDEX IF NOT EXISTS idx_crc6f_hr_leavemangements_employeeid ON crc6f_hr_l
 CREATE TABLE IF NOT EXISTS crc6f_compensatoryrequests (
     crc6f_compensatoryrequestid UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     crc6f_employeeid VARCHAR(50) NOT NULL,
-    crc6f_workdate DATE NOT NULL,
+    crc6f_workdate DATE,
+    crc6f_dateworked DATE,
+    crc6f_applieddate DATE,
+    crc6f_totaldays INTEGER DEFAULT 1,
     crc6f_reason TEXT,
     crc6f_status VARCHAR(50) DEFAULT 'pending',
     crc6f_approvedby VARCHAR(50),
