@@ -185,6 +185,7 @@ CREATE TABLE IF NOT EXISTS crc6f_hr_assetdetailses (
     crc6f_assetname VARCHAR(200) NOT NULL,
     crc6f_serialnumber VARCHAR(100),
     crc6f_assetcategory VARCHAR(100),
+    crc6f_client VARCHAR(200),
     crc6f_location VARCHAR(200),
     crc6f_assetstatus VARCHAR(50) DEFAULT 'available',
     crc6f_assignedto VARCHAR(200),

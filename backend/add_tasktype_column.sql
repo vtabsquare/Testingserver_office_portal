@@ -35,5 +35,12 @@ END $$;
 ALTER TABLE crc6f_hr_projectheaders
     ADD COLUMN IF NOT EXISTS crc6f_projectdescription TEXT;
 
+-- 3. Asset register: add missing crc6f_client column (Dataverse had it; the
+--    Supabase migration dropped it). Frontend pages/assets.js sends this
+--    field when saving an asset, producing PGRST204 "Could not find the
+--    'crc6f_client' column of 'crc6f_hr_assetdetailses' in the schema cache".
+ALTER TABLE crc6f_hr_assetdetailses
+    ADD COLUMN IF NOT EXISTS crc6f_client VARCHAR(200);
+
 -- Refresh PostgREST schema cache so new/renamed columns are visible immediately.
 NOTIFY pgrst, 'reload schema';
