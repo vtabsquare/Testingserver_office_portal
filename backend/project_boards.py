@@ -262,27 +262,42 @@ def headers():
 # Auto Generate Board ID (BRD001...)
 # ============================================================
 def generate_board_id():
+    """Generate the next BRD### id using a native Supabase scan.
+
+    $orderby=createdon desc is unreliable through the OData adapter (the
+    Supabase table uses created_at, not createdon, and sort silently no-ops),
+    so we fetch every existing board id with the prefix and compute the true
+    max. This prevents unique-constraint collisions on crc6f_boardid.
+    """
     try:
-        token = get_access_token()
-        hdr = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_BOARDS}?$select={F_BOARD_ID}&$orderby=createdon desc&$top=1"
-        res = get_dataverse_session().get(url, headers=hdr, timeout=15)
-
-        last_id = None
-        if res.ok:
-            vals = res.json().get("value", [])
-            if vals and vals[0].get(F_BOARD_ID):
-                last_id = vals[0][F_BOARD_ID]
-
-        if last_id and re.match(r"BRD\d+", last_id):
-            num = int(last_id[3:])
-        else:
-            num = 0
-
-        return f"BRD{num+1:03d}"
-
-    except:
-        return "BRD001"
+        from supabase_helper import get_supabase
+        sb = get_supabase()
+        resp = (
+            sb.table(ENTITY_SET_BOARDS)
+              .select(F_BOARD_ID)
+              .ilike(F_BOARD_ID, "BRD%")
+              .execute()
+        )
+        rows = resp.data or []
+        max_num = 0
+        pat = re.compile(r"^BRD(\d+)$", re.IGNORECASE)
+        for r in rows:
+            val = str(r.get(F_BOARD_ID) or "").strip().upper()
+            m = pat.match(val)
+            if m:
+                try:
+                    n = int(m.group(1))
+                    if n > max_num:
+                        max_num = n
+                except ValueError:
+                    continue
+        new_id = f"BRD{max_num + 1:03d}"
+        current_app.logger.info(f"[generate_board_id] existing={len(rows)}, max={max_num}, new={new_id}")
+        return new_id
+    except Exception as e:
+        current_app.logger.exception(f"generate_board_id failed: {e}")
+        import time
+        return f"BRD{int(time.time()) % 100000:05d}"
 
 # ============================================================
 # 🔒 CHECK DUPLICATE BOARD

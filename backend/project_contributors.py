@@ -48,31 +48,42 @@ def extract_guid_from_response(res):
     return None
 
 def generate_record_id():
+    """Generate next REC### id using a native Supabase scan.
+
+    $orderby=createdon desc is unreliable through the OData adapter because
+    Supabase tables use created_at (not createdon), so sort silently no-ops
+    and the first row returned is arbitrary, producing colliding REC001 ids
+    and FK/unique-constraint violations.
+    """
     try:
-        token = get_access_token()
-        hdr = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
-        url = (
-            f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_contributors}"
-            "?$select=crc6f_recordid&$orderby=createdon desc&$top=1"
+        from supabase_helper import get_supabase
+        sb = get_supabase()
+        resp = (
+            sb.table(ENTITY_SET_contributors)
+              .select("crc6f_recordid")
+              .ilike("crc6f_recordid", "REC%")
+              .execute()
         )
-        res = get_dataverse_session().get(url, headers=hdr, timeout=15)
-
-        last_id = None
-        if res.ok:
-            v = res.json().get("value", [])
-            if v and v[0].get("crc6f_recordid"):
-                last_id = v[0]["crc6f_recordid"]
-
-        if last_id:
-            m = re.search(r"REC(\d+)", last_id)
-            num = int(m.group(1)) if m else 0
-        else:
-            num = 0
-
-        return f"REC{num+1:03d}"
-    except:
-        return "REC001"
+        rows = resp.data or []
+        max_num = 0
+        pat = re.compile(r"^REC(\d+)$", re.IGNORECASE)
+        for r in rows:
+            val = str(r.get("crc6f_recordid") or "").strip().upper()
+            m = pat.match(val)
+            if m:
+                try:
+                    n = int(m.group(1))
+                    if n > max_num:
+                        max_num = n
+                except ValueError:
+                    continue
+        new_id = f"REC{max_num + 1:03d}"
+        current_app.logger.info(f"[generate_record_id] existing={len(rows)}, max={max_num}, new={new_id}")
+        return new_id
+    except Exception as e:
+        current_app.logger.exception(f"generate_record_id failed: {e}")
+        import time
+        return f"REC{int(time.time()) % 100000:05d}"
 
 
 def contributor_exists(project_code, employeeId):
@@ -322,7 +333,8 @@ def add_contributor(project_code):
             return jsonify({"error": "employeeId is required"}), 400
 
         # ID-only dedupe check: same employee cannot be added twice for the same project
-        if contributor_exists(employee_id, project_code):
+        # NOTE: contributor_exists signature is (project_code, employeeId) - fix arg order
+        if contributor_exists(project_code, employee_id):
             return jsonify({"success": False, "error": "Contributor with this employeeId already exists for this project"}), 400
 
         token = get_access_token()

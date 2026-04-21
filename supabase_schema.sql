@@ -260,7 +260,7 @@ CREATE TABLE IF NOT EXISTS crc6f_hr_projectheaders (
     crc6f_projectstatus VARCHAR(50) DEFAULT 'active',
     crc6f_estimationcost DECIMAL(15,2),
     crc6f_noofcontributors INTEGER DEFAULT 0,
-    crc6f_description TEXT,
+    crc6f_projectdescription TEXT,
     statecode INTEGER DEFAULT 0,
     statuscode INTEGER DEFAULT 1,
     metadata JSONB,
