@@ -66,5 +66,52 @@ ALTER TABLE crc6f_compensatoryrequests
 ALTER TABLE crc6f_compensatoryrequests
     ALTER COLUMN crc6f_workdate DROP NOT NULL;
 
+-- Idempotency flag: set to TRUE once an approved request has successfully
+-- credited the employee's comp-off balance. Prevents double-credit on retry.
+ALTER TABLE crc6f_compensatoryrequests
+    ADD COLUMN IF NOT EXISTS crc6f_credited BOOLEAN DEFAULT FALSE;
+
+-- 6. Retroactive credit for previously-approved comp-off requests that never
+--    credited the balance due to an earlier silent failure. For every
+--    Approved row where crc6f_credited IS NOT TRUE, add its total days to
+--    the employee's comp-off balance and flip the flag. Safe to run multiple
+--    times (flag makes it idempotent).
+DO $$
+DECLARE
+    r RECORD;
+    v_days INTEGER;
+BEGIN
+    FOR r IN
+        SELECT crc6f_compensatoryrequestid, crc6f_employeeid,
+               COALESCE(crc6f_totaldays, 1) AS days
+        FROM crc6f_compensatoryrequests
+        WHERE LOWER(COALESCE(crc6f_status, '')) = 'approved'
+          AND COALESCE(crc6f_credited, FALSE) = FALSE
+          AND crc6f_employeeid IS NOT NULL
+    LOOP
+        v_days := GREATEST(COALESCE(r.days, 1), 1);
+
+        -- Ensure a balance row exists
+        INSERT INTO crc6f_hr_leavemangements
+            (crc6f_employeeid, crc6f_empid, crc6f_cl, crc6f_sl, crc6f_compoff,
+             crc6f_total, crc6f_actualtotal)
+        VALUES (r.crc6f_employeeid, r.crc6f_employeeid, 0, 0, 0, 0, 0)
+        ON CONFLICT (crc6f_employeeid) DO NOTHING;
+
+        -- Add the credited days to crc6f_compoff and recompute totals
+        UPDATE crc6f_hr_leavemangements
+        SET crc6f_compoff = COALESCE(crc6f_compoff, 0) + v_days,
+            crc6f_total = COALESCE(crc6f_cl, 0) + COALESCE(crc6f_sl, 0)
+                          + COALESCE(crc6f_compoff, 0) + v_days,
+            crc6f_actualtotal = COALESCE(crc6f_cl, 0) + COALESCE(crc6f_sl, 0)
+                                 + COALESCE(crc6f_compoff, 0) + v_days
+        WHERE crc6f_employeeid = r.crc6f_employeeid;
+
+        UPDATE crc6f_compensatoryrequests
+        SET crc6f_credited = TRUE
+        WHERE crc6f_compensatoryrequestid = r.crc6f_compensatoryrequestid;
+    END LOOP;
+END $$;
+
 -- Refresh PostgREST schema cache so new/renamed columns are visible immediately.
 NOTIFY pgrst, 'reload schema';

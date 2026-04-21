@@ -14517,6 +14517,7 @@ def approve_comp_off_request(request_id):
         employee_id = _compoff_normalize_employee_id(_compoff_pick(request_row, ["crc6f_employeeid", "crc6f_empid", "employee_id"], ""))
         requested_days = _compoff_to_float(_compoff_pick(request_row, ["crc6f_totaldays", "total_days"], 1), 1)
         request_leave_type = str(_compoff_pick(request_row, ["crc6f_leavetype", "leave_type", "leaveType"], "")).strip().lower()
+        already_credited = bool(_compoff_pick(request_row, ["crc6f_credited", "credited"], False))
         is_leave_backed = _is_compoff_leave_entity(compoff_entity)
         # Leave-backed "Comp Off" rows are leave-consumption requests.
         # They should not credit balance on approval.
@@ -14537,9 +14538,18 @@ def approve_comp_off_request(request_id):
                 except Exception as meta_err:
                     print(f"[WARN] Could not update approved_by for comp off request {request_id}: {meta_err}")
 
+        # Credit when: (a) first-time approval, OR (b) prior approval but credit
+        # never succeeded (crc6f_credited flag is false). This makes the endpoint
+        # idempotent and recovers from earlier silent credit failures.
         credit_applied = False
         credit_error = ""
-        if prior_status != "Approved" and employee_id and requested_days > 0 and should_credit_balance:
+        needs_credit = (
+            should_credit_balance
+            and employee_id
+            and requested_days > 0
+            and not already_credited
+        )
+        if needs_credit:
             try:
                 balance_row = _fetch_leave_balance(token, employee_id)
                 if not balance_row:
@@ -14547,9 +14557,17 @@ def approve_comp_off_request(request_id):
                 # Reuse the existing balance updater; negative decrement means credit.
                 _decrement_leave_balance(token, balance_row, "Compensatory Off", -float(requested_days))
                 credit_applied = True
+                # Mark the request as credited so a subsequent approve call
+                # does not double-credit.
+                try:
+                    update_record(compoff_entity, request_id, {"crc6f_credited": True})
+                except Exception as flag_err:
+                    # Flag column may not exist in older schemas; not fatal.
+                    print(f"[WARN] Could not set crc6f_credited flag on {request_id}: {flag_err}")
             except Exception as credit_err:
                 credit_error = str(credit_err)
-                print(f"[WARN] Failed to credit comp off balance for {employee_id} on approval {request_id}: {credit_err}")
+                print(f"[ERROR] Failed to credit comp off balance for {employee_id} on approval {request_id}: {credit_err}")
+                traceback.print_exc()
 
         response_payload = {
             "success": True,
@@ -14558,13 +14576,17 @@ def approve_comp_off_request(request_id):
             "employee_id": employee_id,
             "credited_days": float(requested_days) if credit_applied else 0,
         }
-        if prior_status == "Approved":
+        if prior_status == "Approved" and already_credited:
             response_payload["already_approved"] = True
             response_payload["message"] = "Comp Off request already approved"
         elif credit_error:
+            # Surface the failure clearly so the frontend can alert the admin
+            # and the credit can be retried on next approve click.
+            response_payload["success"] = False
             response_payload["warning"] = f"Request approved but comp off balance credit failed: {credit_error}"
 
-        return jsonify(response_payload), 200
+        status_code = 200 if response_payload["success"] else 500
+        return jsonify(response_payload), status_code
     except Exception as e:
         print(f"[ERROR] Failed to approve comp off request {request_id}: {e}")
         traceback.print_exc()
