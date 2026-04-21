@@ -447,11 +447,24 @@ _FLOAT_COLUMNS = frozenset({
     "crc6f_paidtrainingsalary", "crc6f_probationsalary", "crc6f_postprobsalary",
 })
 
+# Columns that are foreign keys. An empty string "" is NOT a valid FK value in
+# Postgres (it would try to match a row whose key literally equals ""), so we
+# coerce "" -> None here to let it become NULL. Nullable FKs accept NULL.
+_FK_NULLABLE_COLUMNS = frozenset({
+    "crc6f_approvedby",    # -> crc6f_table12s (leaves.fk_leave_approver)
+    "crc6f_assignedto",    # -> crc6f_table12s (tasks)
+    "crc6f_rejectedby",    # -> crc6f_table12s
+})
+
 
 def _coerce_types(data: dict) -> dict:
     """Coerce known columns to their correct Supabase types."""
     out = {}
     for k, v in data.items():
+        # Empty string on nullable FK columns -> NULL (avoids FK violation)
+        if k in _FK_NULLABLE_COLUMNS and isinstance(v, str) and v.strip() == "":
+            out[k] = None
+            continue
         if v is None:
             out[k] = v
             continue

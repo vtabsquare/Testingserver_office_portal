@@ -6313,8 +6313,10 @@ def apply_leave():
             "crc6f_status": status,
             "crc6f_totaldays": int(leave_days),
             "crc6f_employeeid": applied_by,
-            "crc6f_approvedby": "",
-            "crc6f_rejectionreason": reason or "",
+            # crc6f_approvedby is a FK to crc6f_table12s; leave NULL when no approver yet.
+            # Do NOT send empty string ("") - it triggers an FK violation in Postgres.
+            "crc6f_approvedby": None,
+            "crc6f_rejectionreason": reason or None,
         }
 
         print(f"📦 Dataverse Record Data: {record_data}")

@@ -2,7 +2,7 @@
 from flask import Blueprint, request, jsonify, current_app
 import requests, os, re
 from dotenv import load_dotenv
-from dataverse_helper import get_access_token, get_dataverse_session
+from dataverse_helper import get_access_token, get_dataverse_session, get_supabase
 
 tasks_bp = Blueprint("project_tasks", __name__, url_prefix="/api")
 
@@ -34,33 +34,45 @@ def headers():
 # Auto-generate Task ID
 # ======================
 def generate_task_id(task_type="Task"):
-    """Generate next work-item ID (TASK001 / BUG001, etc.)."""
+    """Generate next work-item ID (TASK001 / BUG001, etc.).
+
+    Uses Supabase natively - fetches ALL existing IDs with the prefix and
+    computes the true numeric max. Avoids relying on $orderby which can
+    silently fail in the OData adapter and produce colliding IDs.
+    """
     prefix = "BUG" if str(task_type or "Task").strip().lower() == "bug" else "TASK"
     try:
-        token = get_access_token()
-        hdrs = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        filter_prefix = prefix.replace("'", "''")
-        url = (
-            f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_TASKS}"
-            f"?$select=crc6f_taskid&$filter=startswith(crc6f_taskid,'{filter_prefix}')"
-            "&$orderby=createdon desc&$top=1"
+        sb = get_supabase()
+        # Fetch all existing IDs whose value starts with the prefix
+        resp = (
+            sb.table(ENTITY_SET_TASKS)
+              .select("crc6f_taskid")
+              .ilike("crc6f_taskid", f"{prefix}%")
+              .execute()
         )
-        res = get_dataverse_session().get(url, headers=hdrs, timeout=15)
-        next_num = 1
-        if res.ok:
-            data = res.json().get("value", [])
-            if data:
-                current_id = str(data[0].get("crc6f_taskid") or "").strip().upper()
-                match = re.match(rf"^{prefix}(\d+)$", current_id)
-                if match:
-                    next_num = int(match.group(1)) + 1
+        rows = resp.data or []
+        max_num = 0
+        pattern = re.compile(rf"^{prefix}(\d+)$", re.IGNORECASE)
+        for r in rows:
+            val = str(r.get("crc6f_taskid") or "").strip().upper()
+            m = pattern.match(val)
+            if m:
+                try:
+                    num = int(m.group(1))
+                    if num > max_num:
+                        max_num = num
+                except ValueError:
+                    continue
 
+        next_num = max_num + 1
         new_id = f"{prefix}{next_num:03d}"
-        print(f"[generate_task_id] Prefix: {prefix}, New: {new_id}")
+        print(f"[generate_task_id] Prefix: {prefix}, existing={len(rows)}, max={max_num}, new={new_id}")
         return new_id
     except Exception as e:
         print(f"⚠️ Error generating task id: {e}")
-        return f"{prefix}001"
+        # Fallback: use timestamp-based suffix to minimise collision risk
+        import time
+        return f"{prefix}{int(time.time()) % 100000:05d}"
 
 
 # ======================
