@@ -1,0 +1,121 @@
+====================================================================
+           OFFICETOOL - CLIENT DEMO SCRIPT & FLOW GUIDE
+====================================================================
+
+[INTRODUCTION]
+"Welcome everyone. Today, I'll be walking you through the OfficeTool application. 
+This system is an all-in-one HR and Project Management suite designed to streamline 
+the entire employee lifecycle from onboarding to daily operations like time tracking, 
+attendance, and team management."
+
+--------------------------------------------------------------------
+1. EMPLOYEE MODULE
+--------------------------------------------------------------------
+* Concept: The central hub for all personnel data.
+* Functionality: Maintains a comprehensive directory of all staff, their profiles, roles, and personal information.
+* Demo Flow: 
+  - Show the employee directory list.
+  - Open a sample employee profile.
+  - Explain how HR/Admins can add new employees or update job titles and employment status.
+
+--------------------------------------------------------------------
+2. INTERNS MODULE
+--------------------------------------------------------------------
+* Concept: A dedicated section to manage temporary staff and interns separately from full-time payroll.
+* Functionality: Tracks intern details, internship duration, and stipends.
+* Demo Flow: 
+  - Show the intern list.
+  - Explain the flow of adding an intern, tracking their fixed-term progress, and eventually transitioning them to full-time employees (or offboarding them).
+
+--------------------------------------------------------------------
+3. ONBOARDING MODULE
+--------------------------------------------------------------------
+* Concept: Streamlining the process of bringing new hires into the company.
+* Functionality: Document collection, checklist tracking, and cross-department task assignment.
+* Demo Flow: 
+  - Show how an onboarding workflow is initiated for a new candidate.
+  - Explain how different departments (HR, IT, Admin) get tasks (e.g., "Setup Laptop", "Create Email ID") and how the new hire uploads their KYC documents.
+  - Show how status is tracked from "Pending" to "Completed".
+
+--------------------------------------------------------------------
+4. TEAM MANAGEMENT
+--------------------------------------------------------------------
+* Concept: Organizing the workforce into logical operational units.
+* Functionality: Creating departments/teams, assigning Team Leads, and adding team members.
+* Demo Flow: 
+  - Show the team list structure.
+  - Explain how assigning a designated "Team Lead" links straight into approval workflows for timesheets and leaves later on.
+
+--------------------------------------------------------------------
+5. TIME TRACKER MODULE (The Core Operational Hub)
+--------------------------------------------------------------------
+This is a large module, so we will break it down into its flow:
+
+  A. Clients & Projects:
+     * Flow: First, you add a 'Client'. Then, you create a 'Project' under that Client. Lastly, you allocate specific employees to that Project along with budgets and timelines.
+     * Demo Action: Briefly show the Client list, then dive into a specific Project dashboard to show team allocation.
+
+  B. My Tasks:
+     * Flow: Individual work management. Managers can assign tasks within a project, or employees can create their own to-do items. Once done, they mark them complete.
+
+  C. My Timesheet:
+     * Flow: This is where employees log their daily effort. They select the Project they are assigned to, log their standard hours, note any overtime (OT), and submit this at the end of the day/week.
+
+  D. My Team Timesheet:
+     * Flow: The Managerial view. Once the employee clicks "Submit", the timesheet lands here. Team Leads review the logged hours against the projects and click "Approve" or "Reject" (with reason). Approved hours finalize their operational tracking.
+
+--------------------------------------------------------------------
+6. ATTENDANCE MODULE
+--------------------------------------------------------------------
+* Concept: Tracking physical or remote presence (Check-in/Check-out).
+* Functionality: Captures clock-in times, tracks active hours, identifies shortfalls, and records standard vs. overtime per day.
+* Demo Flow: 
+  - Show the daily attendance view.
+  - Explain that employees log in for the day, the system tracks their hours, and handles edge cases (like force-logout at midnight).
+  - Admin/HR can view comprehensive daily, weekly, and monthly attendance reports.
+
+--------------------------------------------------------------------
+7. LEAVE TRACKER MODULE
+--------------------------------------------------------------------
+* Concept: End-to-end time-off management.
+* Functionality: Leave balances (Sick, Casual, Earned), application forms, and approval chains.
+* Demo Flow: 
+  - Explain the Employee Flow: View available balance -> Apply for dates -> Add reason.
+  - Explain Manager Flow: Receives request -> Reviews overlapping leaves -> Approves/Rejects. System automatically deducts the balance.
+
+--------------------------------------------------------------------
+8. INBOX MODULE
+--------------------------------------------------------------------
+* Concept: The central communication and notification center.
+* Functionality: An internal message hub where system notifications land.
+* Demo Flow: 
+  - Show the Inbox UI.
+  - Explain that when a leave is requested, a timesheet is submitted, or an admin approves a payslip request, relevant notifications are sent straight to a user's Inbox so they can take action without digging through menus.
+
+--------------------------------------------------------------------
+9. ASSETS MODULE
+--------------------------------------------------------------------
+* Concept: Inventory tracking for physical company property.
+* Functionality: Track laptops, monitors, keys, etc., and who they are assigned to.
+* Demo Flow: 
+  - Show the asset inventory list.
+  - Explain the flow: Add new asset -> Assign to an Employee -> Employee acknowledges receipt -> Log asset condition -> Retrieve upon offboarding.
+
+--------------------------------------------------------------------
+10. SETTINGS MODULE
+--------------------------------------------------------------------
+* Concept: The engine room for Administrators.
+* Functionality: Global application configuration.
+* Demo Flow: 
+  - Keep this brief. Show that this is where Admins define Role-Based permissions, configure global Leave Policies, set up the company Holiday Calendar, and manage organizational profile data.
+
+====================================================================
+[CONCLUSION / WRAP UP]
+"To summarize the entire flow: An employee is processed through ONBOARDING, 
+added to the EMPLOYEE and TEAM directories, and given ASSETS. Daily, they mark 
+their ATTENDANCE, work on specific PROJECTS, and log their effort in TIMESHEETS, 
+which their managers approve. If they need time off, they use the LEAVE TRACKER. 
+Everything communicates seamlessly via the INBOX, governed by the global 
+SETTINGS. 
+
+Thank you. I'd be happy to take any questions on specific flows."
