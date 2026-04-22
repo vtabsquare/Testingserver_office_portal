@@ -4115,20 +4115,25 @@ If you did not request this, please ignore this message.
 
 - VTab Office Tool Team"""
 
-        sent = False
+        # Send email asynchronously: blocking on SMTP/Brevo inside this handler
+        # causes nginx to return 502 Bad Gateway when the upstream SMTP is slow
+        # or blocked (previous symptom). Dispatching to a background thread
+        # lets us respond within a few hundred ms. The email is fire-and-forget
+        # but the mail_app layer logs failures.
         try:
-            # Send plain text only (no HTML) to prevent Brevo from tracking/wrapping links
-            sent = send_email(subject=subject, recipients=[user_email], body=text_body, html=None)
-            print(f"[FORGOT-PWD] send_email returned: {sent}", flush=True)
+            send_email(
+                subject=subject,
+                recipients=[user_email],
+                body=text_body,
+                html=None,
+                async_send=True,
+            )
+            print("[FORGOT-PWD] Reset email dispatched (async)", flush=True)
         except Exception as mail_err:
-            print(f"[FORGOT-PWD] Email send exception: {mail_err}", flush=True)
+            print(f"[FORGOT-PWD] Email dispatch exception: {mail_err}", flush=True)
             traceback.print_exc()
+            return jsonify({"status": "error", "message": "Failed to dispatch reset email"}), 500
 
-        if not sent:
-            print("[FORGOT-PWD] Email not sent", flush=True)
-            return jsonify({"status": "error", "message": "Failed to send reset email"}), 500
-
-        print("[FORGOT-PWD] Success - email sent", flush=True)
         return jsonify({"status": "success", "message": "Reset email sent"}), 200
 
     except requests.Timeout:
