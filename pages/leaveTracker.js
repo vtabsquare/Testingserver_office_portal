@@ -1373,9 +1373,13 @@ export const handleApplyLeave = async (e) => {
     ? "Paid"
     : compensationType;
   const reason = document.getElementById("reason")?.value || "";
+  const trimmedReason = reason.trim();
 
   if (!startDate || !endDate)
     return alert("Please select both start and end dates");
+
+  if (trimmedReason.length < 10)
+    return alert("Leave reason must be at least 10 characters.");
 
   const applyMode = String(
     document.getElementById("leave-apply-mode")?.value || "self"
@@ -1406,7 +1410,7 @@ export const handleApplyLeave = async (e) => {
       return alert("Error: User name not found. Please log in again.");
     }
 
-    console.log("🔍 Fetching employee ID for name:", userName);
+    console.log(" Fetching employee ID for name:", userName);
 
     try {
       const allEmployees = await listEmployees(1, 5000);
@@ -1430,7 +1434,7 @@ export const handleApplyLeave = async (e) => {
           return empFullName.includes("karthick");
         });
         if (match) {
-          console.log("✅ Found match using special case for Karthik/Karthick");
+          console.log(" Found match using special case for Karthik/Karthick");
         }
       }
 
@@ -1478,9 +1482,9 @@ export const handleApplyLeave = async (e) => {
             JSON.stringify({ authenticated: true, user: state.user })
           );
         } catch { }
-        console.log(`✅ Found employee ID: ${appliedBy} `);
+        console.log(` Found employee ID: ${appliedBy} `);
       } else {
-        console.error("❌ No employee record found for name:", userName);
+        console.error(" No employee record found for name:", userName);
         console.log(
           "Available employees:",
           allEmployees.items?.map((e) => ({
@@ -1493,7 +1497,7 @@ export const handleApplyLeave = async (e) => {
         );
       }
     } catch (err) {
-      console.error("❌ Failed to fetch employee data:", err);
+      console.error(" Failed to fetch employee data:", err);
       return alert("Error: Failed to verify employee information.");
     }
   }
@@ -1506,10 +1510,10 @@ export const handleApplyLeave = async (e) => {
     applied_by: appliedBy,
     paid_unpaid: payloadCompensationType,
     status: "Pending",
-    reason,
+    reason: trimmedReason,
   };
 
-  console.log("📤 Payload prepared:", leavePayload);
+  console.log(" Payload prepared:", leavePayload);
 
   try {
     // Client-side guard for paid-like compensation modes

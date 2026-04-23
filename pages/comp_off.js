@@ -221,9 +221,15 @@ export const handleRequestCompOff = async (e) => {
   const employeeName = state.user?.name || "";
   const dateWorked = document.getElementById("dateWorked")?.value || "";
   const reason = document.getElementById("reason")?.value || "";
+  const trimmedReason = reason.trim();
 
-  if (!employeeId || !dateWorked || !reason.trim()) {
+  if (!employeeId || !dateWorked || !trimmedReason) {
     alert("Please fill all required fields.");
+    return;
+  }
+
+  if (trimmedReason.length < 20) {
+    alert("Comp Off reason must be at least 20 characters.");
     return;
   }
 
@@ -232,7 +238,7 @@ export const handleRequestCompOff = async (e) => {
       employee_id: employeeId,
       employee_name: employeeName,
       date_worked: dateWorked,
-      reason: reason.trim(),
+      reason: trimmedReason,
       applied_date: new Date().toISOString().split("T")[0],
       total_days: 1,
     });

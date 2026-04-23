@@ -277,9 +277,13 @@ export const renderInternsPage = async (filter = internSearch, page = internPage
     return;
   }
 
+  const normalizedFilter = String(filter || '').trim().toLowerCase();
   const filtered = (state.interns || []).filter((intern) => {
-    const value = `${intern.intern_id || ''} ${intern.employee_id || ''}`.toLowerCase();
-    return value.includes((filter || '').toLowerCase());
+    const employeeName = intern.employee_id
+      ? (employeeMap[intern.employee_id.toUpperCase()] || '')
+      : '';
+    const value = `${intern.intern_id || ''} ${intern.employee_id || ''} ${employeeName}`.toLowerCase();
+    return value.includes(normalizedFilter);
   });
 
   const totalPages = internTotalCount ? Math.max(1, Math.ceil(internTotalCount / internPageSize)) : undefined;
@@ -323,7 +327,7 @@ export const renderInternsPage = async (filter = internSearch, page = internPage
       }
     </div>
   `;
-  }).join('') || '<div class="placeholder-text">No interns found.</div>';
+  }).join('') || '<div class="placeholder-text">No interns found. Try searching by name, Intern ID, or Employee ID.</div>';
 
   const tableRows = filtered.map((intern) => {
     const employeeName = intern.employee_id ? (employeeMap[intern.employee_id.toUpperCase()] || intern.employee_id) : '—';
@@ -346,14 +350,14 @@ export const renderInternsPage = async (filter = internSearch, page = internPage
       </td>
     </tr>
   `;
-  }).join('') || '<tr><td colspan="4" class="placeholder-text">No interns found.</td></tr>';
+  }).join('') || '<tr><td colspan="4" class="placeholder-text">No interns found. Try searching by name, Intern ID, or Employee ID.</td></tr>';
 
   const content = `
     <div class="card employees-card-shell">
       <div class="page-controls">
         <div class="inline-search">
           <i class="fa-solid fa-search"></i>
-          <input type="text" id="intern-search-input" placeholder="Search by Intern or Employee ID" value="${filter}">
+          <input type="text" id="intern-search-input" placeholder="Search by name, Intern ID, or Employee ID" value="${filter}">
         </div>
       </div>
       <div id="intern-card-view" class="employee-card-grid view-mode ${isTableMode ? '' : 'view-mode-visible'}">

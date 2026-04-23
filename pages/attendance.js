@@ -259,7 +259,8 @@ const renderAttendanceTrackerPage = async (mode) => {
     };
 
     const getMyViewHTML = async () => {
-        const myAttendance = state.attendanceData[state.user.id] || {};
+        const normalizedUserId = String(state.user?.id || '').toUpperCase();
+        const myAttendance = state.attendanceData[normalizedUserId] || state.attendanceData[state.user.id] || {};
         const month = date.getMonth();
         const firstDayIndex = new Date(year, month, 1).getDay(); // Sunday = 0
 
@@ -315,6 +316,12 @@ const renderAttendanceTrackerPage = async (mode) => {
 
         const formatLoginTime = (isoValue, fallback = '--:--:--') => {
             if (!isoValue) return fallback;
+            if (typeof isoValue === 'string') {
+                const trimmed = isoValue.trim();
+                if (/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
+                    return trimmed.length === 5 ? `${trimmed}:00` : trimmed;
+                }
+            }
             const parsed = new Date(isoValue);
             if (Number.isNaN(parsed.getTime())) return fallback;
             return parsed.toTimeString().split(' ')[0].substring(0, 8);
@@ -440,24 +447,18 @@ const renderAttendanceTrackerPage = async (mode) => {
 
         const firstLastOutRows = recentLogDays.map(d => {
             // Use login activity data for today if available
-            let checkInTime = d.checkIn;
-            let checkOutTime = d.checkOut;
+            let checkInTime = formatLoginTime(d.checkIn, '');
+            let checkOutTime = formatLoginTime(d.checkOut, '');
             
             if (isCurrentMonth && d.day === todayDay && todayLoginActivity) {
                 // Extract time from login activity check-in time
                 if (todayLoginActivity.check_in_time) {
-                    const checkInDate = new Date(todayLoginActivity.check_in_time);
-                    if (!isNaN(checkInDate.getTime())) {
-                        checkInTime = checkInDate.toTimeString().split(' ')[0].substring(0, 8);
-                    }
+                    checkInTime = formatLoginTime(todayLoginActivity.check_in_time, checkInTime);
                 }
                 
                 // Extract time from login activity check-out time
                 if (todayLoginActivity.check_out_time) {
-                    const checkOutDate = new Date(todayLoginActivity.check_out_time);
-                    if (!isNaN(checkOutDate.getTime())) {
-                        checkOutTime = checkOutDate.toTimeString().split(' ')[0].substring(0, 8);
-                    }
+                    checkOutTime = formatLoginTime(todayLoginActivity.check_out_time, checkOutTime);
                 }
             }
             
@@ -465,8 +466,9 @@ const renderAttendanceTrackerPage = async (mode) => {
             const start = new Date(`${yearMonth}-${dayStr}T${checkInTime}`);
             const end = new Date(`${yearMonth}-${dayStr}T${checkOutTime}`);
             const totalMs = end.getTime() - start.getTime();
-            const totalHours = isNaN(totalMs) ? '00' : String(Math.floor(totalMs / 3600000)).padStart(2, '0');
-            const totalMins = isNaN(totalMs) ? '00' : String(Math.floor((totalMs % 3600000) / 60000)).padStart(2, '0');
+            const hasValidRange = !isNaN(totalMs) && totalMs >= 0 && checkInTime && checkOutTime;
+            const totalHours = hasValidRange ? String(Math.floor(totalMs / 3600000)).padStart(2, '0') : '00';
+            const totalMins = hasValidRange ? String(Math.floor((totalMs % 3600000) / 60000)).padStart(2, '0') : '00';
 
             return `
             <tr>
@@ -1027,6 +1029,7 @@ export const renderMyAttendancePage = async () => {
             }
         });
         attendanceMap.employeeName = state.user?.name || state.user?.full_name || state.user?.id || '';
+        state.attendanceData[uid] = attendanceMap;
         state.attendanceData[state.user.id] = attendanceMap;
     } catch (err) {
         console.error('Failed to fetch attendance:', err);

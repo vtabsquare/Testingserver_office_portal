@@ -43,7 +43,7 @@ const AUTH_SESSION_STARTED_AT_KEY = 'auth_session_started_at';
 
 const getCurrentAuthUser = () => {
   try {
-    const raw = localStorage.getItem('auth');
+    const raw = localStorage.getItem('auth') || sessionStorage.getItem('auth');
     const parsed = raw ? JSON.parse(raw) : null;
     return parsed?.user || state.user || null;
   } catch {
@@ -1001,12 +1001,19 @@ const forceLogoutNow = (reason, eventType = 'logout') => {
   console.warn(`[AUTH] Force logout: ${reason}`);
   reportAuthEvent(eventType, reason);
   try { localStorage.removeItem('auth'); } catch {}
+  try { sessionStorage.removeItem('auth'); } catch {}
   try { localStorage.removeItem('role'); } catch {}
+  try { sessionStorage.removeItem('role'); } catch {}
   try { localStorage.removeItem('authToken'); } catch {}
+  try { sessionStorage.removeItem('authToken'); } catch {}
   try { localStorage.removeItem('face_auth_token'); } catch {}
+  try { sessionStorage.removeItem('face_auth_token'); } catch {}
   try { localStorage.removeItem('auth_version'); } catch {}
+  try { sessionStorage.removeItem('auth_version'); } catch {}
   try { localStorage.removeItem('login_date'); } catch {}
+  try { sessionStorage.removeItem('login_date'); } catch {}
   try { localStorage.removeItem(AUTH_SESSION_STARTED_AT_KEY); } catch {}
+  try { sessionStorage.removeItem(AUTH_SESSION_STARTED_AT_KEY); } catch {}
   stopAuthPolicyPolling();
   state.authenticated = false;
   state.user = { name: 'Guest', initials: 'GU', id: '' };
@@ -1077,19 +1084,22 @@ const init = async () => {
   if (checkLoginDateGuard()) return;
   
   // Force re-login if auth version changed (e.g. after identity wipe/fix)
-  const storedAuthVersion = localStorage.getItem('auth_version');
+  const storedAuthVersion = localStorage.getItem('auth_version') || sessionStorage.getItem('auth_version');
   if (storedAuthVersion !== AUTH_VERSION) {
     console.warn('[AUTH] Version mismatch — clearing stale session. Old:', storedAuthVersion, 'New:', AUTH_VERSION);
     localStorage.removeItem('auth');
+    sessionStorage.removeItem('auth');
     localStorage.removeItem('role');
+    sessionStorage.removeItem('role');
     localStorage.removeItem('auth_version');
+    sessionStorage.removeItem('auth_version');
     state.authenticated = false;
     state.user = {};
   }
 
   // Auth: try restore from localStorage or redirect to standalone login
   try {
-    const saved = localStorage.getItem('auth');
+    const saved = localStorage.getItem('auth') || sessionStorage.getItem('auth');
     if (saved) {
       const parsed = JSON.parse(saved);
       if (parsed && parsed.authenticated && parsed.user) {

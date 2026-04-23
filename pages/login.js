@@ -1307,7 +1307,44 @@ export const renderLoginPage = () => {
   const loader = loginBtn.querySelector(".loader");
   const emailInput = document.getElementById("login-email");
   const passwordInput = document.getElementById("login-password");
-  
+  const rememberMeInput = document.getElementById("remember-me");
+
+  try {
+    if (rememberMeInput) {
+      rememberMeInput.checked = localStorage.getItem("remember_me") === "true";
+    }
+  } catch {}
+
+  const persistAuthState = (authPayload, roleValue, extra = {}) => {
+    const usePersistentStorage = !!rememberMeInput?.checked;
+    const primaryStorage = usePersistentStorage ? localStorage : sessionStorage;
+    const secondaryStorage = usePersistentStorage ? sessionStorage : localStorage;
+
+    try { secondaryStorage.removeItem("auth"); } catch {}
+    try { secondaryStorage.removeItem("role"); } catch {}
+    try { secondaryStorage.removeItem("auth_version"); } catch {}
+    try { secondaryStorage.removeItem("login_date"); } catch {}
+    try { secondaryStorage.removeItem("auth_session_started_at"); } catch {}
+
+    try { primaryStorage.setItem("auth", JSON.stringify(authPayload)); } catch {}
+    try { primaryStorage.setItem("role", roleValue); } catch {}
+    try { primaryStorage.setItem("auth_version", "2026-02-27-identity-fix"); } catch {}
+    try {
+      const _istOff = 5.5 * 60 * 60 * 1000;
+      primaryStorage.setItem("login_date", new Date(Date.now() + (new Date().getTimezoneOffset() * 60000) + _istOff).toISOString().slice(0, 10));
+    } catch {}
+    try { primaryStorage.setItem("auth_session_started_at", new Date().toISOString()); } catch {}
+    try { localStorage.setItem("remember_me", usePersistentStorage ? "true" : "false"); } catch {}
+
+    if (extra?.authToken) {
+      try { primaryStorage.setItem("authToken", extra.authToken); } catch {}
+      try { secondaryStorage.removeItem("authToken"); } catch {}
+    }
+    if (typeof extra?.faceVerified !== "undefined") {
+      try { localStorage.setItem("face_verified", extra.faceVerified ? "true" : "false"); } catch {}
+    }
+  };
+
   // Guard to prevent double form submission
   let isSubmitting = false;
 
@@ -1456,7 +1493,7 @@ export const renderLoginPage = () => {
       if (input === emailInput) {
         const length = e.target.value.length;
         const progress = Math.min(length, 30) / 30;
-        const currentOffset = -6 + progress * 12;
+        const currentOffset = -6 + (progress * 12);
         miniEyes.forEach((eye) => {
           const baseCx = eye.classList.contains("left") ? 35 : 65;
           eye.setAttribute("cx", baseCx + currentOffset);
@@ -1533,14 +1570,14 @@ export const renderLoginPage = () => {
   // ---------- LOGIN logic ----------
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    
+
     // Prevent double submission
     if (isSubmitting) {
       console.log("[LOGIN] Ignoring duplicate submit - already in progress");
       return;
     }
     isSubmitting = true;
-    
+
     err.style.display = "none";
     const email = emailInput.value.trim();
     const password = passwordInput.value;
@@ -1615,7 +1652,7 @@ export const renderLoginPage = () => {
         btnText.classList.remove("hidden");
         loader.classList.add("hidden");
         isSubmitting = false;
-        
+
         // Handle 401 with proper error message
         if (res.status === 401) {
           err.textContent = (data && data.error) || "Invalid credentials. Please try again.";
@@ -1660,7 +1697,7 @@ export const renderLoginPage = () => {
       if (data.face_verification_required && data.face_verify_url) {
         // DEBUG: Log the exact URL we're redirecting to
         console.log("[FACEAUTH] Redirecting to external-verify:", data.face_verify_url);
-        
+
         // Store only the token and pending user data for FaceAuth flow
         try {
           localStorage.setItem("face_auth_token", data.token);
@@ -1668,7 +1705,7 @@ export const renderLoginPage = () => {
           localStorage.setItem("pending_user", JSON.stringify(state.user));
           // Do NOT set "auth" - user is not fully authenticated yet
         } catch {}
-        
+
         setTimeout(() => {
           const appContent = document.getElementById("app-content");
           if (appContent) appContent.classList.add("page-exit-anim");
@@ -1680,10 +1717,10 @@ export const renderLoginPage = () => {
         }, 1000);
         return;
       }
-      
+
       // ===== FACE VERIFIED - PROCEED WITH FULL AUTH =====
       state.authenticated = true;
-      
+
       // Store face auth token if provided
       if (data.token) {
         try {
@@ -1691,11 +1728,12 @@ export const renderLoginPage = () => {
           localStorage.setItem("face_verified", data.face_verified ? "true" : "false");
         } catch {}
       }
-      
+
       try {
-        localStorage.setItem(
-          "auth",
-          JSON.stringify({ authenticated: true, user: state.user })
+        persistAuthState(
+          { authenticated: true, user: state.user },
+          role,
+          { authToken: data.token, faceVerified: data.face_verified }
         );
         localStorage.setItem("role", role);
         localStorage.setItem("auth_version", "2026-02-27-identity-fix");
@@ -1713,9 +1751,10 @@ export const renderLoginPage = () => {
         if (match && match.employee_id) {
           state.user.id = match.employee_id;
           try {
-            localStorage.setItem(
-              "auth",
-              JSON.stringify({ authenticated: true, user: state.user })
+            persistAuthState(
+              { authenticated: true, user: state.user },
+              role,
+              { authToken: data.token, faceVerified: data.face_verified }
             );
           } catch {}
         }
@@ -1839,78 +1878,6 @@ export const renderLoginPage = () => {
         flUsername.value = "";
 
         adjustCardHeight();
-
-        // Try auto-login with new password (optional). If it works, proceed to app; otherwise instruct user.
-        try {
-          const base = API_BASE_URL.replace(/\/$/, '');
-          const loginResp = await fetch(`${base}/api/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username, password: new_password }),
-          });
-          const loginData = await loginResp.json();
-          if (loginResp.ok && loginData.status === "success") {
-            // successfully logged in - preserve existing login handling
-            handleSuccess();
-            const u = loginData.user || {};
-            const displayName = u.name || u.full_name || u.username || username;
-            const empId =
-              u.employee_id || u.id || u.emp_id || u.email || username;
-            const { role, isAdmin, isManager } = deriveRoleInfo({
-              ...u,
-              designation: u.designation,
-            });
-            state.user = {
-              name: displayName,
-              initials:
-                String(displayName)
-                  .split(" ")
-                  .map((x) => x[0])
-                  .join("")
-                  .slice(0, 2)
-                  .toUpperCase() || "US",
-              id: empId,
-              email: username,
-              designation: u.designation || "",
-              role,
-              access_level: role,
-              is_admin: isAdmin,
-              is_manager: isManager,
-            };
-            state.authenticated = true;
-            try {
-              localStorage.setItem(
-                "auth",
-                JSON.stringify({ authenticated: true, user: state.user })
-              );
-              localStorage.setItem("role", role);
-              localStorage.setItem("auth_version", "2026-02-27-identity-fix");
-              // Store login date for midnight force-logout guard (IST)
-              const _istOff2 = 5.5 * 60 * 60 * 1000;
-              localStorage.setItem("login_date", new Date(Date.now() + (new Date().getTimezoneOffset() * 60000) + _istOff2).toISOString().slice(0, 10));
-              localStorage.setItem("auth_session_started_at", new Date().toISOString());
-            } catch {}
-            startNotificationPolling();
-            setTimeout(() => {
-              const appContent = document.getElementById("app-content");
-              if (appContent) appContent.classList.add("page-exit-anim");
-              setTimeout(() => {
-                window.location.href = "/index.html#/";
-              }, 900);
-            }, 900);
-            return;
-          } else {
-            // auto-login failed; inform user to use login tab
-            flStep2Msg.style.color = "#059669";
-            flStep2Msg.textContent =
-              "Password updated. Please sign in using the Login tab.";
-            // keep user on login tab (already switched)
-          }
-        } catch (ex) {
-          flStep2Msg.style.color = "#059669";
-          flStep2Msg.textContent =
-            "Password updated. Please sign in using the Login tab.";
-        }
       } else {
         flStep2Msg.style.color = "#ef4444";
         flStep2Msg.textContent =

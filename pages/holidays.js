@@ -35,7 +35,7 @@ const renderHolidayModal = (data = null) => {
           </div>
           <div class="form-field">
             <label class="form-label" for="holiday-name">Holiday Name <span class="required">*</span></label>
-            <input class="input-control" type="text" id="holiday-name" value="${data?.crc6f_holidayname || ''}" placeholder="e.g., Independence Day" required />
+            <input class="input-control" type="text" id="holiday-name" value="${data?.crc6f_holidayname || ''}" placeholder="e.g., Independence Day" maxlength="100" required />
           </div>
         </div>
       </div>
@@ -71,6 +71,11 @@ const handleSaveHoliday = async (event) => {
 
   if (!date || !name) {
     showToast('Please fill in all required fields', 'warning');
+    return;
+  }
+
+  if (name.length > 100) {
+    showToast('Holiday name must be 100 characters or fewer', 'warning');
     return;
   }
 
