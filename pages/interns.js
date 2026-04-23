@@ -10,6 +10,104 @@ let internViewMode = 'card';
 let internSearch = '';
 let internTotalCount = 0;
 let internPageSize = INTERN_PAGE_SIZE;
+let internEmployeeMap = {};
+
+const getFilteredInterns = (filter = internSearch) => {
+  const normalizedFilter = String(filter || '').trim().toLowerCase();
+  return (state.interns || []).filter((intern) => {
+    const employeeName = intern.employee_id
+      ? (internEmployeeMap[intern.employee_id.toUpperCase()] || '')
+      : '';
+    const value = `${intern.intern_id || ''} ${intern.employee_id || ''} ${employeeName}`.toLowerCase();
+    return value.includes(normalizedFilter);
+  });
+};
+
+const buildInternCards = (filtered) => filtered.map((intern) => {
+  const employeeName = intern.employee_id ? (internEmployeeMap[intern.employee_id.toUpperCase()] || intern.employee_id) : 'Intern';
+  const initials = employeeName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'IN';
+  return `
+    <div class="employee-card">
+      <div class="employee-card-header">
+        <div class="employee-card-info">
+          <div class="employee-avatar">${initials}</div>
+          <div>
+            <div class="employee-name">${employeeName}</div>
+            <div class="employee-meta">Employee: ${intern.employee_id || '—'}</div>
+            <div class="employee-meta subtle">Created: ${formatDate(intern.created_on)}</div>
+          </div>
+        </div>
+        <button class="icon-btn intern-view-btn" data-intern-id="${intern.intern_id}" title="View Details"><i class="fa-solid fa-eye"></i></button>
+      </div>
+      ${
+        intern.employee_id
+          ? `<div class="employee-card-footer">
+              <a class="link-muted onboarding-progress-link" href="${buildOnboardingLink(intern.employee_id)}">
+                <i class="fa-solid fa-route"></i> Onboarding progress
+              </a>
+            </div>`
+          : ''
+      }
+    </div>
+  `;
+}).join('') || '<div class="placeholder-text">No interns found. Try searching by name, Intern ID, or Employee ID.</div>';
+
+const buildInternTableRows = (filtered) => filtered.map((intern) => {
+  const employeeName = intern.employee_id ? (internEmployeeMap[intern.employee_id.toUpperCase()] || intern.employee_id) : '—';
+  return `
+    <tr>
+      <td>${employeeName}</td>
+      <td>${intern.employee_id || '—'}</td>
+      <td>${formatDate(intern.created_on)}</td>
+      <td>
+        <div class="intern-table-actions">
+          <button class="icon-btn intern-view-btn" data-intern-id="${intern.intern_id}" title="View Details"><i class="fa-solid fa-eye"></i></button>
+          ${
+            intern.employee_id
+              ? `<a class="link-muted onboarding-progress-link" href="${buildOnboardingLink(intern.employee_id)}" title="View onboarding progress">
+                  <i class="fa-solid fa-route"></i>
+                </a>`
+              : ''
+          }
+        </div>
+      </td>
+    </tr>
+  `;
+}).join('') || '<tr><td colspan="4" class="placeholder-text">No interns found. Try searching by name, Intern ID, or Employee ID.</td></tr>';
+
+const buildInternPaginator = (filteredCount) => {
+  if (internSearch && internSearch.trim().length > 0) {
+    return `
+      <div class="pagination">
+        <span class="page-indicator">${filteredCount} result${filteredCount === 1 ? '' : 's'}</span>
+      </div>
+    `;
+  }
+
+  const totalPages = internTotalCount ? Math.max(1, Math.ceil(internTotalCount / internPageSize)) : undefined;
+  const prevPage = Math.max(1, internPage - 1);
+  const nextPage = totalPages ? Math.min(totalPages, internPage + 1) : internPage + 1;
+  const prevDisabled = internPage <= 1 ? 'disabled' : '';
+  const nextDisabled = totalPages && internPage >= totalPages ? 'disabled' : '';
+  return `
+    <div class="pagination">
+      <button class="btn intern-pagination-btn" data-target-page="${prevPage}" ${prevDisabled}><i class="fa-solid fa-chevron-left"></i> Prev</button>
+      <span class="page-indicator">Page ${internPage}${totalPages ? ` of ${totalPages}` : ''}</span>
+      <button class="btn intern-pagination-btn" data-target-page="${nextPage}" ${nextDisabled}>Next <i class="fa-solid fa-chevron-right"></i></button>
+    </div>
+  `;
+};
+
+const updateInternResults = () => {
+  const filtered = getFilteredInterns(internSearch);
+  const cardView = document.getElementById('intern-card-view');
+  const tableBody = document.getElementById('intern-table-body');
+  const pagination = document.getElementById('intern-pagination');
+  if (cardView) cardView.innerHTML = buildInternCards(filtered);
+  if (tableBody) tableBody.innerHTML = buildInternTableRows(filtered);
+  if (pagination) pagination.innerHTML = buildInternPaginator(filtered.length);
+  attachInternEvents();
+};
 
 const formatDate = (iso) => {
   if (!iso) return '—';
@@ -137,19 +235,14 @@ const navigateToInternDetail = (internId) => {
 const attachInternEvents = () => {
   const searchInput = document.getElementById('intern-search-input');
   if (searchInput) {
-    searchInput.addEventListener('input', (e) => {
-      internSearch = e.target.value || '';
-      const cursorPosition = e.target.selectionStart;
-      
-      renderInternsPage(internSearch, 1).then(() => {
-        // Restore focus and cursor position after re-render
-        const newInput = document.getElementById('intern-search-input');
-        if (newInput) {
-          newInput.focus();
-          newInput.setSelectionRange(cursorPosition, cursorPosition);
-        }
+    if (!searchInput.dataset.bound) {
+      searchInput.addEventListener('input', (e) => {
+        internSearch = e.target.value || '';
+        internPage = 1;
+        updateInternResults();
       });
-    });
+      searchInput.dataset.bound = 'true';
+    }
   }
 
   const addBtn = document.getElementById('add-intern-btn');
@@ -161,10 +254,13 @@ const attachInternEvents = () => {
   }
 
   document.querySelectorAll('.intern-view-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const internId = btn.getAttribute('data-intern-id');
-      if (internId) navigateToInternDetail(internId);
-    });
+    if (!btn.dataset.bound) {
+      btn.addEventListener('click', () => {
+        const internId = btn.getAttribute('data-intern-id');
+        if (internId) navigateToInternDetail(internId);
+      });
+      btn.dataset.bound = 'true';
+    }
   });
 
   const cardBtn = document.getElementById('intern-card-view-btn');
@@ -180,18 +276,27 @@ const attachInternEvents = () => {
       cardView.classList.toggle('view-mode-visible', !showTable);
       tableView.classList.toggle('view-mode-visible', showTable);
     };
-    cardBtn.addEventListener('click', () => applyViewState('card'));
-    tableBtn.addEventListener('click', () => applyViewState('table'));
+    if (!cardBtn.dataset.bound) {
+      cardBtn.addEventListener('click', () => applyViewState('card'));
+      cardBtn.dataset.bound = 'true';
+    }
+    if (!tableBtn.dataset.bound) {
+      tableBtn.addEventListener('click', () => applyViewState('table'));
+      tableBtn.dataset.bound = 'true';
+    }
     applyViewState(internViewMode);
   }
 
   document.querySelectorAll('.intern-pagination-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const targetPage = parseInt(btn.getAttribute('data-target-page'), 10);
-      if (!Number.isNaN(targetPage)) {
-        renderInternsPage(internSearch, targetPage);
-      }
-    });
+    if (!btn.dataset.bound) {
+      btn.addEventListener('click', () => {
+        const targetPage = parseInt(btn.getAttribute('data-target-page'), 10);
+        if (!Number.isNaN(targetPage)) {
+          renderInternsPage(internSearch, targetPage);
+        }
+      });
+      btn.dataset.bound = 'true';
+    }
   });
 };
 
@@ -271,86 +376,14 @@ export const renderInternsPage = async (filter = internSearch, page = internPage
         employeeMap[emp.employee_id.toUpperCase()] = fullName || emp.employee_id;
       }
     });
+    internEmployeeMap = employeeMap;
   } catch (err) {
     console.error('Failed to load interns', err);
     document.getElementById('app-content').innerHTML = getPageContentHTML('Interns', `<div class="card error-card">${err.message || err}</div>`, controls);
     return;
   }
 
-  const normalizedFilter = String(filter || '').trim().toLowerCase();
-  const filtered = (state.interns || []).filter((intern) => {
-    const employeeName = intern.employee_id
-      ? (employeeMap[intern.employee_id.toUpperCase()] || '')
-      : '';
-    const value = `${intern.intern_id || ''} ${intern.employee_id || ''} ${employeeName}`.toLowerCase();
-    return value.includes(normalizedFilter);
-  });
-
-  const totalPages = internTotalCount ? Math.max(1, Math.ceil(internTotalCount / internPageSize)) : undefined;
-  const prevPage = Math.max(1, internPage - 1);
-  const nextPage = totalPages ? Math.min(totalPages, internPage + 1) : internPage + 1;
-  const prevDisabled = internPage <= 1 ? 'disabled' : '';
-  const nextDisabled = totalPages && internPage >= totalPages ? 'disabled' : '';
-
-  const paginator = `
-    <div class="pagination">
-      <button class="btn intern-pagination-btn" data-target-page="${prevPage}" ${prevDisabled}><i class="fa-solid fa-chevron-left"></i> Prev</button>
-      <span class="page-indicator">Page ${internPage}${totalPages ? ` of ${totalPages}` : ''}</span>
-      <button class="btn intern-pagination-btn" data-target-page="${nextPage}" ${nextDisabled}>Next <i class="fa-solid fa-chevron-right"></i></button>
-    </div>
-  `;
-
-  const cards = filtered.map((intern) => {
-    const employeeName = intern.employee_id ? (employeeMap[intern.employee_id.toUpperCase()] || intern.employee_id) : 'Intern';
-    const initials = employeeName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'IN';
-    return `
-    <div class="employee-card">
-      <div class="employee-card-header">
-        <div class="employee-card-info">
-          <div class="employee-avatar">${initials}</div>
-          <div>
-            <div class="employee-name">${employeeName}</div>
-            <div class="employee-meta">Employee: ${intern.employee_id || '—'}</div>
-            <div class="employee-meta subtle">Created: ${formatDate(intern.created_on)}</div>
-          </div>
-        </div>
-        <button class="icon-btn intern-view-btn" data-intern-id="${intern.intern_id}" title="View Details"><i class="fa-solid fa-eye"></i></button>
-      </div>
-      ${
-        intern.employee_id
-          ? `<div class="employee-card-footer">
-              <a class="link-muted onboarding-progress-link" href="${buildOnboardingLink(intern.employee_id)}">
-                <i class="fa-solid fa-route"></i> Onboarding progress
-              </a>
-            </div>`
-          : ''
-      }
-    </div>
-  `;
-  }).join('') || '<div class="placeholder-text">No interns found. Try searching by name, Intern ID, or Employee ID.</div>';
-
-  const tableRows = filtered.map((intern) => {
-    const employeeName = intern.employee_id ? (employeeMap[intern.employee_id.toUpperCase()] || intern.employee_id) : '—';
-    return `
-    <tr>
-      <td>${employeeName}</td>
-      <td>${intern.employee_id || '—'}</td>
-      <td>${formatDate(intern.created_on)}</td>
-      <td>
-        <div class="intern-table-actions">
-          <button class="icon-btn intern-view-btn" data-intern-id="${intern.intern_id}" title="View Details"><i class="fa-solid fa-eye"></i></button>
-          ${
-            intern.employee_id
-              ? `<a class="link-muted onboarding-progress-link" href="${buildOnboardingLink(intern.employee_id)}" title="View onboarding progress">
-                  <i class="fa-solid fa-route"></i>
-                </a>`
-              : ''
-          }
-        </div>
-      </td>
-    </tr>
-  `;
-  }).join('') || '<tr><td colspan="4" class="placeholder-text">No interns found. Try searching by name, Intern ID, or Employee ID.</td></tr>';
+  const filtered = getFilteredInterns(filter);
 
   const content = `
     <div class="card employees-card-shell">
@@ -361,7 +394,7 @@ export const renderInternsPage = async (filter = internSearch, page = internPage
         </div>
       </div>
       <div id="intern-card-view" class="employee-card-grid view-mode ${isTableMode ? '' : 'view-mode-visible'}">
-        ${cards}
+        ${buildInternCards(filtered)}
       </div>
       <div id="intern-table-view" class="view-mode ${isTableMode ? 'view-mode-visible' : ''}">
         <div class="employee-table-wrapper">
@@ -375,12 +408,12 @@ export const renderInternsPage = async (filter = internSearch, page = internPage
                   <th>Actions</th>
                 </tr>
               </thead>
-              <tbody>${tableRows}</tbody>
+              <tbody id="intern-table-body">${buildInternTableRows(filtered)}</tbody>
             </table>
           </div>
         </div>
       </div>
-      ${paginator}
+      <div id="intern-pagination">${buildInternPaginator(filtered.length)}</div>
     </div>
   `;
 
