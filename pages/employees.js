@@ -588,9 +588,9 @@ export const renderBulkDeletePage = async () => {
             bulkDeleteEmployees = (items || []).map(e => ({
                 id: e.employee_id,
                 name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
-                location: e.contact_number || '',
+                location: e.address || '',
                 jobTitle: e.designation || '',
-                contactNumber: e.address || '',
+                contactNumber: e.contact_number || '',
                 department: e.department || '',
                 status: (e.active === true || e.active === 'true' || e.active === 1 || e.active === 'Active') ? 'Active' : 'Inactive'
             }));
@@ -1463,9 +1463,9 @@ export const showBulkDeleteModal = () => {
             bulkDeleteEmployees = (items || []).map(e => ({
                 id: e.employee_id,
                 name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
-                location: e.contact_number || '',
+                location: e.address || '',
                 jobTitle: e.designation || '',
-                contactNumber: e.address || '',
+                contactNumber: e.contact_number || '',
                 department: e.department || '',
                 status: (e.active === true || e.active === 'true' || e.active === 1 || e.active === 'Active') ? 'Active' : 'Inactive'
             }));
@@ -1480,7 +1480,7 @@ export const showBulkDeleteModal = () => {
         const selectAll = document.getElementById('bulk-delete-select-all');
         const restoreBtn = document.getElementById('bulk-restore-recently-deleted');
         const submit = document.getElementById('bulk-delete-confirm-btn');
-        if (submit) submit.textContent = 'Delete Selected';
+
         if (sortType) sortType.addEventListener('change', handleBulkDeleteSortTypeChange);
         if (sortBtn) sortBtn.addEventListener('click', handleBulkDeleteSort);
         if (selectAll) selectAll.addEventListener('change', handleBulkDeleteToggleSelectAll);
@@ -1688,9 +1688,9 @@ export const handleRestoreSingle = async (employeeId) => {
             bulkDeleteEmployees = (items || []).map(e => ({
                 id: e.employee_id,
                 name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
-                location: e.contact_number || '',
+                location: e.address || '',
                 jobTitle: e.designation || '',
-                contactNumber: e.address || '',
+                contactNumber: e.contact_number || '',
                 department: e.department || '',
                 status: (e.active === true || e.active === 'true' || e.active === 1 || e.active === 'Active') ? 'Active' : 'Inactive'
             }));
@@ -1744,9 +1744,9 @@ export const handleRestoreSelected = async () => {
             bulkDeleteEmployees = (items || []).map(e => ({
                 id: e.employee_id,
                 name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
-                location: e.contact_number || '',
+                location: e.address || '',
                 jobTitle: e.designation || '',
-                contactNumber: e.address || '',
+                contactNumber: e.contact_number || '',
                 department: e.department || '',
                 status: (e.active === true || e.active === 'true' || e.active === 1 || e.active === 'Active') ? 'Active' : 'Inactive'
             }));

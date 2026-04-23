@@ -10911,6 +10911,7 @@ def restore_deleted_employees():
         
         restored_count = 0
         errors = []
+        failed_employees = []
         
         for emp in employees_to_restore:
             try:
@@ -10952,22 +10953,23 @@ def restore_deleted_employees():
             except Exception as e:
                 error_msg = f"{emp.get('employee_id')}: {str(e)}"
                 errors.append(error_msg)
+                failed_employees.append(emp)
                 print(f"[ERROR] Failed to restore {emp.get('employee_id')}: {str(e)}")
         
-        # Rewrite CSV with remaining employees
+        # Rewrite CSV with remaining employees and keep failed restores for retry
         with open(DELETED_EMPLOYEES_CSV, 'w', newline='', encoding='utf-8') as csvfile:
             fieldnames = ['employee_id', 'first_name', 'last_name', 'email', 'contact_number', 
                          'address', 'department', 'designation', 'doj', 'active']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(all_employees)
+            writer.writerows(all_employees + failed_employees)
         
-        print(f"[OK] Restored {restored_count} employees. {len(all_employees)} remaining in CSV")
+        print(f"[OK] Restored {restored_count} employees. {len(all_employees) + len(failed_employees)} remaining in CSV")
         
         response = {
             "success": True,
             "restored": restored_count,
-            "remaining": len(all_employees),
+            "remaining": len(all_employees) + len(failed_employees),
             "message": f"Successfully restored {restored_count} employee(s)"
         }
         
