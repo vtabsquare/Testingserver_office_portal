@@ -173,7 +173,12 @@ def _coerce_client_local_datetime(client_time_str, timezone_name):
                 tz = ZoneInfo(timezone_name)
                 return client_dt.astimezone(tz)
             except Exception:
-                return client_dt
+                pass
+        if ZoneInfo:
+            try:
+                return client_dt.astimezone(ZoneInfo("Asia/Kolkata"))
+            except Exception:
+                pass
         return client_dt
     except Exception:
         return None
@@ -374,6 +379,11 @@ def _event_local_date_time(event: dict):
     if tz_name and ZoneInfo:
         try:
             dt = dt.astimezone(ZoneInfo(tz_name))
+        except Exception:
+            pass
+    if ZoneInfo and dt.tzinfo == timezone.utc:
+        try:
+            dt = dt.astimezone(ZoneInfo("Asia/Kolkata"))
         except Exception:
             pass
 
@@ -1703,10 +1713,10 @@ def _sync_login_activity_from_event(event: dict):
         token = get_access_token()
         patch = {}
         if et == "check_in":
-            patch[LA_FIELD_CHECKIN_TIME] = local_time_iso
+            patch[LA_FIELD_CHECKIN_TIME] = time_only if time_only else local_time_iso
             patch[LA_FIELD_CHECKIN_LOCATION] = _login_activity_location_string(event)
         else:
-            patch[LA_FIELD_CHECKOUT_TIME] = local_time_iso
+            patch[LA_FIELD_CHECKOUT_TIME] = time_only if time_only else local_time_iso
             patch[LA_FIELD_CHECKOUT_LOCATION] = _login_activity_location_string(event)
 
         try:
@@ -10894,13 +10904,20 @@ def restore_deleted_employees():
         # Read all employees from CSV
         all_employees = []
         employees_to_restore = []
+        seen_restore_ids = set()  # Track which IDs we've already queued for restore
         
         with open(DELETED_EMPLOYEES_CSV, 'r', newline='', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
                 emp_id = row.get('employee_id', '')
                 if emp_id in employee_ids:
-                    employees_to_restore.append(row)
+                    if emp_id not in seen_restore_ids:
+                        # Only restore the first occurrence of each employee_id
+                        employees_to_restore.append(row)
+                        seen_restore_ids.add(emp_id)
+                    else:
+                        # Duplicate rows for same employee_id — skip (don't keep in CSV)
+                        print(f"[SKIP] Duplicate CSV entry for {emp_id}, removing")
                 else:
                     all_employees.append(row)
         
@@ -10944,7 +10961,10 @@ def restore_deleted_employees():
                 if field_map['doj']:
                     payload[field_map['doj']] = emp.get('doj')
                 if field_map['active']:
-                    payload[field_map['active']] = emp.get('active', 'false').lower() == 'true'
+                    # Always restore as active — user is bringing them back
+                    payload[field_map['active']] = True
+                if field_map.get('employee_flag'):
+                    payload[field_map['employee_flag']] = emp.get('employee_flag', 'Employee') or 'Employee'
                 
                 create_record(entity_set, payload)
                 restored_count += 1
