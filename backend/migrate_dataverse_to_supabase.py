@@ -291,7 +291,7 @@ TABLE_CONFIGS = {
     "holidays": {
         "dv_entity": "crc6f_hr_holidayses",
         "sb_table": "crc6f_hr_holidayses",
-        "dv_select": "crc6f_hr_holidaysid,crc6f_date,crc6f_holidayname,crc6f_description,crc6f_year",
+        "dv_select": "crc6f_hr_holidaysid,crc6f_date,crc6f_holidayname",
     },
     "clients": {
         "dv_entity": "crc6f_hr_clients",
