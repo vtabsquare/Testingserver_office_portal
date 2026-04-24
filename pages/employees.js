@@ -1818,7 +1818,7 @@ export const handleBulkDeleteConfirm = async (e) => {
     }));
 
     // Append deleted employees to CSV storage (before attempting delete)
-    appendToDeletedCSV(lastDeletedEmployees);
+    await appendToDeletedCSV(lastDeletedEmployees);
 
     // Track deletion results
     let successCount = 0;
@@ -2196,43 +2196,69 @@ const renderRestorePreviewTable = () => {
 };
 
 const handleRestoreAll = async () => {
+    if (!currentDeletedEmployees || currentDeletedEmployees.length === 0) {
+        alert('No deleted employees to restore');
+        return;
+    }
+
     if (!confirm(`Are you sure you want to restore all ${currentDeletedEmployees.length} deleted employees?`)) {
         return;
     }
 
     console.log('Restoring all deleted employees:', currentDeletedEmployees.length);
 
-    let successCount = 0;
-    let errorCount = 0;
+    const allIds = currentDeletedEmployees.map(emp => emp.employee_id);
 
-    for (const emp of currentDeletedEmployees) {
-        try {
-            console.log('Restoring employee:', emp.employee_id);
-            await createEmployee(emp);
-            successCount++;
-        } catch (err) {
-            console.error('Restore failed for', emp.employee_id, err);
-            errorCount++;
-        }
-    }
-
-    // Clear the CSV from backend
     try {
-        await fetch(`${API_BASE_URL}/api/deleted-employees/clear`, { method: 'DELETE' });
-        currentDeletedEmployees = [];
-        hasDeletedEmployees = false;
-    } catch (e) {
-        console.error('Failed to clear deleted employees from backend:', e);
-    }
+        const response = await fetch(`${API_BASE_URL}/api/deleted-employees/restore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ employee_ids: allIds })
+        });
 
-    let message = `Successfully restored ${successCount} employee${successCount !== 1 ? 's' : ''}`;
-    if (errorCount > 0) {
-        message += `\n${errorCount} restoration${errorCount !== 1 ? 's' : ''} failed (check console)`;
-    }
+        const result = await response.json();
 
-    alert(message);
-    closeModal();
-    await renderEmployeesPage('', 1);
+        if (response.ok && result.success) {
+            let message = result.message || `Successfully restored ${result.restored} employee(s)`;
+            if (result.errors && result.errors.length > 0) {
+                message += "\n\nErrors:\n" + result.errors.slice(0, 3).join("\n");
+                if (result.errors.length > 3) {
+                    message += `\n... and ${result.errors.length - 3} more errors`;
+                }
+            }
+            alert(message);
+
+            // Refresh deleted employees data
+            currentDeletedEmployees = await fetchDeletedEmployees();
+            hasDeletedEmployees = currentDeletedEmployees.length > 0;
+            restoreSelected.clear();
+
+            // If on full-page bulk delete route, refresh that page
+            if (window.location.hash === '#/employees/bulk-delete') {
+                renderDeletedEmployeesTable();
+                // Also refresh the active employees table
+                const { items } = await listEmployees(1, 5000);
+                bulkDeleteEmployees = (items || []).map(e => ({
+                    id: e.employee_id,
+                    name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
+                    location: e.address || '',
+                    jobTitle: e.designation || '',
+                    contactNumber: e.contact_number || '',
+                    department: e.department || '',
+                    status: (e.active === true || e.active === 'true' || e.active === 1 || e.active === 'Active') ? 'Active' : 'Inactive'
+                }));
+                renderBulkDeleteTable();
+            } else {
+                closeModal();
+                await renderEmployeesPage('', 1);
+            }
+        } else {
+            alert(`Failed to restore employees: ${result.error || 'Unknown error'}`);
+        }
+    } catch (err) {
+        console.error('Error restoring all employees:', err);
+        alert(`Failed to restore employees: ${err.message}`);
+    }
 };
 
 export const handleRestoreConfirm = async (e) => {
