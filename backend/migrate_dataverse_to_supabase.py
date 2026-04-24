@@ -134,24 +134,68 @@ def sb_get_columns(table: str) -> set:
         return set()
 
 
+def _pk_for_table(table: str) -> str:
+    """Return the primary key column for a Supabase table (Dataverse uses <entity_singular>id)."""
+    # Dataverse plural-to-id convention: crc6f_table13s -> crc6f_table13id
+    if table.endswith("ses"):
+        return table[:-3] + "id"
+    if table.endswith("s"):
+        return table[:-1] + "id"
+    return table + "id"
+
+
 def sb_insert_batch(table: str, records: list, batch_size: int = 200) -> int:
-    """Insert records into Supabase in batches. Returns count inserted."""
+    """Upsert records into Supabase in batches using the primary key for idempotency.
+
+    Returns count inserted/updated. Safe to re-run without creating duplicates
+    because conflicts on the primary key are resolved by update.
+    """
     inserted = 0
+    pk = _pk_for_table(table)
     for i in range(0, len(records), batch_size):
         batch = records[i:i + batch_size]
         try:
-            resp = sb.table(table).upsert(batch).execute()
+            sb.table(table).upsert(batch, on_conflict=pk).execute()
             inserted += len(batch)
         except Exception as e:
-            log.error(f"  Batch insert error in {table} (rows {i}-{i+len(batch)}): {e}")
-            # Try one-by-one for this batch
+            log.error(f"  Batch upsert error in {table} (rows {i}-{i+len(batch)}): {e}")
+            # Fallback: try one-by-one so a single bad row does not poison the batch
             for row in batch:
                 try:
-                    sb.table(table).upsert(row).execute()
+                    sb.table(table).upsert(row, on_conflict=pk).execute()
                     inserted += 1
                 except Exception as e2:
-                    log.error(f"  Row insert error: {e2} | data: {json.dumps(row)[:200]}")
+                    log.error(f"  Row upsert error: {e2} | data: {json.dumps(row, default=str)[:200]}")
     return inserted
+
+
+def dv_count(entity: str) -> int:
+    """Return total row count in a Dataverse entity using OData $count."""
+    token = dv_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Prefer": "odata.include-annotations=\"*\"",
+    }
+    url = f"{RESOURCE}/api/data/v9.2/{entity}?$count=true&$top=1"
+    try:
+        resp = dv_session().get(url, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            return -1
+        data = resp.json()
+        return int(data.get("@odata.count", 0))
+    except Exception as e:
+        log.warning(f"  dv_count failed for {entity}: {e}")
+        return -1
+
+
+def sb_count(table: str) -> int:
+    """Return total row count in a Supabase table."""
+    try:
+        resp = sb.table(table).select("*", count="exact").limit(1).execute()
+        return int(getattr(resp, "count", 0) or 0)
+    except Exception as e:
+        log.warning(f"  sb_count failed for {table}: {e}")
+        return -1
 
 
 # ── Data type transformations ──
@@ -353,6 +397,14 @@ MIGRATION_ORDER = [
     "notifications",
 ]
 
+# Logical module groups for safe per-feature migration.
+# Each group is migrated in FK-safe order.
+MODULE_GROUPS = {
+    "holidays": ["holidays"],
+    "leaves": ["leave_balances", "leave_requests", "comp_off"],
+    "attendance": ["attendance", "login_activity"],
+}
+
 
 def migrate_table(name: str, dry_run: bool = False) -> dict:
     """Migrate a single table from Dataverse to Supabase."""
@@ -443,15 +495,130 @@ def migrate_all(dry_run: bool = False, tables: list = None):
     return results
 
 
+def preflight(tables: list) -> list:
+    """Compare Dataverse vs Supabase row counts for each table without writing.
+
+    Purpose: confirm the target Supabase tables exist and show how much data
+    would be migrated before any write operation.
+    """
+    log.info("=" * 60)
+    log.info("PREFLIGHT CHECK")
+    log.info("=" * 60)
+    log.info(f"{'Table':<25} {'DV count':>10} {'SB count':>10} {'Delta':>10}")
+    log.info("-" * 60)
+    rows = []
+    for name in tables:
+        cfg = TABLE_CONFIGS.get(name)
+        if not cfg:
+            log.warning(f"Unknown table: {name}, skipping")
+            continue
+        dv_n = dv_count(cfg["dv_entity"])
+        sb_n = sb_count(cfg["sb_table"])
+        delta = (dv_n - sb_n) if (dv_n >= 0 and sb_n >= 0) else None
+        log.info(f"{name:<25} {dv_n:>10} {sb_n:>10} {str(delta if delta is not None else 'n/a'):>10}")
+        rows.append({"table": name, "dv": dv_n, "sb": sb_n, "delta": delta})
+    log.info("=" * 60)
+    return rows
+
+
+def reconcile(tables: list, sample_size: int = 5) -> list:
+    """Post-migration verification: compare counts and sample a few records.
+
+    For each table, report:
+      - Dataverse count vs Supabase count
+      - Up to N sample records present in DV but missing in SB (by primary key)
+    """
+    log.info("=" * 60)
+    log.info("RECONCILE")
+    log.info("=" * 60)
+    results = []
+    for name in tables:
+        cfg = TABLE_CONFIGS.get(name)
+        if not cfg:
+            log.warning(f"Unknown table: {name}, skipping")
+            continue
+        dv_entity = cfg["dv_entity"]
+        sb_table = cfg["sb_table"]
+        pk = _pk_for_table(sb_table)
+
+        dv_n = dv_count(dv_entity)
+        sb_n = sb_count(sb_table)
+        log.info(f"[{name}] DV={dv_n} SB={sb_n} (pk={pk})")
+
+        # Sample a few Dataverse PKs and check they exist in Supabase
+        missing = []
+        try:
+            token = dv_token()
+            headers = {"Authorization": f"Bearer {token}"}
+            url = f"{RESOURCE}/api/data/v9.2/{dv_entity}?$select={pk}&$top={sample_size}"
+            resp = dv_session().get(url, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                for row in resp.json().get("value", []):
+                    pk_val = row.get(pk)
+                    if not pk_val:
+                        continue
+                    r = sb.table(sb_table).select(pk).eq(pk, pk_val).limit(1).execute()
+                    if not r.data:
+                        missing.append(pk_val)
+        except Exception as e:
+            log.warning(f"  sample check failed for {name}: {e}")
+
+        status = "ok"
+        if dv_n >= 0 and sb_n >= 0 and dv_n != sb_n:
+            status = "count_mismatch"
+        if missing:
+            status = "missing_rows"
+            log.warning(f"  {len(missing)} sample PKs missing in Supabase: {missing[:sample_size]}")
+        else:
+            log.info(f"  sample PK check: PASS")
+
+        results.append({"table": name, "dv": dv_n, "sb": sb_n, "missing_sample": missing, "status": status})
+
+    log.info("=" * 60)
+    log.info(f"{'Table':<25} {'DV':>10} {'SB':>10} {'Status':<18}")
+    log.info("-" * 60)
+    for r in results:
+        log.info(f"{r['table']:<25} {r['dv']:>10} {r['sb']:>10} {r['status']:<18}")
+    log.info("=" * 60)
+    return results
+
+
+def resolve_tables(args_table: str, args_module: str) -> list:
+    """Turn CLI --table / --module into an ordered list of migration targets."""
+    if args_module:
+        names = []
+        for m in args_module.split(","):
+            m = m.strip().lower()
+            if m not in MODULE_GROUPS:
+                raise SystemExit(
+                    f"Unknown module: {m}. Available: {', '.join(MODULE_GROUPS.keys())}"
+                )
+            names.extend(MODULE_GROUPS[m])
+        return names
+    if args_table and args_table != "all":
+        return [t.strip() for t in args_table.split(",")]
+    return list(MIGRATION_ORDER)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Migrate Dataverse data to Supabase")
     parser.add_argument("--table", type=str, default=None,
                         help="Migrate a specific table (e.g. 'employees', 'attendance'). "
                              "Use 'all' or omit for all tables.")
+    parser.add_argument("--module", type=str, default=None,
+                        help="Migrate a logical module group. One of: "
+                             + ", ".join(MODULE_GROUPS.keys())
+                             + ". Comma-separated for multiple (e.g. 'holidays,leaves').")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview migration without writing to Supabase")
+    parser.add_argument("--preflight", action="store_true",
+                        help="Compare DV vs SB row counts without writing. "
+                             "Run this first on every module.")
+    parser.add_argument("--reconcile", action="store_true",
+                        help="Post-migration verification: count match + sample PK check. "
+                             "Run this after migration for the same --module or --table.")
     parser.add_argument("--list", action="store_true",
-                        help="List available tables")
+                        help="List available tables and module groups")
     args = parser.parse_args()
 
     if args.list:
@@ -459,10 +626,19 @@ if __name__ == "__main__":
         for name in MIGRATION_ORDER:
             cfg = TABLE_CONFIGS[name]
             print(f"  {name:<25} ({cfg['dv_entity']} -> {cfg['sb_table']})")
+        print("\nAvailable module groups:")
+        for mod, tables in MODULE_GROUPS.items():
+            print(f"  {mod:<12} -> {tables}")
         sys.exit(0)
 
-    if args.table and args.table != "all":
-        tables = [t.strip() for t in args.table.split(",")]
-        migrate_all(dry_run=args.dry_run, tables=tables)
-    else:
-        migrate_all(dry_run=args.dry_run)
+    targets = resolve_tables(args.table, args.module)
+
+    if args.preflight:
+        preflight(targets)
+        sys.exit(0)
+
+    if args.reconcile:
+        reconcile(targets)
+        sys.exit(0)
+
+    migrate_all(dry_run=args.dry_run, tables=targets)
