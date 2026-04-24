@@ -48,18 +48,6 @@ try:
 except Exception:
     ZoneInfo = None
 
-# Hardcoded IST offset (UTC+5:30) - works without ZoneInfo/tzdata
-IST_TZ = timezone(timedelta(hours=5, minutes=30))
-
-def _to_ist(dt_obj):
-    """Convert a timezone-aware datetime to IST. Works without ZoneInfo."""
-    if ZoneInfo:
-        try:
-            return dt_obj.astimezone(ZoneInfo("Asia/Kolkata"))
-        except Exception:
-            pass
-    return dt_obj.astimezone(IST_TZ)
-
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 
@@ -186,8 +174,12 @@ def _coerce_client_local_datetime(client_time_str, timezone_name):
                 return client_dt.astimezone(tz)
             except Exception:
                 pass
-        # Always convert to IST as fallback
-        return client_dt.astimezone(IST_TZ)
+        if ZoneInfo:
+            try:
+                return client_dt.astimezone(ZoneInfo("Asia/Kolkata"))
+            except Exception:
+                pass
+        return client_dt
     except Exception:
         return None
 
@@ -389,9 +381,11 @@ def _event_local_date_time(event: dict):
             dt = dt.astimezone(ZoneInfo(tz_name))
         except Exception:
             pass
-    # If still in UTC, convert to IST
-    if dt.utcoffset() == timedelta(0):
-        dt = _to_ist(dt)
+    if ZoneInfo and dt.tzinfo == timezone.utc:
+        try:
+            dt = dt.astimezone(ZoneInfo("Asia/Kolkata"))
+        except Exception:
+            pass
 
     # Return a timezone-adjusted ISO value (for DateTime fields) not the raw client string.
     try:
@@ -1714,8 +1708,11 @@ def _sync_login_activity_from_event(event: dict):
                         converted = True
                     except Exception:
                         pass
-                if not converted:
-                    dt = _to_ist(dt)
+                if not converted and ZoneInfo:
+                    try:
+                        dt = dt.astimezone(ZoneInfo("Asia/Kolkata"))
+                    except Exception:
+                        pass
                 time_only = dt.strftime("%H:%M:%S")
         except Exception:
             time_only = None
