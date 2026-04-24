@@ -1701,9 +1701,16 @@ def _sync_login_activity_from_event(event: dict):
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 tz_name = (event.get("client_timezone") or "").strip()
+                converted = False
                 if tz_name and ZoneInfo:
                     try:
                         dt = dt.astimezone(ZoneInfo(tz_name))
+                        converted = True
+                    except Exception:
+                        pass
+                if not converted and ZoneInfo:
+                    try:
+                        dt = dt.astimezone(ZoneInfo("Asia/Kolkata"))
                     except Exception:
                         pass
                 time_only = dt.strftime("%H:%M:%S")
