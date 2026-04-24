@@ -13,9 +13,24 @@ import os
 import requests
 
 try:
-    from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo as _ZoneInfo
 except ImportError:
-    from pytz import timezone as ZoneInfo
+    try:
+        from pytz import timezone as _ZoneInfo
+    except ImportError:
+        _ZoneInfo = None
+
+# Hardcoded IST offset (UTC+5:30) - works without ZoneInfo/tzdata
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+def ZoneInfo(tz_name):
+    """Fallback timezone resolver when tzdata is missing."""
+    if _ZoneInfo:
+        try:
+            return _ZoneInfo(tz_name)
+        except Exception:
+            pass
+    return IST_TZ
 
 from dataverse_helper import create_record, update_record, get_access_token, get_dataverse_session
 from time_tracking import stop_active_task_entries_for_user
