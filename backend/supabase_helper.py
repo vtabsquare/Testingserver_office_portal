@@ -144,7 +144,7 @@ class _SupabaseODataAdapter:
             if not entity or not record_id:
                 return _MockResponse(404, text="Entity or record_id not found")
             pk = _pk_field(entity)
-            clean = _coerce_types({k: v for k, v in (json or {}).items() if v is not None})
+            clean = _coerce_types({k: v for k, v in (json or {}).items()})
             self._sb.table(entity).update(clean).eq(pk, record_id).execute()
             return _MockResponse(204)
         except Exception as e:
@@ -535,7 +535,7 @@ def update_record(entity_name: str, record_id: str, data: dict) -> bool:
     """Update a record by its primary-key UUID."""
     sb = _get_supabase()
     pk = _pk_field(entity_name)
-    clean_data = _coerce_types({k: v for k, v in data.items() if v is not None})
+    clean_data = _coerce_types({k: v for k, v in data.items()})
     try:
         response = sb.table(entity_name).update(clean_data).eq(pk, record_id).execute()
         return True
@@ -547,7 +547,7 @@ def update_record_by_alt_key(entity_name: str, alt_key_value: str, data: dict,
                               alt_key_field: str = "crc6f_leaveid") -> bool:
     """Update a record using an alternate/business key."""
     sb = _get_supabase()
-    clean_data = _coerce_types({k: v for k, v in data.items() if v is not None})
+    clean_data = _coerce_types({k: v for k, v in data.items()})
     try:
         response = sb.table(entity_name).update(clean_data).eq(alt_key_field, alt_key_value).execute()
         return True
