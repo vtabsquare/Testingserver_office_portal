@@ -10993,7 +10993,10 @@ def restore_deleted_employees():
                 if field_map['designation']:
                     payload[field_map['designation']] = emp.get('designation')
                 if field_map['doj']:
-                    payload[field_map['doj']] = emp.get('doj')
+                    doj_val = emp.get('doj')
+                    # Skip empty date values — Supabase rejects "" for date columns
+                    if doj_val and str(doj_val).strip():
+                        payload[field_map['doj']] = doj_val
                 if field_map['active']:
                     # Always restore as active — user is bringing them back
                     payload[field_map['active']] = True
