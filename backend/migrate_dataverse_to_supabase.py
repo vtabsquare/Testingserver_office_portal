@@ -19,6 +19,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 _dv_entity_resolution_cache = {}
+_valid_employee_ids_cache = None
 
 load_dotenv("id.env")
 
@@ -170,6 +171,60 @@ def _pk_for_table(table: str) -> str:
     return table + "id"
 
 
+def sb_get_valid_employee_ids() -> set:
+    global _valid_employee_ids_cache
+    if _valid_employee_ids_cache is not None:
+        return _valid_employee_ids_cache
+    valid_ids = set()
+    offset = 0
+    page_size = 1000
+    while True:
+        resp = sb.table("crc6f_table12s").select("crc6f_employeeid").range(offset, offset + page_size - 1).execute()
+        rows = getattr(resp, "data", None) or []
+        for row in rows:
+            emp_id = str(row.get("crc6f_employeeid") or "").strip().upper()
+            if emp_id:
+                valid_ids.add(emp_id)
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    _valid_employee_ids_cache = valid_ids
+    return valid_ids
+
+
+def filter_orphan_employee_rows(table: str, records: list) -> tuple[list, int, list]:
+    employee_tables = {
+        "crc6f_table13s",
+        "crc6f_hr_loginactivitytbs",
+        "crc6f_hr_leavemangements",
+        "crc6f_table14s",
+    }
+    if table not in employee_tables:
+        return records, 0, []
+
+    valid_ids = sb_get_valid_employee_ids()
+    filtered = []
+    skipped = 0
+    orphan_ids = set()
+    for row in records:
+        emp_id = str(row.get("crc6f_employeeid") or "").strip().upper()
+        if emp_id and emp_id not in valid_ids:
+            skipped += 1
+            orphan_ids.add(emp_id)
+            continue
+        filtered.append(row)
+    return filtered, skipped, sorted(orphan_ids)
+
+
+def is_known_duplicate_conflict(table: str, error_text: str) -> bool:
+    text = (error_text or "").lower()
+    if table == "crc6f_hr_loginactivitytbs" and "uq_loginactivity_employee_date" in text:
+        return True
+    if table == "crc6f_hr_leavemangements" and "uq_leavebalance_employee" in text:
+        return True
+    return False
+
+
 def sb_insert_batch(table: str, records: list, batch_size: int = 200) -> int:
     """Upsert records into Supabase in batches using the primary key for idempotency.
 
@@ -184,13 +239,18 @@ def sb_insert_batch(table: str, records: list, batch_size: int = 200) -> int:
             sb.table(table).upsert(batch, on_conflict=pk).execute()
             inserted += len(batch)
         except Exception as e:
-            log.error(f"  Batch upsert error in {table} (rows {i}-{i+len(batch)}): {e}")
+            if is_known_duplicate_conflict(table, str(e)):
+                log.warning(f"  Batch duplicate conflict in {table} (rows {i}-{i+len(batch)}), retrying row-by-row")
+            else:
+                log.error(f"  Batch upsert error in {table} (rows {i}-{i+len(batch)}): {e}")
             # Fallback: try one-by-one so a single bad row does not poison the batch
             for row in batch:
                 try:
                     sb.table(table).upsert(row, on_conflict=pk).execute()
                     inserted += 1
                 except Exception as e2:
+                    if is_known_duplicate_conflict(table, str(e2)):
+                        continue
                     log.error(f"  Row upsert error: {e2} | data: {json.dumps(row, default=str)[:200]}")
     return inserted
 
@@ -468,6 +528,10 @@ def migrate_table(name: str, dry_run: bool = False) -> dict:
 
     # Clean records (remove OData metadata + filter to valid columns)
     cleaned = [_clean(r, valid_cols) for r in records]
+
+    cleaned, orphan_skipped, orphan_ids = filter_orphan_employee_rows(sb_table, cleaned)
+    if orphan_skipped:
+        log.warning(f"  Skipped {orphan_skipped} orphan employee-linked rows in {sb_table}: {', '.join(orphan_ids)}")
 
     if dry_run:
         log.info(f"  [DRY RUN] Would insert {len(cleaned)} records into {sb_table}")
