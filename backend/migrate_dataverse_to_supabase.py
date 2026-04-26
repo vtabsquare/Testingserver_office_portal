@@ -218,6 +218,8 @@ def filter_orphan_employee_rows(table: str, records: list) -> tuple[list, int, l
 
 def is_known_duplicate_conflict(table: str, error_text: str) -> bool:
     text = (error_text or "").lower()
+    if table == "crc6f_table13s" and "uq_attendance_employee_date" in text:
+        return True
     if table == "crc6f_hr_loginactivitytbs" and "uq_loginactivity_employee_date" in text:
         return True
     if table == "crc6f_hr_leavemangements" and "uq_leavebalance_employee" in text:
