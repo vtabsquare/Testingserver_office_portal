@@ -9701,6 +9701,40 @@ def delete_employee_api(employee_id):
         if not record_id:
             return jsonify({"success": False, "error": "Unable to resolve record ID for deletion"}), 500
 
+        # Append to deleted employees CSV before deletion
+        import csv
+        try:
+            deleted_emp = {
+                'employee_id': record.get(field_map['id'], ''),
+                'first_name': record.get(field_map['firstname'] or field_map.get('fullname', ''), ''),
+                'last_name': record.get(field_map['lastname'], '') if field_map['lastname'] else '',
+                'email': record.get(field_map['email'], '') if field_map['email'] else '',
+                'contact_number': record.get(field_map['contact'], '') if field_map['contact'] else '',
+                'address': record.get(field_map['address'], '') if field_map['address'] else '',
+                'department': record.get(field_map['department'], '') if field_map['department'] else '',
+                'designation': record.get(field_map['designation'], '') if field_map['designation'] else '',
+                'doj': record.get(field_map['doj'], '') if field_map['doj'] else '',
+                'active': 'false'
+            }
+            # Handle fullname field if used
+            if field_map['fullname']:
+                full_name = record.get(field_map['fullname'], '').strip()
+                name_parts = full_name.split(' ', 1)
+                deleted_emp['first_name'] = name_parts[0] if name_parts else ''
+                deleted_emp['last_name'] = name_parts[1] if len(name_parts) > 1 else ''
+
+            file_exists = os.path.isfile(DELETED_EMPLOYEES_CSV)
+            with open(DELETED_EMPLOYEES_CSV, 'a', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['employee_id', 'first_name', 'last_name', 'email', 'contact_number',
+                             'address', 'department', 'designation', 'doj', 'active']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow(deleted_emp)
+            print(f"[OK] Appended deleted employee {deleted_emp['employee_id']} to CSV")
+        except Exception as csv_err:
+            print(f"[WARN] Failed to append to deleted employees CSV: {csv_err}")
+
         delete_record(entity_set, record_id)
         # Invalidate employee cache so /api/employees/all returns fresh data
         _employee_cache["data"] = None
