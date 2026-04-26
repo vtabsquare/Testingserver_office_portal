@@ -319,8 +319,15 @@ const renderAttendanceTrackerPage = async (mode) => {
             let value = isoValue;
             if (typeof value === 'string') {
                 const trimmed = value.trim();
+                // Bare time HH:MM[:SS] — backend stores it as UTC time-of-day; convert to local.
                 if (/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
-                    return trimmed.length === 5 ? `${trimmed}:00` : trimmed;
+                    const todayUtc = new Date().toISOString().split('T')[0];
+                    const timePart = trimmed.length === 5 ? `${trimmed}:00` : trimmed;
+                    const parsedTime = new Date(`${todayUtc}T${timePart}Z`);
+                    if (!Number.isNaN(parsedTime.getTime())) {
+                        return parsedTime.toTimeString().split(' ')[0].substring(0, 8);
+                    }
+                    return timePart;
                 }
                 // If ISO string has no timezone marker, treat as UTC (backend returns UTC)
                 const hasTZ = /Z$|[+-]\d{2}:?\d{2}$/.test(trimmed);
