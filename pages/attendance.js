@@ -316,13 +316,19 @@ const renderAttendanceTrackerPage = async (mode) => {
 
         const formatLoginTime = (isoValue, fallback = '--:--:--') => {
             if (!isoValue) return fallback;
-            if (typeof isoValue === 'string') {
-                const trimmed = isoValue.trim();
+            let value = isoValue;
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
                 if (/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
                     return trimmed.length === 5 ? `${trimmed}:00` : trimmed;
                 }
+                // If ISO string has no timezone marker, treat as UTC (backend returns UTC)
+                const hasTZ = /Z$|[+-]\d{2}:?\d{2}$/.test(trimmed);
+                if (!hasTZ && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(trimmed)) {
+                    value = trimmed.replace(' ', 'T') + 'Z';
+                }
             }
-            const parsed = new Date(isoValue);
+            const parsed = new Date(value);
             if (Number.isNaN(parsed.getTime())) return fallback;
             return parsed.toTimeString().split(' ')[0].substring(0, 8);
         };
