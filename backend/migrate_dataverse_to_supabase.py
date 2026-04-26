@@ -18,6 +18,8 @@ import logging
 from datetime import datetime
 from dotenv import load_dotenv
 
+_dv_entity_resolution_cache = {}
+
 load_dotenv("id.env")
 
 # ── Dataverse config ──
@@ -95,6 +97,30 @@ def dv_fetch_all(entity: str, select: str = None, top: int = 5000) -> list:
             log.info(f"  ... paging {entity}: fetched {len(all_records)} so far")
 
     return all_records
+
+
+def resolve_dv_entity(cfg: dict) -> str:
+    """Resolve the first Dataverse entity that exists for a table config."""
+    candidates = cfg.get("dv_entities") or [cfg["dv_entity"]]
+    cache_key = tuple(candidates)
+    if cache_key in _dv_entity_resolution_cache:
+        return _dv_entity_resolution_cache[cache_key]
+
+    token = dv_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    for entity in candidates:
+        try:
+            url = f"{RESOURCE}/api/data/v9.2/{entity}?$top=1"
+            resp = dv_session().get(url, headers=headers, timeout=20)
+            if resp.status_code == 200:
+                _dv_entity_resolution_cache[cache_key] = entity
+                return entity
+        except Exception:
+            pass
+
+    resolved = cfg["dv_entity"]
+    _dv_entity_resolution_cache[cache_key] = resolved
+    return resolved
 
 
 # ── Supabase client ──
@@ -266,20 +292,28 @@ TABLE_CONFIGS = {
     "attendance": {
         "dv_entity": "crc6f_table13s",
         "sb_table": "crc6f_table13s",
-        "dv_select": "crc6f_table13id,crc6f_attendanceid,crc6f_employeeid,crc6f_date,crc6f_checkin,crc6f_checkout,crc6f_duration,crc6f_duration_intext,crc6f_status",
+        "dv_select": None,
     },
     "leave_requests": {
         "dv_entity": "crc6f_table14s",
         "sb_table": "crc6f_table14s",
-        "dv_select": "crc6f_table14id,crc6f_leaveid,crc6f_employeeid,crc6f_leavetype,crc6f_startdate,crc6f_enddate,crc6f_totaldays,crc6f_paidunpaid,crc6f_status,crc6f_approvedby,crc6f_rejectionreason,crc6f_reason",
+        "dv_select": None,
     },
     "leave_balances": {
         "dv_entity": "crc6f_hr_leavemangements",
         "sb_table": "crc6f_hr_leavemangements",
-        "dv_select": "crc6f_hr_leavemangementid,crc6f_employeeid,crc6f_empid,crc6f_cl,crc6f_sl,crc6f_compoff,crc6f_total,crc6f_actualtotal,crc6f_leaveallocationtype",
+        "dv_select": None,
     },
     "comp_off": {
         "dv_entity": "crc6f_compensatoryrequests",
+        "dv_entities": [
+            "crc6f_compensatoryrequests",
+            "crc6f_compensatoryrequestses",
+            "crc6f_compensatoryrequest",
+            "crc6f_hr_compensatoryrequests",
+            "crc6f_hr_compensatoryrequestses",
+            "crc6f_table14s",
+        ],
         "sb_table": "crc6f_compensatoryrequests",
         "dv_select": None,
     },
@@ -409,7 +443,7 @@ MODULE_GROUPS = {
 def migrate_table(name: str, dry_run: bool = False) -> dict:
     """Migrate a single table from Dataverse to Supabase."""
     cfg = TABLE_CONFIGS[name]
-    dv_entity = cfg["dv_entity"]
+    dv_entity = resolve_dv_entity(cfg)
     sb_table = cfg["sb_table"]
     dv_select = cfg.get("dv_select")
 
@@ -512,7 +546,8 @@ def preflight(tables: list) -> list:
         if not cfg:
             log.warning(f"Unknown table: {name}, skipping")
             continue
-        dv_n = dv_count(cfg["dv_entity"])
+        dv_entity = resolve_dv_entity(cfg)
+        dv_n = dv_count(dv_entity)
         sb_n = sb_count(cfg["sb_table"])
         delta = (dv_n - sb_n) if (dv_n >= 0 and sb_n >= 0) else None
         log.info(f"{name:<25} {dv_n:>10} {sb_n:>10} {str(delta if delta is not None else 'n/a'):>10}")
@@ -537,7 +572,7 @@ def reconcile(tables: list, sample_size: int = 5) -> list:
         if not cfg:
             log.warning(f"Unknown table: {name}, skipping")
             continue
-        dv_entity = cfg["dv_entity"]
+        dv_entity = resolve_dv_entity(cfg)
         sb_table = cfg["sb_table"]
         pk = _pk_for_table(sb_table)
 
