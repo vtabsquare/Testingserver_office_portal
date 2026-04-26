@@ -10985,7 +10985,12 @@ def restore_deleted_employees():
             writer.writerows(all_employees + failed_employees)
         
         print(f"[OK] Restored {restored_count} employees. {len(all_employees) + len(failed_employees)} remaining in CSV")
-        
+
+        # Invalidate employee cache so /api/employees/all returns fresh data including restored employees
+        if restored_count > 0:
+            _employee_cache["data"] = None
+            _employee_cache["timestamp"] = 0.0
+
         response = {
             "success": True,
             "restored": restored_count,
