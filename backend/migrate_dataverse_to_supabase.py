@@ -225,6 +225,81 @@ def filter_orphan_employee_rows(table: str, records: list) -> tuple[list, int, l
     return filtered, skipped, sorted(orphan_ids)
 
 
+# Per-table column max lengths for safe truncation. Only descriptive text fields
+# are truncated. Identifier/key fields are never truncated to avoid breaking links.
+_COLUMN_MAX_LENGTHS = {
+    "crc6f_hr_taskdetailses": {
+        "crc6f_taskname": 50,
+        "crc6f_taskdescription": 50,
+        "crc6f_taskpriority": 50,
+        "crc6f_taskstatus": 50,
+        "crc6f_assignedto": 50,
+        "crc6f_tasktype": 50,
+    },
+}
+
+# Identifier-style fields that must never be truncated.
+_NEVER_TRUNCATE = {
+    "crc6f_taskid",
+    "crc6f_projectid",
+    "crc6f_boardid",
+    "crc6f_employeeid",
+    "crc6f_hr_taskdetailsid",
+    "crc6f_hr_projectdetailsid",
+    "crc6f_hr_projectcontributorsid",
+    "crc6f_hr_timesheetlogid",
+}
+
+
+def sanitize_task_rows(table: str, records: list) -> tuple[list, int, int]:
+    """Apply safe defensive cleanup for project_tasks rows.
+
+    Returns (cleaned, skipped, repaired).
+    - Drop rows with no usable identifier and no taskname.
+    - Backfill missing crc6f_taskname from crc6f_taskid when possible.
+    - Truncate known descriptive text fields to their declared schema length.
+    """
+    if table != "crc6f_hr_taskdetailses":
+        return records, 0, 0
+
+    max_lengths = _COLUMN_MAX_LENGTHS.get(table, {})
+    cleaned = []
+    skipped = 0
+    repaired = 0
+
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+
+        task_id = (row.get("crc6f_taskid") or "").strip() if isinstance(row.get("crc6f_taskid"), str) else row.get("crc6f_taskid")
+        task_name_raw = row.get("crc6f_taskname")
+        task_name = task_name_raw.strip() if isinstance(task_name_raw, str) else task_name_raw
+
+        # Backfill missing taskname.
+        if not task_name:
+            if task_id:
+                row["crc6f_taskname"] = str(task_id)[:max_lengths.get("crc6f_taskname", 50)]
+                repaired += 1
+            else:
+                # Cannot insert: NOT NULL constraint will fail and there's nothing useful to keep.
+                skipped += 1
+                log.warning(f"  Skipping task row with no taskname and no taskid: dv_id={row.get('crc6f_hr_taskdetailsid')}")
+                continue
+
+        # Truncate descriptive text fields safely.
+        for field, max_len in max_lengths.items():
+            if field in _NEVER_TRUNCATE:
+                continue
+            val = row.get(field)
+            if isinstance(val, str) and len(val) > max_len:
+                row[field] = val[:max_len]
+                repaired += 1
+
+        cleaned.append(row)
+
+    return cleaned, skipped, repaired
+
+
 def is_known_duplicate_conflict(table: str, error_text: str) -> bool:
     text = (error_text or "").lower()
     if table == "crc6f_table13s" and "uq_attendance_employee_date" in text:
@@ -544,6 +619,10 @@ def migrate_table(name: str, dry_run: bool = False) -> dict:
     cleaned, orphan_skipped, orphan_ids = filter_orphan_employee_rows(sb_table, cleaned)
     if orphan_skipped:
         log.warning(f"  Skipped {orphan_skipped} orphan employee-linked rows in {sb_table}: {', '.join(orphan_ids)}")
+
+    cleaned, task_skipped, task_repaired = sanitize_task_rows(sb_table, cleaned)
+    if task_skipped or task_repaired:
+        log.warning(f"  Sanitized task rows in {sb_table}: skipped={task_skipped} repaired={task_repaired}")
 
     if dry_run:
         log.info(f"  [DRY RUN] Would insert {len(cleaned)} records into {sb_table}")
