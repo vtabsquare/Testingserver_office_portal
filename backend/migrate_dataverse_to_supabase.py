@@ -499,6 +499,7 @@ MODULE_GROUPS = {
     "holidays": ["holidays"],
     "leaves": ["leave_balances", "leave_requests", "comp_off"],
     "attendance": ["attendance", "login_activity"],
+    "time_tracker": ["clients", "projects", "project_boards", "project_columns", "project_tasks", "project_contributors", "timesheets"],
 }
 
 
