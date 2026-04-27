@@ -1747,6 +1747,11 @@ def _submission_marker_id(emp_id: str, year: int, month: int) -> str:
         emp = f"EMP{int(emp):03d}"
     return f"SUBMIT-{emp}-{year:04d}-{month:02d}"
 
+def _submission_marker_date(year: int, month: int) -> str:
+    synthetic_year = 1800 + max(0, min(199, int(year) - 2000))
+    synthetic_month = max(1, min(12, int(month)))
+    return f"{synthetic_year:04d}-{synthetic_month:02d}-01"
+
 def _submission_payload_text(emp_id: str, year: int, month: int, status: str, reason: str = "") -> str:
     """Return a compact string under 100 chars to store in crc6f_duration_intext.
     Format: sub:{status}|{emp}|{YYYY}-{MM}|{ts}|{reason(optional)}
@@ -11633,7 +11638,7 @@ def submit_attendance_to_inbox():
 
         # Marker id and date for record
         marker_id = _submission_marker_id(emp_id, year, month)
-        marker_date = f"{year:04d}-{month:02d}-01"
+        marker_date = _submission_marker_date(year, month)
 
         # Check if marker already exists
         filter_q = (f"?$filter={FIELD_EMPLOYEE_ID} eq '{emp_id}' "
