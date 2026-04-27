@@ -130,6 +130,13 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Cache of valid column names per table
 _sb_columns_cache = {}
 
+_PK_OVERRIDES = {
+    "crc6f_hr_projectdetailses": "crc6f_hr_projectdetailsid",
+    "crc6f_hr_taskdetailses": "crc6f_hr_taskdetailsid",
+    "crc6f_hr_projectcontributorses": "crc6f_hr_projectcontributorsid",
+    "crc6f_hr_timesheetlogs": "crc6f_hr_timesheetlogid",
+}
+
 
 def sb_get_columns(table: str) -> set:
     """Get valid column names for a Supabase table via a dummy query."""
@@ -163,6 +170,8 @@ def sb_get_columns(table: str) -> set:
 
 def _pk_for_table(table: str) -> str:
     """Return the primary key column for a Supabase table (Dataverse uses <entity_singular>id)."""
+    if table in _PK_OVERRIDES:
+        return _PK_OVERRIDES[table]
     # Dataverse plural-to-id convention: crc6f_table13s -> crc6f_table13id
     if table.endswith("ses"):
         return table[:-3] + "id"
