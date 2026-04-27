@@ -4606,6 +4606,156 @@ const loadInboxLeaves = async () => {
     }
 };
 
+
+const loadInboxAttendance = async () => {
+    const isAdmin = isAdminUser();
+    const canViewTeamQueues = isManagerOrAdmin();
+    const listContainer = document.querySelector('.inbox-list');
+
+    if (!listContainer) return;
+
+    listContainer.innerHTML = `
+        <div class="placeholder-text">
+            <i class="fa-solid fa-spinner fa-spin fa-3x" style="color:#ddd; margin-bottom: 1rem;"></i>
+            <p>Loading attendance submissions...</p>
+        </div>
+    `;
+
+    try {
+        const allEmployees = await listEmployees(1, 5000);
+        const employeeMap = {};
+        (allEmployees.items || []).forEach(emp => {
+            if (emp.employee_id) {
+                employeeMap[String(emp.employee_id).toUpperCase()] = `${emp.first_name || ''} ${emp.last_name || ''}`.trim();
+            }
+        });
+
+        const params = new URLSearchParams();
+        if (currentInboxTab === 'awaiting' && canViewTeamQueues) {
+            params.set('status', 'pending');
+        } else if (!isAdmin) {
+            const empId = await resolveCurrentEmployeeId();
+            if (!empId) {
+                listContainer.innerHTML = `
+                    <div class="placeholder-text">
+                        <i class="fa-solid fa-user-slash fa-3x" style="color:#ddd; margin-bottom: 1rem;"></i>
+                        <p>Unable to resolve your employee ID.</p>
+                    </div>
+                `;
+                return;
+            }
+            params.set('employee_id', empId);
+            if (currentInboxTab === 'requests') {
+                params.set('status', 'pending');
+            }
+        }
+
+        const qs = params.toString() ? `?${params.toString()}` : '';
+        const resp = await fetch(`${apiBase}/api/attendance/submissions${qs}`);
+        const data = await resp.json().catch(() => ({ success: false }));
+
+        if (!resp.ok || !data.success) {
+            throw new Error(data.error || `Failed to fetch attendance submissions (${resp.status})`);
+        }
+
+        let items = data.items || [];
+        if (currentInboxTab === 'completed') {
+            items = items.filter(r => ['approved', 'rejected'].includes(String(r.status || '').toLowerCase()));
+        }
+
+        items.sort((a, b) => new Date(b.created_date || 0) - new Date(a.created_date || 0));
+
+        if (!items.length) {
+            listContainer.innerHTML = `
+                <div class="placeholder-text">
+                    <i class="fa-solid fa-envelope-open fa-3x" style="color:#ddd; margin-bottom: 1rem;"></i>
+                    <p>No attendance submissions found.</p>
+                </div>
+            `;
+            return;
+        }
+
+        const formatPeriod = (year, month) => {
+            if (!year || !month) return '-';
+            const d = new Date(Number(year), Number(month) - 1, 1);
+            if (Number.isNaN(d.getTime())) return `${month}/${year}`;
+            return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        };
+
+        const cards = items.map(item => {
+            const employeeId = String(item.employee_id || '').toUpperCase();
+            const employeeName = employeeMap[employeeId] || employeeId;
+            const status = String(item.status || 'pending');
+            const statusClass = status.toLowerCase();
+            const showActions = isAdmin && currentInboxTab === 'awaiting';
+            const leaveTypes = Array.isArray(item.leave_types) ? item.leave_types : [];
+            const leaveSummary = leaveTypes.length
+                ? leaveTypes.map(x => `${x.type}: ${x.days}`).join(', ')
+                : 'None';
+
+            return `
+                <div class="inbox-item">
+                    <div class="inbox-item-header">
+                        <div>
+                            <h4 style="font-size: 1.25rem; margin-bottom: 4px;">${employeeName}</h4>
+                            <span class="inbox-item-meta" style="font-size: 0.875rem; color: #666;">Attendance Report • ${employeeId}</span>
+                        </div>
+                        <span class="status-badge ${statusClass}">${status.charAt(0).toUpperCase() + status.slice(1)}</span>
+                    </div>
+                    <div class="inbox-item-body">
+                        <p><strong>Period:</strong> ${formatPeriod(item.year, item.month)}</p>
+                        <p><strong>Days Checked In:</strong> ${item.days_checked_in ?? 0}</p>
+                        <p><strong>Half Days:</strong> ${item.halfdays ?? 0}</p>
+                        <p><strong>Leaves:</strong> ${leaveSummary}</p>
+                        <p><strong>Submitted:</strong> ${item.created_date || '-'}</p>
+                        ${statusClass === 'rejected' && item.rejection_reason ? `
+                            <div class="rejection-reason-box" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-top: 12px; border-radius: 4px;">
+                                <strong style="color: #856404;"><i class="fa-solid fa-info-circle"></i> Rejection Reason:</strong>
+                                <p style="margin: 8px 0 0 0; color: #856404;">${item.rejection_reason}</p>
+                            </div>
+                        ` : ''}
+                    </div>
+                    ${showActions ? `
+                        <div class="inbox-item-actions">
+                            <button class="btn btn-success btn-sm attendance-approve-btn" data-marker-id="${item.marker_id}">
+                                <i class="fa-solid fa-check"></i> Approve
+                            </button>
+                            <button class="btn btn-danger btn-sm attendance-reject-btn" data-marker-id="${item.marker_id}">
+                                <i class="fa-solid fa-times"></i> Reject
+                            </button>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }).join('');
+
+        listContainer.innerHTML = cards;
+
+        if (isAdmin && currentInboxTab === 'awaiting') {
+            document.querySelectorAll('.attendance-approve-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const markerId = e.currentTarget.getAttribute('data-marker-id');
+                    await handleAttendanceApprove(markerId);
+                });
+            });
+
+            document.querySelectorAll('.attendance-reject-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const markerId = e.currentTarget.getAttribute('data-marker-id');
+                    await handleAttendanceReject(markerId);
+                });
+            });
+        }
+    } catch (err) {
+        console.error('? Error loading attendance submissions:', err);
+        listContainer.innerHTML = `
+            <div class="placeholder-text">
+                <i class="fa-solid fa-exclamation-triangle fa-3x" style="color:#e74c3c; margin-bottom: 1rem;"></i>
+                <p>Error loading attendance submissions.</p>
+            </div>
+        `;
+    }
+};
 const loadInboxTimesheets = async () => {
     const isAdmin = isAdminUser();
     const canViewTeamQueues = isManagerOrAdmin();
@@ -5401,6 +5551,33 @@ const handleAttendanceApprove = async (markerId) => {
     }
 };
 
+
+const handleAttendanceReject = async (markerId) => {
+    const reason = prompt('Enter rejection reason for this attendance report:');
+    if (reason === null) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${apiBase}/api/attendance/submissions/${markerId}/reject`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason })
+        });
+
+        const data = await response.json();
+
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to reject attendance report');
+        }
+
+        alert('? Attendance report rejected successfully!');
+        await loadInboxAttendance();
+    } catch (err) {
+        console.error('? Error rejecting attendance report:', err);
+        alert(`? Failed to reject attendance report: ${err.message}`);
+    }
+};
 export const renderProjectsPage = () => {
     const content = `
         <div class="card">
