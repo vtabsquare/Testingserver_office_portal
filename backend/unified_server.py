@@ -4053,6 +4053,62 @@ def update_faceauth_setting(employee_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/faceauth/admin-sso-token", methods=["GET"])
+def get_faceauth_admin_sso_token():
+    """
+    Generate a properly formatted SSO token for FaceAuth admin dashboard.
+    Token includes admin claims and short expiry for security.
+    """
+    try:
+        # Get current user from Authorization header
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Missing or invalid Authorization header"}), 401
+        
+        token = auth_header.split(" ")[1]
+        decoded = decode_token(token)
+        
+        if not decoded:
+            return jsonify({"error": "Invalid or expired token"}), 401
+        
+        # Verify user has admin access
+        is_admin = decoded.get("is_admin", False)
+        role = decoded.get("role", "").lower()
+        
+        if not (is_admin or role in ("l3", "admin")):
+            return jsonify({"error": "Access denied. Admin privileges required."}), 403
+        
+        # Generate admin SSO token with specific claims
+        admin_sso_payload = {
+            "employee_id": decoded.get("employee_id"),
+            "email": decoded.get("email"),
+            "name": decoded.get("name"),
+            "role": decoded.get("role"),
+            "is_admin": True,
+            "purpose": "admin_sso",
+            "source": "hr_tool",
+            "iat": datetime.now(timezone.utc),
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=15)  # Short expiry for SSO
+        }
+        
+        sso_token = jwt.encode(admin_sso_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        
+        FACEAUTH_BASE_URL = os.getenv("FACEAUTH_BASE_URL", "https://biometrics.vtabsquare.com")
+        admin_url = f"{FACEAUTH_BASE_URL}/admin-sso"
+        
+        print(f"[FACEAUTH-ADMIN-SSO] Generated SSO token for {decoded.get('employee_id')}")
+        
+        return jsonify({
+            "success": True,
+            "sso_token": sso_token,
+            "admin_url": admin_url
+        }), 200
+        
+    except Exception as e:
+        print(f"[FACEAUTH-ADMIN-SSO] Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/forgot-password", methods=["POST"])
 def forgot_password():
     """Password reset request handler with debug logging."""
