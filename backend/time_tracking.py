@@ -174,6 +174,57 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _timesheet_week_start(value):
+    raw = str(value or "").strip()[:10]
+    if not raw:
+        return ""
+    try:
+        d = datetime.fromisoformat(raw)
+        return (d - timedelta(days=d.weekday())).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def _best_week_submission_status(entries, employee_id, week_start):
+    emp = str(employee_id or "").strip().upper()
+    ws = str(week_start or "").strip()
+    if not emp or not ws:
+        return ""
+    status_priority = {"accepted": 3, "pending": 2, "rejected": 1}
+    best_status = ""
+    best_priority = 0
+    for rec in entries:
+        rec_emp = str(rec.get("employee_id") or "").strip().upper()
+        if rec_emp != emp:
+            continue
+        rec_week = _timesheet_week_start(rec.get("date"))
+        if rec_week != ws:
+            continue
+        status = str(rec.get("status") or "").strip().lower()
+        priority = status_priority.get(status, 0)
+        if priority > best_priority:
+            best_priority = priority
+            best_status = status
+    return best_status
+
+
+def _remove_weekly_entries(entries, employee_id, week_start, statuses=None):
+    emp = str(employee_id or "").strip().upper()
+    ws = str(week_start or "").strip()
+    status_filter = {str(s or "").strip().lower() for s in (statuses or []) if str(s or "").strip()}
+    kept = []
+    for rec in entries:
+        rec_emp = str(rec.get("employee_id") or "").strip().upper()
+        rec_week = _timesheet_week_start(rec.get("date"))
+        rec_status = str(rec.get("status") or "").strip().lower()
+        matches_week = rec_emp == emp and rec_week == ws
+        matches_status = not status_filter or rec_status in status_filter
+        if matches_week and matches_status:
+            continue
+        kept.append(rec)
+    return kept
+
+
 def _sum_seconds_for_task(entries, task_guid, user_id=None):
     total = 0
     now = datetime.now(timezone.utc)
@@ -2069,6 +2120,8 @@ def submit_timesheet():
         employee_id = (body.get("employee_id") or "").strip()
         employee_name = (body.get("employee_name") or "").strip()
         raw_entries = body.get("entries") or []
+        normalized_entries = []
+        week_starts = set()
 
         if not employee_id or not raw_entries:
             return jsonify({"success": False, "error": "employee_id and entries required"}), 400
@@ -2077,7 +2130,35 @@ def submit_timesheet():
         created = []
         base_ts = int(datetime.now().timestamp() * 1000)
 
-        for idx, item in enumerate(raw_entries):
+        for item in raw_entries:
+            date = (item.get("date") or "").strip()
+            if not date:
+                continue
+            seconds = int(item.get("seconds") or 0)
+            if seconds <= 0:
+                continue
+            week_start = _timesheet_week_start(date)
+            if not week_start:
+                continue
+            normalized_entries.append(item)
+            week_starts.add(week_start)
+
+        if not normalized_entries:
+            return jsonify({"success": False, "error": "No valid entries to submit"}), 400
+
+        if len(week_starts) != 1:
+            return jsonify({"success": False, "error": "All submitted entries must belong to the same week"}), 400
+
+        target_week_start = next(iter(week_starts))
+        current_status = _best_week_submission_status(entries, employee_id, target_week_start)
+        if current_status == "pending":
+            return jsonify({"success": False, "error": "This week's timesheet is already pending approval"}), 400
+        if current_status == "accepted":
+            return jsonify({"success": False, "error": "This week's timesheet has already been approved"}), 400
+        if current_status == "rejected":
+            entries = _remove_weekly_entries(entries, employee_id, target_week_start, statuses={"rejected"})
+
+        for idx, item in enumerate(normalized_entries):
             date = (item.get("date") or "").strip()
             if not date:
                 continue
@@ -2111,9 +2192,6 @@ def submit_timesheet():
             }
             entries.append(rec)
             created.append(rec)
-
-        if not created:
-            return jsonify({"success": False, "error": "No valid entries to submit"}), 400
 
         _write_ts_entries(entries)
         return jsonify({"success": True, "items": created, "count": len(created)}), 201

@@ -1268,6 +1268,45 @@ export const renderMyTimesheetPage = async () => {
     let manualRows = [];
     let submissionStatusMsg = '';
     let submissionStatusTimer = null;
+    let currentWeekSubmissionStatus = '';
+
+    const parseLocalYmd = (value) => {
+        const raw = String(value || '').trim().slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+        const [yyyy, mm, dd] = raw.split('-').map(Number);
+        const d = new Date(yyyy, mm - 1, dd);
+        return Number.isNaN(d.getTime()) ? null : d;
+    };
+
+    const getWeekSubmissionStatus = async (weekStartDate) => {
+        if (!empId) return '';
+        try {
+            const params = new URLSearchParams({ employee_id: empId });
+            const res = await fetch(`${API}/time-tracker/timesheet/submissions?${params.toString()}`, { cache: 'no-store' });
+            const data = await res.json().catch(() => ({ success: false }));
+            if (!res.ok || !data.success) return '';
+            const targetWeekStart = fmt(weekStartDate);
+            const statusPriority = { accepted: 3, pending: 2, rejected: 1 };
+            let bestStatus = '';
+            let bestPriority = 0;
+            (data.items || []).forEach((item) => {
+                const parsedDate = parseLocalYmd(item.date);
+                if (!parsedDate) return;
+                const itemWeekStart = fmt(startOfWeek(parsedDate));
+                if (itemWeekStart !== targetWeekStart) return;
+                const status = String(item.status || '').trim().toLowerCase();
+                const priority = statusPriority[status] || 0;
+                if (priority > bestPriority) {
+                    bestPriority = priority;
+                    bestStatus = status;
+                }
+            });
+            return bestStatus;
+        } catch (err) {
+            console.warn('Failed to fetch timesheet submission status', err);
+            return '';
+        }
+    };
 
     // Skeleton shell while logs and configuration are loading
     try {
@@ -1369,6 +1408,11 @@ export const renderMyTimesheetPage = async () => {
             const logDate = (log.work_date || '').slice(0, 10);
             return logDate <= todayStr;
         });
+
+        currentWeekSubmissionStatus = await getWeekSubmissionStatus(s);
+        const isWeekPending = currentWeekSubmissionStatus === 'pending';
+        const isWeekAccepted = currentWeekSubmissionStatus === 'accepted';
+        const isSubmitLocked = isWeekPending || isWeekAccepted;
 
         taskIdByGuid.clear();
         seedTaskIdentityMap(tasks);
@@ -2061,7 +2105,27 @@ export const renderMyTimesheetPage = async () => {
 
         const submitBtn = document.getElementById('ts-submit');
         if (submitBtn) {
+            if (isSubmitLocked) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = isWeekAccepted ? 'APPROVED' : 'PENDING';
+                submitBtn.title = isWeekAccepted ? 'This week has already been approved.' : 'This week is pending admin approval.';
+                submitBtn.style.opacity = '0.65';
+                submitBtn.style.cursor = 'not-allowed';
+            } else if (currentWeekSubmissionStatus === 'rejected') {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'SUBMIT';
+                submitBtn.title = 'This week was rejected. Update it and resubmit.';
+            }
             submitBtn.onclick = async () => {
+                const normalizedWeekStatus = String(currentWeekSubmissionStatus || '').toLowerCase();
+                if (normalizedWeekStatus === 'pending') {
+                    showToast('This week\'s timesheet is already pending approval.');
+                    return;
+                }
+                if (normalizedWeekStatus === 'accepted') {
+                    showToast('This week\'s timesheet has already been approved.');
+                    return;
+                }
                 await runWithSubmissionLoading(async () => {
                     const s = startOfWeek(anchor);
                     const e = endOfWeek(anchor);
@@ -2138,6 +2202,7 @@ export const renderMyTimesheetPage = async () => {
                             showToast(`Failed to submit timesheet: ${data.error || res.status}`);
                             return;
                         }
+                        currentWeekSubmissionStatus = 'pending';
                         try { sessionStorage.removeItem(weekKey); } catch { }
                         try { sessionStorage.removeItem(overridesKey); } catch { }
                         if (submissionStatusTimer) {
