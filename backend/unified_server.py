@@ -42,6 +42,8 @@ from chats import chat_bp
 from time_tracking import bp_time, stop_active_task_entries_for_user
 from attendance_service_v2 import attendance_v2_bp
 from attendance_scheduler import setup_scheduler as _setup_attendance_scheduler
+from overdue_tasks_notifier import bp_overdue
+from overdue_scheduler import setup_overdue_scheduler
 
 try:
     from zoneinfo import ZoneInfo
@@ -152,12 +154,19 @@ app.register_blueprint(columns_bp)
 app.register_blueprint(bp_time)
 app.register_blueprint(chat_bp)
 app.register_blueprint(attendance_v2_bp)  # Backend-authoritative attendance (v2)
+app.register_blueprint(bp_overdue)  # Overdue tasks notification system
 
 # Start the midnight auto-checkout scheduler (daemon thread, no extra dependency)
 try:
     _setup_attendance_scheduler(app)
 except Exception as _sched_err:
     print(f"[WARN] Failed to start attendance scheduler: {_sched_err}")
+
+# Start the overdue tasks notification scheduler (runs daily at 9 AM)
+try:
+    setup_overdue_scheduler(app)
+except Exception as _overdue_err:
+    print(f"[WARN] Failed to start overdue tasks scheduler: {_overdue_err}")
 
 def _coerce_client_local_datetime(client_time_str, timezone_name):
     """Convert client-supplied ISO timestamp into the user's local timezone if possible."""
@@ -7811,10 +7820,10 @@ def reject_leave(leave_id):
 
 @app.route('/api/leaves/pending', methods=['GET'])
 def get_pending_leaves():
-    """Get all pending leave requests (for admin review)"""
+    """Get all pending leave requests (for admin review) - includes both regular leaves and comp-off requests"""
     try:
         print(f"\n{'='*70}")
-        print(f"[FETCH] FETCHING ALL PENDING LEAVE REQUESTS")
+        print(f"[FETCH] FETCHING ALL PENDING LEAVE REQUESTS (INCLUDING COMP-OFF)")
         print(f"{'='*70}")
         
         token = get_access_token()
@@ -7825,43 +7834,95 @@ def get_pending_leaves():
             "OData-Version": "4.0"
         }
         
-        # Fetch all pending leaves
+        formatted_leaves = []
+        
+        # 1. Fetch pending regular leaves
         filter_query = "?$filter=crc6f_status eq 'Pending'"
         url = f"{RESOURCE}/api/data/v9.2/{LEAVE_ENTITY}{filter_query}"
         
-        print(f"   [URL] Request URL: {url}")
+        print(f"   [URL] Fetching regular leaves: {url}")
         response = get_dataverse_session().get(url, headers=headers, timeout=15)
         
-        if response.status_code != 200:
-            print(f"   [ERROR] Failed to fetch pending leaves: {response.status_code}")
-            print("   [WARN] Falling back to empty pending-leave list to keep UI responsive")
-            return jsonify({
-                "success": True,
-                "leaves": [],
-                "count": 0,
-                "warning": "Pending leaves unavailable (Dataverse error)"
-            }), 200
+        if response.status_code == 200:
+            records = response.json().get("value", [])
+            print(f"   [DATA] Found {len(records)} pending regular leave requests")
+            
+            for r in records:
+                formatted_leaves.append({
+                    "leave_id": r.get("crc6f_leaveid"),
+                    "leave_type": r.get("crc6f_leavetype"),
+                    "start_date": r.get("crc6f_startdate"),
+                    "end_date": r.get("crc6f_enddate"),
+                    "total_days": r.get("crc6f_totaldays"),
+                    "status": r.get("crc6f_status"),
+                    "paid_unpaid": r.get("crc6f_paidunpaid"),
+                    "approved_by": r.get("crc6f_approvedby"),
+                    "rejection_reason": r.get("crc6f_rejectionreason"),
+                    "reason": r.get("crc6f_rejectionreason", ""),
+                    "employee_id": r.get("crc6f_employeeid"),
+                    "request_type": "leave"
+                })
+        else:
+            print(f"   [WARN] Failed to fetch regular leaves: {response.status_code}")
         
-        records = response.json().get("value", [])
-        print(f"   [DATA] Found {len(records)} pending leave requests")
+        # 2. Fetch pending comp-off requests
+        try:
+            compoff_entity = get_compoff_request_entity_set(token)
+            compoff_url = f"{RESOURCE}/api/data/v9.2/{compoff_entity}?$filter=crc6f_status eq 'Pending'"
+            
+            print(f"   [URL] Fetching comp-off requests: {compoff_url}")
+            compoff_response = get_dataverse_session().get(compoff_url, headers=headers, timeout=15)
+            
+            if compoff_response.status_code == 200:
+                compoff_records = compoff_response.json().get("value", [])
+                print(f"   [DATA] Found {len(compoff_records)} pending comp-off requests")
+                
+                for r in compoff_records:
+                    # Comp-off requests might be in leave entity format or separate format
+                    is_leave_backed = _is_compoff_leave_entity(compoff_entity)
+                    
+                    if is_leave_backed:
+                        # Comp-off stored as leave type
+                        formatted_leaves.append({
+                            "leave_id": r.get("crc6f_leaveid"),
+                            "leave_type": r.get("crc6f_leavetype", "Compensatory Off"),
+                            "start_date": r.get("crc6f_startdate"),
+                            "end_date": r.get("crc6f_enddate"),
+                            "total_days": r.get("crc6f_totaldays"),
+                            "status": r.get("crc6f_status"),
+                            "paid_unpaid": r.get("crc6f_paidunpaid", "Paid"),
+                            "approved_by": r.get("crc6f_approvedby"),
+                            "rejection_reason": r.get("crc6f_rejectionreason"),
+                            "reason": r.get("crc6f_rejectionreason", ""),
+                            "employee_id": r.get("crc6f_employeeid"),
+                            "request_type": "compoff"
+                        })
+                    else:
+                        # Comp-off in separate entity
+                        date_worked = r.get("crc6f_dateworked") or r.get("crc6f_applieddate") or ""
+                        formatted_leaves.append({
+                            "leave_id": r.get("crc6f_compensatoryrequestid") or r.get("crc6f_compoffrequestid"),
+                            "leave_type": "Compensatory Off",
+                            "start_date": date_worked,
+                            "end_date": date_worked,
+                            "total_days": r.get("crc6f_totaldays", 1),
+                            "status": r.get("crc6f_status"),
+                            "paid_unpaid": "Paid",
+                            "approved_by": r.get("crc6f_approvedby"),
+                            "rejection_reason": r.get("crc6f_reason", ""),
+                            "reason": r.get("crc6f_reason", ""),
+                            "employee_id": r.get("crc6f_employeeid"),
+                            "request_type": "compoff"
+                        })
+            else:
+                print(f"   [WARN] Failed to fetch comp-off requests: {compoff_response.status_code}")
+        except Exception as compoff_err:
+            print(f"   [WARN] Error fetching comp-off requests: {compoff_err}")
         
-        formatted_leaves = []
-        for r in records:
-            formatted_leaves.append({
-                "leave_id": r.get("crc6f_leaveid"),
-                "leave_type": r.get("crc6f_leavetype"),
-                "start_date": r.get("crc6f_startdate"),
-                "end_date": r.get("crc6f_enddate"),
-                "total_days": r.get("crc6f_totaldays"),
-                "status": r.get("crc6f_status"),
-                "paid_unpaid": r.get("crc6f_paidunpaid"),
-                "approved_by": r.get("crc6f_approvedby"),
-                "rejection_reason": r.get("crc6f_rejectionreason"),
-                "reason": r.get("crc6f_rejectionreason", ""),
-                "employee_id": r.get("crc6f_employeeid")
-            })
+        # Sort by creation date (most recent first) if available
+        formatted_leaves.sort(key=lambda x: x.get("start_date", ""), reverse=True)
         
-        print(f"[OK] Successfully fetched {len(formatted_leaves)} pending leaves")
+        print(f"[OK] Successfully fetched {len(formatted_leaves)} total pending requests")
         print(f"{'='*70}\n")
         
         return jsonify({

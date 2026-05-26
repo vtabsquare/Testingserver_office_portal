@@ -912,7 +912,7 @@ def list_my_tasks():
         }
 
         # Fetch all tasks (could be optimized with paging if needed)
-        url = f"{RESOURCE}{DV_API}/{ENTITY_SET_TASKS}?$select=crc6f_hr_taskdetailsid,crc6f_taskid,crc6f_taskname,crc6f_taskdescription,crc6f_taskpriority,crc6f_taskstatus,crc6f_assignedto,crc6f_assigneddate,crc6f_duedate,crc6f_projectid,crc6f_boardid"
+        url = f"{RESOURCE}{DV_API}/{ENTITY_SET_TASKS}?$select=crc6f_hr_taskdetailsid,crc6f_taskid,crc6f_taskname,crc6f_taskdescription,crc6f_taskpriority,crc6f_taskstatus,crc6f_assignedto,crc6f_assigneddate,crc6f_duedate,crc6f_duetime,crc6f_projectid,crc6f_boardid"
         resp = get_dataverse_session().get(url, headers=headers, timeout=30)
         if not resp.ok:
             return jsonify({"success": False, "error": resp.text}), resp.status_code
@@ -935,6 +935,7 @@ def list_my_tasks():
                 "assigned_to": t.get("crc6f_assignedto"),
                 "assigned_date": t.get("crc6f_assigneddate"),
                 "due_date": t.get("crc6f_duedate"),
+                "due_time": t.get("crc6f_duetime"),
                 "project_id": t.get("crc6f_projectid"),
                 "board_id": t.get("crc6f_boardid"),
             }

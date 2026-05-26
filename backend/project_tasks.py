@@ -109,6 +109,7 @@ def get_tasks(project_code):
                 "task_status": t.get("crc6f_taskstatus"),
                 "assigned_to": t.get("crc6f_assignedto"),
                 "due_date": t.get("crc6f_duedate"),
+                "due_time": t.get("crc6f_duetime"),
                 "board_id": t.get("crc6f_boardid"),
                 "project_id": project_code,
                 "display_index": idx  # ✅ for 1, 2, 3 numbering
@@ -177,6 +178,7 @@ def add_task(project_code):
             "crc6f_assignedto": body.get("assigned_to"),
             "crc6f_assigneddate": body.get("assigned_date"),
             "crc6f_duedate": body.get("due_date"),
+            "crc6f_duetime": body.get("due_time"),
             "crc6f_projectid": project_code,
             "crc6f_boardid": board_identifier,
         }
@@ -219,6 +221,7 @@ def update_task(guid):
             "assigned_to": "crc6f_assignedto",
             "assigned_date": "crc6f_assigneddate",
             "due_date": "crc6f_duedate",
+            "due_time": "crc6f_duetime",
         }
 
         payload = {v: body[k] for k, v in allowed_fields.items() if k in body}

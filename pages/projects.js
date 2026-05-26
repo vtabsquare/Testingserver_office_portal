@@ -3449,6 +3449,9 @@ function taskCardHtml(t, index, projectId) {
     })
     : "—";
 
+  // Format due time if available
+  const dueTimeString = t.due_time ? t.due_time : null;
+
   return `
     <div class="kan-card modern" draggable="true" data-id="${t.guid}" style="background:#ffffff !important; border-radius:8px; margin-bottom:8px; box-shadow:0 1px 3px rgba(0,0,0,0.1); border:1px solid rgba(0,0,0,0.1); position:relative;">
       <div class="card-top" style="padding:12px; display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
@@ -3468,8 +3471,9 @@ function taskCardHtml(t, index, projectId) {
       
       <div class="task-separator" style="height:1px; background:rgba(0,0,0,0.1); margin:8px 12px;"></div>
 
-      <div class="card-bottom" style="padding:0 12px 12px; display:flex; justify-content:flex-end;">
+      <div class="card-bottom" style="padding:0 12px 12px; display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap;">
         <span class="due-pill ${dueColor}" style="font-size:12px; padding:2px 8px; border-radius:12px; background:${dueColor === 'red' ? '#fee2e2' : dueColor === 'orange' ? '#fed7aa' : '#dcfce7'}; color:${dueColor === 'red' ? '#dc2626' : dueColor === 'orange' ? '#ea580c' : '#16a34a'};">${dueString}</span>
+        ${dueTimeString ? `<span class="due-time-pill" style="font-size:12px; padding:2px 8px; border-radius:12px; background:#e0e7ff; color:#4338ca;"><i class="fa-solid fa-clock" style="font-size:10px; margin-right:4px;"></i>${dueTimeString}</span>` : ''}
       </div>
     </div>
   `;
@@ -3896,6 +3900,11 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
               <label class="form-label" for="tk-due">Due Date</label>
               <input class="input-control" type="date" id="tk-due" />
             </div>
+
+            <div class="form-field">
+              <label class="form-label" for="tk-duetime">Due Time</label>
+              <input class="input-control" type="time" id="tk-duetime" />
+            </div>
           </div>
         </div>
         <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:24px;">
@@ -4000,6 +4009,8 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
     // Read selected work item type from dropdown
     const selectedWorkItemType = document.getElementById("tk-workitemtype").value;
 
+    const dueTime = document.getElementById("tk-duetime").value || null;
+    
     const payload = {
       task_name: document.getElementById("tk-name").value.trim(),
       task_description: document.getElementById("tk-desc").value.trim(),
@@ -4009,6 +4020,7 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
       assigned_to: assignedTo, // ✅ FIXED
       assigned_date: startDate,
       due_date: dueDate,
+      due_time: dueTime,
       // Store both board id + human-readable name so tasks stay scoped to current board
       board_name: boardNameValue,
       board_id: boardIdValue,
