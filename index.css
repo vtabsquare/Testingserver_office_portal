@@ -11879,3 +11879,7 @@ body.dark-theme .ts-mon-badge-none {
   color: #94a3b8;
   border-color: rgba(148, 163, 184, 0.2);
 }
+/* Notification Dropdown Hover Effect */
+.notification-bell:hover .notification-dropdown {
+    display: block !important;
+}

@@ -1024,7 +1024,34 @@ export const renderMyTasksPage = async () => {
               <td>${projectName}</td>
               <td>${clientName}</td>
               <td><span class="status-badge ${String(t.task_status || '').toLowerCase()}">${t.task_status || ''}</span></td>
-              <td>${t.due_date || '-'}</td>
+              <td>
+                ${t.due_date || '-'}
+                ${(() => {
+                  if (!t.due_date) return '';
+                  const now = new Date();
+                  const taskStatus = (t.task_status || '').toLowerCase();
+                  if (['completed', 'cancelled', 'canceled'].includes(taskStatus)) return '';
+                  
+                  let isOverdue = false;
+                  if (t.due_time) {
+                    // Check date + time
+                    const dueDatetime = new Date(`${t.due_date}T${t.due_time}`);
+                    isOverdue = dueDatetime < now;
+                  } else {
+                    // Check date only
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const dueDate = new Date(t.due_date);
+                    dueDate.setHours(0, 0, 0, 0);
+                    isOverdue = dueDate < today;
+                  }
+                  
+                  return isOverdue ? '<span class="overdue-badge" style="margin-left:8px; padding:2px 8px; background:#ff4757; color:white; border-radius:4px; font-size:11px; font-weight:600;">OVERDUE</span>' : '';
+                })()}
+              </td>
+              <td>
+                ${t.due_time ? `<span style="color:#4338ca; font-weight:500;"><i class="fa-solid fa-clock" style="font-size:10px; margin-right:4px;"></i>${t.due_time}</span>` : '-'}
+              </td>
               <td>${t.task_priority || '-'}</td>
 
               <td class="tt-time" style="color:#d63031; font-weight:600;">${timeText}</td>
@@ -1058,6 +1085,7 @@ export const renderMyTasksPage = async () => {
                                 <th>Client</th>
                                 <th>Status</th>
                                 <th>Due date</th>
+                                <th>Due Time</th>
                                 <th>Priority</th>
                                 <th>Time spent</th>
                                 </tr>
@@ -1073,6 +1101,24 @@ export const renderMyTasksPage = async () => {
                         `;
 
 
+        
+        // Add overdue badge styles
+        const style = document.createElement('style');
+        style.textContent = `
+            .overdue-badge {
+                animation: pulse-red 2s infinite;
+            }
+            @keyframes pulse-red {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.7; }
+            }
+            .status-badge.overdue {
+                background-color: #ff4757 !important;
+                color: white !important;
+            }
+        `;
+        document.head.appendChild(style);
+        
         document.getElementById('app-content').innerHTML = getPageContentHTML('My Tasks', content);
 
         // events
@@ -4490,7 +4536,7 @@ const loadInboxLeaves = async () => {
             // Fetch all pending leaves for admin
             const pendingLeaves = await fetchPendingLeaves();
             const compPending = compAll.filter(r => (r.status || 'pending').toLowerCase() === 'pending').map(normalizeComp);
-            leaves = (pendingLeaves || []).filter(l => !isCompOffLeaveType(l.leave_type)).concat(compPending);
+            leaves = (pendingLeaves || []);  // Backend now includes comp-off requests
             console.log(`📋 Loaded ${leaves.length} pending leave requests`);
         } else if (currentInboxTab === 'completed' && isAdmin) {
             // For admin in completed tab, fetch all employees' completed leaves
@@ -4513,7 +4559,7 @@ const loadInboxLeaves = async () => {
 
                 // Filter for approved/rejected only
                 leaves = allLeaves.filter(l =>
-                    (l.status?.toLowerCase() === 'approved' || l.status?.toLowerCase() === 'rejected') && !isCompOffLeaveType(l.leave_type)
+                    (l.status?.toLowerCase() === 'approved' || l.status?.toLowerCase() === 'rejected')
                 ).concat(compCompleted);
 
                 console.log(`📋 Loaded ${leaves.length} completed leaves from all employees`);
@@ -4528,11 +4574,11 @@ const loadInboxLeaves = async () => {
 
             if (currentInboxTab === 'requests') {
                 const compMine = compAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && (r.status || 'pending').toLowerCase() === 'pending').map(normalizeComp);
-                leaves = (allLeaves || []).filter(l => l.status?.toLowerCase() === 'pending' && !isCompOffLeaveType(l.leave_type)).concat(compMine);
+                leaves = (allLeaves || []).filter(l => l.status?.toLowerCase() === 'pending');  // Backend includes comp-off
             } else if (currentInboxTab === 'completed') {
                 const compMineDone = compAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizeComp);
                 leaves = (allLeaves || []).filter(l =>
-                    (l.status?.toLowerCase() === 'approved' || l.status?.toLowerCase() === 'rejected') && !isCompOffLeaveType(l.leave_type)
+                    (l.status?.toLowerCase() === 'approved' || l.status?.toLowerCase() === 'rejected')
                 ).concat(compMineDone);
             }
 
@@ -4586,7 +4632,7 @@ const loadInboxLeaves = async () => {
             const showActions = currentInboxTab === 'awaiting' && isAdmin;
             const isRejected = status.toLowerCase() === 'rejected';
             const isApproved = status.toLowerCase() === 'approved';
-            const isCompOff = leave._source === 'compoff' || (String(leaveType).toLowerCase() === 'comp off');
+            const isCompOff = leave._source === 'compoff' || leave.request_type === 'compoff';
 
             return `
                 <div class="inbox-item">
@@ -4617,10 +4663,10 @@ const loadInboxLeaves = async () => {
                     </div>
                     ${showActions ? `
                         <div class="inbox-item-actions">
-                            <button class="btn btn-success btn-sm inbox-approve-btn" data-leave-id="${leaveId}" data-source="${isCompOff ? 'compoff' : 'leave'}" data-compoff-id="${isCompOff ? (leave._raw?.id || '') : ''}">
+                            <button class="btn btn-success btn-sm inbox-approve-btn" data-leave-id="${leaveId}" data-source="${isCompOff ? 'compoff' : 'leave'}" data-compoff-id="${isCompOff ? (leave._raw?.id || leave.compoff_id || leave.id || '') : ''}">
                                 <i class="fa-solid fa-check"></i> Approve
                             </button>
-                            <button class="btn btn-danger btn-sm inbox-reject-btn" data-leave-id="${leaveId}" data-source="${isCompOff ? 'compoff' : 'leave'}" data-compoff-id="${isCompOff ? (leave._raw?.id || '') : ''}">
+                            <button class="btn btn-danger btn-sm inbox-reject-btn" data-leave-id="${leaveId}" data-source="${isCompOff ? 'compoff' : 'leave'}" data-compoff-id="${isCompOff ? (leave._raw?.id || leave.compoff_id || leave.id || '') : ''}">
                                 <i class="fa-solid fa-times"></i> Reject
                             </button>
                         </div>
@@ -4999,15 +5045,44 @@ const loadInboxTimesheets = async () => {
                     merged.merge_count += 1;
                 });
 
-                const rowsHtml = Array.from(mergedRowsMap.values())
-                    .sort((a, b) => (a.date === b.date ? a.task_text.localeCompare(b.task_text) : a.date.localeCompare(b.date)))
-                    .map((r) => {
-                        const mergedBadge = r.merge_count > 1
-                            ? `<span style="margin-left:6px; padding:1px 6px; border-radius:999px; font-size:11px; background:#eef2ff; color:#3730a3; font-weight:600;">${r.merge_count} records combined</span>`
-                            : '';
-                        return `<tr><td style="padding:8px 10px; border-bottom:1px solid #eef2f7;">${r.day_text}</td><td style="padding:8px 10px; border-bottom:1px solid #eef2f7;">${r.task_text}${mergedBadge}</td><td style="padding:8px 10px; border-bottom:1px solid #eef2f7; text-align:right;">${Number(r.hours_value || 0).toFixed(2)}</td></tr>`;
-                    })
-                    .join('');
+                const sortedRows = Array.from(mergedRowsMap.values())
+                    .sort((a, b) => (a.date === b.date ? a.task_text.localeCompare(b.task_text) : a.date.localeCompare(b.date)));
+                
+                // Calculate daily totals and weekly total
+                const dailyTotals = {};
+                let weeklyTotal = 0;
+
+                
+                sortedRows.forEach((r) => {
+                    const day = r.day_text;
+                    const hours = Number(r.hours_value || 0);
+                    if (!dailyTotals[day]) dailyTotals[day] = 0;
+                    dailyTotals[day] += hours;
+                    weeklyTotal += hours;
+                });
+                
+                // Generate rows with daily subtotals
+                const rowsHtmlArray = [];
+                let currentDay = null;
+                
+                sortedRows.forEach((r, idx) => {
+                    const mergedBadge = r.merge_count > 1
+                        ? `<span style="margin-left:6px; padding:1px 6px; border-radius:999px; font-size:11px; background:#eef2ff; color:#3730a3; font-weight:600;">${r.merge_count} records combined</span>`
+                        : '';
+                    
+                    rowsHtmlArray.push(`<tr><td style="padding:8px 10px; border-bottom:1px solid #eef2f7;">${r.day_text}</td><td style="padding:8px 10px; border-bottom:1px solid #eef2f7;">${r.task_text}${mergedBadge}</td><td style="padding:8px 10px; border-bottom:1px solid #eef2f7; text-align:right;">${Number(r.hours_value || 0).toFixed(2)}</td></tr>`);
+                    
+                    // Add subtotal if day changes or last row
+                    const isLastRow = idx === sortedRows.length - 1;
+                    const nextDay = !isLastRow ? sortedRows[idx + 1].day_text : null;
+                    
+                    if (r.day_text !== nextDay) {
+                        const dayTotal = dailyTotals[r.day_text];
+                        rowsHtmlArray.push(`<tr style="background:#f8fafc;"><td colspan="2" style="padding:6px 10px; border-bottom:2px solid #d1d5db; text-align:right; font-weight:600; color:#4b5563; font-size:12px;">Subtotal (${r.day_text}):</td><td style="padding:6px 10px; border-bottom:2px solid #d1d5db; text-align:right; font-weight:700; color:#1f2937;">${dayTotal.toFixed(2)}</td></tr>`);
+                    }
+                });
+                
+                const rowsHtml = rowsHtmlArray.join('');
 
                 return `
                     <div class="inbox-item">
@@ -5024,6 +5099,12 @@ const loadInboxTimesheets = async () => {
                                 <table style="width:100%; border-collapse:collapse; font-size:13px;">
                                     <thead style="background:#f8fafc;"><tr><th style="text-align:left; padding:8px 10px;">Day</th><th style="text-align:left; padding:8px 10px;">Task</th><th style="text-align:right; padding:8px 10px;">Hours</th></tr></thead>
                                     <tbody>${rowsHtml}</tbody>
+                                    <tfoot style="background:#eef2ff;">
+                                        <tr>
+                                            <td colspan="2" style="padding:10px; text-align:right; font-weight:700; color:#1e40af; font-size:14px;">Weekly Total:</td>
+                                            <td style="padding:10px; text-align:right; font-weight:700; color:#1e40af; font-size:14px;">${weeklyTotal.toFixed(2)}</td>
+                                        </tr>
+                                    </tfoot>
                                 </table>
                             </div>
                             <p style="margin-top:10px;"><strong>Submitted:</strong> ${group.submitted_at || '-'}</p>
@@ -5648,8 +5729,8 @@ export const renderProjectsPage = () => {
         <div class="card">
             <div class="table-container">
                 <table class="table">
-                    <thead><tr><th>Work item id & name</th><th>Project</th><th>Client</th><th>Status</th><th>Due date</th><th>Priority</th><th>Time spent</th></tr></thead>
-                    <tbody><tr><td colspan="7" class="placeholder-text">No tasks assigned.</td></tr></tbody>
+                    <thead><tr><th>Work item id & name</th><th>Project</th><th>Client</th><th>Status</th><th>Due date</th><th>Due Time</th><th>Priority</th><th>Time spent</th></tr></thead>
+                    <tbody><tr><td colspan="8" class="placeholder-text">No tasks assigned.</td></tr></tbody>
                 </table>
             </div>
         </div>

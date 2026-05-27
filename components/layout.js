@@ -129,9 +129,15 @@ export const getHeaderHTML = (user, timer) => `
         <button id="timer-btn" class="timer-btn ${timer.isRunning ? 'check-out' : 'check-in'}">
             <span id="timer-display">00:00:00</span> ${timer.isRunning ? 'CHECK OUT' : 'CHECK IN'}
         </button>
-        <div class="notification-bell" id="notification-bell" style="cursor: pointer;">
+        <div class="notification-bell" id="notification-bell" style="cursor: pointer; position: relative;">
             <i class="fa-solid fa-bell"></i>
             <span class="notification-badge" id="notification-badge" style="display: none;">0</span>
+            <div class="notification-dropdown" id="notification-dropdown" style="display:none; position:absolute; top:100%; right:-10px; background:var(--surface-color); border:1px solid var(--border-color); border-radius:8px; padding:12px; min-width:200px; box-shadow:0 8px 20px rgba(15,23,42,0.15); z-index:1001; cursor:default;">
+                <div style="font-weight:600; margin-bottom:8px; border-bottom:1px solid var(--border-color); padding-bottom:6px; font-size:14px; color:var(--text-primary);">Inbox Pending</div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px; color:var(--text-secondary);"><span>Leaves:</span> <strong id="notif-leaves" style="color:var(--text-primary);">0</strong></div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px; color:var(--text-secondary);"><span>Timesheets:</span> <strong id="notif-timesheets" style="color:var(--text-primary);">0</strong></div>
+                <div style="display:flex; justify-content:space-between; font-size:13px; color:var(--text-secondary);"><span>Attendance:</span> <strong id="notif-attendance" style="color:var(--text-primary);">0</strong></div>
+            </div>
         </div>
         <div class="user-profile" id="user-profile" style="position:relative; cursor:pointer;">
             <div class="user-avatar ${user.avatarUrl ? 'has-photo' : ''}" ${user.avatarUrl ? `style="background-image:url('${user.avatarUrl}')"` : ''}>${user.initials}</div>

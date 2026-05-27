@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timezone, timedelta
 import os, json, traceback, re
-from dataverse_helper import get_access_token, update_record, create_record, get_employee_name, get_dataverse_session
+from dataverse_helper import get_access_token, update_record, create_record, get_employee_name, get_employee_email, get_l2_l3_emails, get_dataverse_session
+from mail_app import send_email
 import requests
 import urllib.parse
 
@@ -912,7 +913,7 @@ def list_my_tasks():
         }
 
         # Fetch all tasks (could be optimized with paging if needed)
-        url = f"{RESOURCE}{DV_API}/{ENTITY_SET_TASKS}?$select=crc6f_hr_taskdetailsid,crc6f_taskid,crc6f_taskname,crc6f_taskdescription,crc6f_taskpriority,crc6f_taskstatus,crc6f_assignedto,crc6f_assigneddate,crc6f_duedate,crc6f_projectid,crc6f_boardid"
+        url = f"{RESOURCE}{DV_API}/{ENTITY_SET_TASKS}?$select=crc6f_hr_taskdetailsid,crc6f_taskid,crc6f_taskname,crc6f_taskdescription,crc6f_taskpriority,crc6f_taskstatus,crc6f_assignedto,crc6f_assigneddate,crc6f_duedate,crc6f_duetime,crc6f_projectid,crc6f_boardid"
         resp = get_dataverse_session().get(url, headers=headers, timeout=30)
         if not resp.ok:
             return jsonify({"success": False, "error": resp.text}), resp.status_code
@@ -935,6 +936,7 @@ def list_my_tasks():
                 "assigned_to": t.get("crc6f_assignedto"),
                 "assigned_date": t.get("crc6f_assigneddate"),
                 "due_date": t.get("crc6f_duedate"),
+                "due_time": t.get("crc6f_duetime"),
                 "project_id": t.get("crc6f_projectid"),
                 "board_id": t.get("crc6f_boardid"),
             }
@@ -2197,6 +2199,39 @@ def submit_timesheet():
         return jsonify({"success": True, "items": created, "count": len(created)}), 201
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        # Send notification to L2/L3
+        try:
+            if created:
+                # all entries belong to the same week_start based on the validation above
+                target_week_start = next(iter(week_starts))
+                emp_name = employee_name or get_employee_name(employee_id) or employee_id
+                l2_l3_recipients = get_l2_l3_emails()
+                if l2_l3_recipients:
+                    recipient_emails = [r["email"] for r in l2_l3_recipients if r.get("email")]
+                    if recipient_emails:
+                        total_secs = sum(item.get("seconds", 0) for item in created)
+                        total_hrs = round(total_secs / 3600, 2)
+                        send_email(
+                            subject=f"Timesheet Submission: {emp_name} ({employee_id}) - Week {target_week_start}",
+                            recipients=recipient_emails,
+                            body=f"Employee {emp_name} ({employee_id}) has submitted their timesheet for the week of {target_week_start}. Total Hours: {total_hrs}. Please review in HR Tool.",
+                            html=f"""
+                            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                                <h2 style="color:#1a73e8;">📋 Timesheet Submission</h2>
+                                <table style="width:100%;border-collapse:collapse;">
+                                    <tr><td style="padding:8px;font-weight:bold;">Employee</td><td style="padding:8px;">{emp_name} ({employee_id})</td></tr>
+                                    <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Week of</td><td style="padding:8px;">{target_week_start}</td></tr>
+                                    <tr><td style="padding:8px;font-weight:bold;">Total Hours</td><td style="padding:8px;">{total_hrs}</td></tr>
+                                </table>
+                                <p style="margin-top:16px;color:#5f6368;">Please review this timesheet in the HR Tool.</p>
+                            </div>
+                            """,
+                            async_send=True
+                        )
+                        print(f"[MAIL] Timesheet submission notification sent to {len(recipient_emails)} L2/L3 recipients")
+        except Exception as mail_err:
+            print(f"[WARN] Failed to send timesheet notification: {mail_err}")
 
 
 @bp_time.route("/time-tracker/timesheet/submissions", methods=["GET"])
@@ -2248,6 +2283,35 @@ def approve_timesheet(entry_id):
         return jsonify({"success": True, "item": updated}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        # Send approval email to employee
+        try:
+            if updated:
+                emp_id = updated.get("employee_id")
+                week_start = updated.get("date", "")[:10]
+                if emp_id:
+                    emp_email = get_employee_email(emp_id)
+                    emp_name = get_employee_name(emp_id) or emp_id
+                    if emp_email and isinstance(emp_email, str):
+                        send_email(
+                            subject=f"Timesheet Approved: Week of {week_start}",
+                            recipients=[emp_email],
+                            body=f"Hello {emp_name} ({emp_id}), your timesheet submission for the week of {week_start} has been approved.",
+                            html=f"""
+                            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                                <h2 style="color:#15803d;">✅ Timesheet Approved</h2>
+                                <p>Hello <strong>{emp_name}</strong> ({emp_id}),</p>
+                                <p>Your timesheet submission for the week of <strong>{week_start}</strong> has been <strong style="color:#15803d;">approved</strong>.</p>
+                                <table style="width:100%;border-collapse:collapse;">
+                                    <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Approved By</td><td style="padding:8px;">{decided_by or 'Admin'}</td></tr>
+                                </table>
+                            </div>
+                            """,
+                            async_send=True
+                        )
+                        print(f"[MAIL] Timesheet approval notification sent to {emp_email}")
+        except Exception as mail_err:
+            print(f"[WARN] Failed to send timesheet approval email: {mail_err}")
 
 
 @bp_time.route("/time-tracker/timesheet/<entry_id>/reject", methods=["POST"])
@@ -2263,3 +2327,33 @@ def reject_timesheet(entry_id):
         return jsonify({"success": True, "item": updated}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        # Send rejection email to employee
+        try:
+            if updated:
+                emp_id = updated.get("employee_id")
+                week_start = updated.get("date", "")[:10]
+                if emp_id:
+                    emp_email = get_employee_email(emp_id)
+                    emp_name = get_employee_name(emp_id) or emp_id
+                    if emp_email and isinstance(emp_email, str):
+                        send_email(
+                            subject=f"Timesheet Rejected: Week of {week_start}",
+                            recipients=[emp_email],
+                            body=f"Hello {emp_name} ({emp_id}), your timesheet submission for the week of {week_start} has been rejected.{f' Reason: {comment}' if comment else ''}",
+                            html=f"""
+                            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                                <h2 style="color:#b91c1c;">❌ Timesheet Rejected</h2>
+                                <p>Hello <strong>{emp_name}</strong> ({emp_id}),</p>
+                                <p>Your timesheet submission for the week of <strong>{week_start}</strong> has been <strong style="color:#b91c1c;">rejected</strong>.</p>
+                                <table style="width:100%;border-collapse:collapse;">
+                                    <tr><td style="padding:8px;font-weight:bold;">Rejected By</td><td style="padding:8px;">{decided_by or 'Admin'}</td></tr>
+                                    {f'<tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Reason</td><td style="padding:8px;">{comment}</td></tr>' if comment else ''}
+                                </table>
+                            </div>
+                            """,
+                            async_send=True
+                        )
+                        print(f"[MAIL] Timesheet rejection notification sent to {emp_email}")
+        except Exception as mail_err:
+            print(f"[WARN] Failed to send timesheet rejection email: {mail_err}")

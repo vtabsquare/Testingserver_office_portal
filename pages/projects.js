@@ -2749,11 +2749,12 @@ function renderBoardsTab(projectId, canManageOverride = null, canCreateBoardsOve
             <th>Board Name</th>
             <th>No. of Tasks</th>
             <th>No. of Members</th>
+            <th>Status</th>
             ${canManage ? '<th style="text-align:right;">Actions</th>' : ""}
           </tr>
         </thead>
         <tbody>
-          <tr><td colspan="4" class="placeholder-text">Loading...</td></tr>
+          <tr><td colspan="5" class="placeholder-text">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -2799,9 +2800,25 @@ function renderBoardsTable(boards, projectId, canManage) {
   if (!tbody) return;
 
   if (!boards || boards.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" class="placeholder-text">No boards</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="placeholder-text">No boards</td></tr>`;
     return;
   }
+
+  const boardStatusDropdown = (b, canManage) => {
+    const status = b.status || "Active";
+    const options = PROJECT_STATUS_OPTIONS.map(
+      (opt) => `<option value="${opt}" ${status === opt ? "selected" : ""}>${opt}</option>`
+    ).join("");
+    return `
+      <select class="project-status-select board-status-select ${projectStatusClass(status)}"
+              data-guid="${b.guid}"
+              data-current-status="${status}"
+              ${!canManage ? 'disabled="disabled"' : ''}
+              title="Change board status">
+        ${options}
+      </select>
+    `;
+  };
 
   tbody.innerHTML = boards
     .map(
@@ -2814,6 +2831,7 @@ function renderBoardsTable(boards, projectId, canManage) {
           </td>
           <td>${b.no_of_tasks || 0}</td>
           <td>${b.no_of_members || 0}</td>
+          <td>${boardStatusDropdown(b, canManage)}</td>
           ${canManage
           ? `<td style="text-align:right;">
             <button class="icon-btn board-edit" data-guid="${b.guid}" title="Edit">
@@ -2843,6 +2861,41 @@ function renderBoardsTable(boards, projectId, canManage) {
       )}&tab=crm&board=${encodeURIComponent(
         boardCode
       )}&boardName=${encodeURIComponent(boardName)}`;
+    });
+  });
+
+  // Attach status change events
+  document.querySelectorAll(".board-status-select").forEach((select) => {
+    select.addEventListener("click", (e) => e.stopPropagation());
+    select.addEventListener("change", async (e) => {
+      e.stopPropagation();
+      const el = e.currentTarget;
+      const guid = (el.getAttribute("data-guid") || "").trim();
+      const previous = el.getAttribute("data-current-status") || "Active";
+      const nextStatus = el.value;
+
+      if (!guid || !nextStatus || nextStatus === previous) {
+        el.value = previous;
+        return;
+      }
+
+      el.setAttribute("disabled", "disabled");
+      try {
+        const res = await fetch(`${API_ROOT}/api/boards/${encodeURIComponent(guid)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: nextStatus }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || out.success === false) {
+          throw new Error(out.error || "Failed to update board status");
+        }
+        await fetchBoards(projectId, canManage);
+      } catch (err) {
+        alert(err?.message || "Failed to update board status");
+        el.value = previous;
+        el.removeAttribute("disabled");
+      }
     });
   });
 
@@ -3449,6 +3502,9 @@ function taskCardHtml(t, index, projectId) {
     })
     : "—";
 
+  // Format due time if available
+  const dueTimeString = t.due_time ? t.due_time : null;
+
   return `
     <div class="kan-card modern" draggable="true" data-id="${t.guid}" style="background:#ffffff !important; border-radius:8px; margin-bottom:8px; box-shadow:0 1px 3px rgba(0,0,0,0.1); border:1px solid rgba(0,0,0,0.1); position:relative;">
       <div class="card-top" style="padding:12px; display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
@@ -3468,8 +3524,9 @@ function taskCardHtml(t, index, projectId) {
       
       <div class="task-separator" style="height:1px; background:rgba(0,0,0,0.1); margin:8px 12px;"></div>
 
-      <div class="card-bottom" style="padding:0 12px 12px; display:flex; justify-content:flex-end;">
+      <div class="card-bottom" style="padding:0 12px 12px; display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap;">
         <span class="due-pill ${dueColor}" style="font-size:12px; padding:2px 8px; border-radius:12px; background:${dueColor === 'red' ? '#fee2e2' : dueColor === 'orange' ? '#fed7aa' : '#dcfce7'}; color:${dueColor === 'red' ? '#dc2626' : dueColor === 'orange' ? '#ea580c' : '#16a34a'};">${dueString}</span>
+        ${dueTimeString ? `<span class="due-time-pill" style="font-size:12px; padding:2px 8px; border-radius:12px; background:#e0e7ff; color:#4338ca;"><i class="fa-solid fa-clock" style="font-size:10px; margin-right:4px;"></i>${dueTimeString}</span>` : ''}
       </div>
     </div>
   `;
@@ -3896,6 +3953,11 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
               <label class="form-label" for="tk-due">Due Date</label>
               <input class="input-control" type="date" id="tk-due" />
             </div>
+
+            <div class="form-field">
+              <label class="form-label" for="tk-duetime">Due Time</label>
+              <input class="input-control" type="text" id="tk-duetime" placeholder="Select time" />
+            </div>
           </div>
         </div>
         <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:24px;">
@@ -3917,6 +3979,16 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
   assignedInput.readOnly = true; // ❌ user cannot change date
 
   document.getElementById("tk-due").setAttribute("min", today);
+
+  // Initialize Flatpickr for Due Time
+  if (window.flatpickr) {
+    flatpickr("#tk-duetime", {
+      enableTime: true,
+      noCalendar: true,
+      dateFormat: "H:i",
+      time_24hr: true
+    });
+  }
 
   // =========================
   // Load Contributors
@@ -4000,6 +4072,8 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
     // Read selected work item type from dropdown
     const selectedWorkItemType = document.getElementById("tk-workitemtype").value;
 
+    const dueTime = document.getElementById("tk-duetime").value || null;
+    
     const payload = {
       task_name: document.getElementById("tk-name").value.trim(),
       task_description: document.getElementById("tk-desc").value.trim(),
@@ -4009,6 +4083,7 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
       assigned_to: assignedTo, // ✅ FIXED
       assigned_date: startDate,
       due_date: dueDate,
+      due_time: dueTime,
       // Store both board id + human-readable name so tasks stay scoped to current board
       board_name: boardNameValue,
       board_id: boardIdValue,
@@ -4128,6 +4203,11 @@ async function openTaskDetailsPage(projectId, taskId) {
     }" readonly class="readonly-input">
         </div>
 
+        <div class="task-detail-group"><label>Due Time</label>
+          <input type="text" id="td-duetime" value="${t.due_time || ""
+    }" readonly class="readonly-input">
+        </div>
+
       </div>
 
       <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
@@ -4221,6 +4301,15 @@ async function openTaskDetailsPage(projectId, taskId) {
       const today = new Date().toISOString().split("T")[0];
       document.getElementById("td-due").setAttribute("min", today);
 
+      if (window.flatpickr) {
+        flatpickr("#td-duetime", {
+          enableTime: true,
+          noCalendar: true,
+          dateFormat: "H:i",
+          time_24hr: true
+        });
+      }
+
       editBtn.textContent = "Save";
     } else {
       const today = new Date().toISOString().split("T")[0];
@@ -4243,6 +4332,7 @@ async function openTaskDetailsPage(projectId, taskId) {
         task_status: document.getElementById("td-status").value,
         assigned_to: assignedTo,
         due_date: dueDate,
+        due_time: document.getElementById("td-duetime").value || null,
       };
 
       const resPatch = await fetch(`${API_BASE}/api/tasks/${taskId}`, {

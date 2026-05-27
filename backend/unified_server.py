@@ -31,7 +31,7 @@ from google_auth_oauthlib.flow import Flow
 from google_token_store import load_google_token, save_google_token
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
-from dataverse_helper import create_record, update_record, delete_record, get_access_token, get_employee_name, get_employee_email, get_record, get_dataverse_session, get_supabase
+from dataverse_helper import create_record, update_record, delete_record, get_access_token, get_employee_name, get_employee_email, get_l2_l3_emails, get_record, get_dataverse_session, get_supabase
 from flask_mail import Mail, Message
 from mail_app import send_email
 from project_contributors import bp as contributors_bp
@@ -42,6 +42,8 @@ from chats import chat_bp
 from time_tracking import bp_time, stop_active_task_entries_for_user
 from attendance_service_v2 import attendance_v2_bp
 from attendance_scheduler import setup_scheduler as _setup_attendance_scheduler
+from overdue_tasks_notifier import bp_overdue
+from overdue_scheduler import setup_overdue_scheduler
 
 try:
     from zoneinfo import ZoneInfo
@@ -152,12 +154,19 @@ app.register_blueprint(columns_bp)
 app.register_blueprint(bp_time)
 app.register_blueprint(chat_bp)
 app.register_blueprint(attendance_v2_bp)  # Backend-authoritative attendance (v2)
+app.register_blueprint(bp_overdue)  # Overdue tasks notification system
 
 # Start the midnight auto-checkout scheduler (daemon thread, no extra dependency)
 try:
     _setup_attendance_scheduler(app)
 except Exception as _sched_err:
     print(f"[WARN] Failed to start attendance scheduler: {_sched_err}")
+
+# Start the overdue tasks notification scheduler (runs daily at 9 AM)
+try:
+    setup_overdue_scheduler(app)
+except Exception as _overdue_err:
+    print(f"[WARN] Failed to start overdue tasks scheduler: {_overdue_err}")
 
 def _coerce_client_local_datetime(client_time_str, timezone_name):
     """Convert client-supplied ISO timestamp into the user's local timezone if possible."""
@@ -4053,6 +4062,62 @@ def update_faceauth_setting(employee_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/faceauth/admin-sso-token", methods=["GET"])
+def get_faceauth_admin_sso_token():
+    """
+    Generate a properly formatted SSO token for FaceAuth admin dashboard.
+    Token includes admin claims and short expiry for security.
+    """
+    try:
+        # Get current user from Authorization header
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Missing or invalid Authorization header"}), 401
+        
+        token = auth_header.split(" ")[1]
+        decoded = decode_token(token)
+        
+        if not decoded:
+            return jsonify({"error": "Invalid or expired token"}), 401
+        
+        # Verify user has admin access
+        is_admin = decoded.get("is_admin", False)
+        role = decoded.get("role", "").lower()
+        
+        if not (is_admin or role in ("l3", "admin")):
+            return jsonify({"error": "Access denied. Admin privileges required."}), 403
+        
+        # Generate admin SSO token with specific claims
+        admin_sso_payload = {
+            "employee_id": decoded.get("employee_id"),
+            "email": decoded.get("email"),
+            "name": decoded.get("name"),
+            "role": decoded.get("role"),
+            "is_admin": True,
+            "purpose": "admin_sso",
+            "source": "hr_tool",
+            "iat": datetime.now(timezone.utc),
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=15)  # Short expiry for SSO
+        }
+        
+        sso_token = jwt.encode(admin_sso_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        
+        FACEAUTH_BASE_URL = os.getenv("FACEAUTH_BASE_URL", "https://biometrics.vtabsquare.com")
+        admin_url = f"{FACEAUTH_BASE_URL}/admin-sso"
+        
+        print(f"[FACEAUTH-ADMIN-SSO] Generated SSO token for {decoded.get('employee_id')}")
+        
+        return jsonify({
+            "success": True,
+            "sso_token": sso_token,
+            "admin_url": admin_url
+        }), 200
+        
+    except Exception as e:
+        print(f"[FACEAUTH-ADMIN-SSO] Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/forgot-password", methods=["POST"])
 def forgot_password():
     """Password reset request handler with debug logging."""
@@ -6291,25 +6356,35 @@ def apply_leave():
             }
 
             print("[OK] LEAVE APPLICATION SUCCESSFUL! (split paid/unpaid)\n")
-            admin_email = os.getenv("ADMIN_EMAIL")
-            employee_name = get_employee_name(applied_by)
-            print(employee_name)
-            send_email(
-                subject=f"[LOG] New Leave Request from {applied_by}",
-                recipients=[admin_email],
-                body=f"""
-        Employee {employee_name} {applied_by} has applied for {leave_type} leave
-        from {start_date} to {end_date} ({leave_days} days).
-
-        Paid: {paid_days} day(s)
-        Unpaid: {unpaid_days} day(s)
-
-        Reason: {reason or 'Not provided'}
-
-        Please review in HR Tool.
-        """,
-                async_send=True
-            )
+            employee_name = get_employee_name(applied_by) or applied_by
+            # Send notification to all L2/L3 admins and managers
+            try:
+                l2_l3_recipients = get_l2_l3_emails()
+                if l2_l3_recipients:
+                    recipient_emails = [r["email"] for r in l2_l3_recipients if r.get("email")]
+                    if recipient_emails:
+                        send_email(
+                            subject=f"Leave Request: {employee_name} ({applied_by}) - {leave_type}",
+                            recipients=recipient_emails,
+                            body=f"Employee {employee_name} ({applied_by}) has applied for {leave_type} leave from {start_date} to {end_date} ({leave_days} days). Paid: {paid_days} day(s), Unpaid: {unpaid_days} day(s). Reason: {reason or 'Not provided'}. Please review in HR Tool.",
+                            html=f"""
+                            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                                <h2 style="color:#1a73e8;">📋 New Leave Request</h2>
+                                <table style="width:100%;border-collapse:collapse;">
+                                    <tr><td style="padding:8px;font-weight:bold;">Employee</td><td style="padding:8px;">{employee_name} ({applied_by})</td></tr>
+                                    <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Leave Type</td><td style="padding:8px;">{leave_type}</td></tr>
+                                    <tr><td style="padding:8px;font-weight:bold;">Duration</td><td style="padding:8px;">{start_date} to {end_date} ({leave_days} days)</td></tr>
+                                    <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Paid / Unpaid</td><td style="padding:8px;">{paid_days} Paid, {unpaid_days} Unpaid</td></tr>
+                                    <tr><td style="padding:8px;font-weight:bold;">Reason</td><td style="padding:8px;">{reason or 'Not provided'}</td></tr>
+                                </table>
+                                <p style="margin-top:16px;color:#5f6368;">Please review this request in the HR Tool.</p>
+                            </div>
+                            """,
+                            async_send=True
+                        )
+                        print(f"[MAIL] Leave request notification sent to {len(recipient_emails)} L2/L3 recipients")
+            except Exception as mail_err:
+                print(f"[WARN] Failed to send leave notification to L2/L3: {mail_err}")
             return jsonify(response_data), 200
 
         if paid_flag:
@@ -6373,19 +6448,35 @@ def apply_leave():
 
         print("[OK] LEAVE APPLICATION SUCCESSFUL!\n")
         admin_email = os.getenv("ADMIN_EMAIL")
-        employee_name = get_employee_name(applied_by)
-        print(employee_name)
-        send_email(
-            subject=f"[LOG] New Leave Request from {applied_by}",
-            recipients=[admin_email],
-            body=f"""
-        Employee {employee_name} {applied_by} has applied for {leave_type} leave
-        from {start_date} to {end_date} ({leave_days} days).
-
-        Reason: {reason or 'Not provided'}
-
-        Please review in HR Tool.
-        """, async_send=True)
+        employee_name = get_employee_name(applied_by) or applied_by
+        # Send notification to all L2/L3 admins and managers
+        try:
+            l2_l3_recipients = get_l2_l3_emails()
+            if l2_l3_recipients:
+                recipient_emails = [r["email"] for r in l2_l3_recipients if r.get("email")]
+                if recipient_emails:
+                    send_email(
+                        subject=f"Leave Request: {employee_name} ({applied_by}) - {leave_type}",
+                        recipients=recipient_emails,
+                        body=f"Employee {employee_name} ({applied_by}) has applied for {leave_type} leave from {start_date} to {end_date} ({leave_days} days). Reason: {reason or 'Not provided'}. Please review in HR Tool.",
+                        html=f"""
+                        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                            <h2 style="color:#1a73e8;">📋 New Leave Request</h2>
+                            <table style="width:100%;border-collapse:collapse;">
+                                <tr><td style="padding:8px;font-weight:bold;">Employee</td><td style="padding:8px;">{employee_name} ({applied_by})</td></tr>
+                                <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Leave Type</td><td style="padding:8px;">{leave_type}</td></tr>
+                                <tr><td style="padding:8px;font-weight:bold;">Duration</td><td style="padding:8px;">{start_date} to {end_date} ({leave_days} days)</td></tr>
+                                <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Paid / Unpaid</td><td style="padding:8px;">{paid_unpaid}</td></tr>
+                                <tr><td style="padding:8px;font-weight:bold;">Reason</td><td style="padding:8px;">{reason or 'Not provided'}</td></tr>
+                            </table>
+                            <p style="margin-top:16px;color:#5f6368;">Please review this request in the HR Tool.</p>
+                        </div>
+                        """,
+                        async_send=True
+                    )
+                    print(f"[MAIL] Leave request notification sent to {len(recipient_emails)} L2/L3 recipients")
+        except Exception as mail_err:
+            print(f"[WARN] Failed to send leave notification to L2/L3: {mail_err}")
         return jsonify(response_data), 200
 
     except Exception as e:
@@ -7600,9 +7691,21 @@ def approve_leave(leave_id):
 
         if employee_email:
             send_email(
-                subject=f"[OK] Leave Approved for {employee_id}",
+                subject=f"Leave Approved: {start_date} to {end_date}",
                 recipients=[employee_email],
-                body=f"Hello{employee_name} {employee_id}, your leave from {start_date} to {end_date} has been approved by {approved_by}.",
+                body=f"Hello {employee_name} ({employee_id}), your leave from {start_date} to {end_date} has been approved by {approved_by}.",
+                html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                    <h2 style="color:#15803d;">✅ Leave Approved</h2>
+                    <p>Hello <strong>{employee_name}</strong> ({employee_id}),</p>
+                    <p>Your leave request has been <strong style="color:#15803d;">approved</strong>.</p>
+                    <table style="width:100%;border-collapse:collapse;">
+                        <tr><td style="padding:8px;font-weight:bold;">Duration</td><td style="padding:8px;">{start_date} to {end_date}</td></tr>
+                        <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Approved By</td><td style="padding:8px;">{approved_by}</td></tr>
+                        {f'<tr><td style="padding:8px;font-weight:bold;">Comments</td><td style="padding:8px;">{approval_comment}</td></tr>' if approval_comment else ''}
+                    </table>
+                </div>
+                """,
                 async_send=True
             )
         else:
@@ -7728,9 +7831,21 @@ def reject_leave(leave_id):
         if employee_email:
             reason_text = f" Reason: {rejection_reason}" if rejection_reason else ""
             send_email(
-                subject=f"[REJECTED] Leave Rejected for {employee_id}",
+                subject=f"Leave Rejected: {start_date} to {end_date}",
                 recipients=[employee_email],
-                body=f"Hello {employee_name} {employee_id}, your leave from {start_date} to {end_date} has been rejected by {rejected_by}.{reason_text}",
+                body=f"Hello {employee_name} ({employee_id}), your leave from {start_date} to {end_date} has been rejected by {rejected_by}.{reason_text}",
+                html=f"""
+                <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                    <h2 style="color:#b91c1c;">❌ Leave Rejected</h2>
+                    <p>Hello <strong>{employee_name}</strong> ({employee_id}),</p>
+                    <p>Your leave request has been <strong style="color:#b91c1c;">rejected</strong>.</p>
+                    <table style="width:100%;border-collapse:collapse;">
+                        <tr><td style="padding:8px;font-weight:bold;">Duration</td><td style="padding:8px;">{start_date} to {end_date}</td></tr>
+                        <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Rejected By</td><td style="padding:8px;">{rejected_by}</td></tr>
+                        {f'<tr><td style="padding:8px;font-weight:bold;">Reason</td><td style="padding:8px;">{rejection_reason}</td></tr>' if rejection_reason else ''}
+                    </table>
+                </div>
+                """,
                 async_send=True
             )
         else:
@@ -7755,10 +7870,10 @@ def reject_leave(leave_id):
 
 @app.route('/api/leaves/pending', methods=['GET'])
 def get_pending_leaves():
-    """Get all pending leave requests (for admin review)"""
+    """Get all pending leave requests (for admin review) - includes both regular leaves and comp-off requests"""
     try:
         print(f"\n{'='*70}")
-        print(f"[FETCH] FETCHING ALL PENDING LEAVE REQUESTS")
+        print(f"[FETCH] FETCHING ALL PENDING LEAVE REQUESTS (INCLUDING COMP-OFF)")
         print(f"{'='*70}")
         
         token = get_access_token()
@@ -7769,43 +7884,101 @@ def get_pending_leaves():
             "OData-Version": "4.0"
         }
         
-        # Fetch all pending leaves
+        formatted_leaves = []
+        
+        # 1. Fetch pending regular leaves
         filter_query = "?$filter=crc6f_status eq 'Pending'"
         url = f"{RESOURCE}/api/data/v9.2/{LEAVE_ENTITY}{filter_query}"
         
-        print(f"   [URL] Request URL: {url}")
+        print(f"   [URL] Fetching regular leaves: {url}")
         response = get_dataverse_session().get(url, headers=headers, timeout=15)
         
-        if response.status_code != 200:
-            print(f"   [ERROR] Failed to fetch pending leaves: {response.status_code}")
-            print("   [WARN] Falling back to empty pending-leave list to keep UI responsive")
-            return jsonify({
-                "success": True,
-                "leaves": [],
-                "count": 0,
-                "warning": "Pending leaves unavailable (Dataverse error)"
-            }), 200
+        if response.status_code == 200:
+            records = response.json().get("value", [])
+            print(f"   [DATA] Found {len(records)} pending regular leave requests")
+            
+            for r in records:
+                formatted_leaves.append({
+                    "leave_id": r.get("crc6f_leaveid"),
+                    "leave_type": r.get("crc6f_leavetype"),
+                    "start_date": r.get("crc6f_startdate"),
+                    "end_date": r.get("crc6f_enddate"),
+                    "total_days": r.get("crc6f_totaldays"),
+                    "status": r.get("crc6f_status"),
+                    "paid_unpaid": r.get("crc6f_paidunpaid"),
+                    "approved_by": r.get("crc6f_approvedby"),
+                    "rejection_reason": r.get("crc6f_rejectionreason"),
+                    "reason": r.get("crc6f_rejectionreason", ""),
+                    "employee_id": r.get("crc6f_employeeid"),
+                    "request_type": "leave"
+                })
+        else:
+            print(f"   [WARN] Failed to fetch regular leaves: {response.status_code}")
         
-        records = response.json().get("value", [])
-        print(f"   [DATA] Found {len(records)} pending leave requests")
+        # 2. Fetch pending comp-off requests
+        try:
+            compoff_entity = get_compoff_request_entity_set(token)
+            compoff_url = f"{RESOURCE}/api/data/v9.2/{compoff_entity}?$filter=crc6f_status eq 'Pending'"
+            
+            print(f"   [URL] Fetching comp-off requests: {compoff_url}")
+            compoff_response = get_dataverse_session().get(compoff_url, headers=headers, timeout=15)
+            
+            if compoff_response.status_code == 200:
+                compoff_records = compoff_response.json().get("value", [])
+                print(f"   [DATA] Found {len(compoff_records)} pending comp-off requests")
+                
+                for r in compoff_records:
+                    # Comp-off requests might be in leave entity format or separate format
+                    is_leave_backed = _is_compoff_leave_entity(compoff_entity)
+                    
+                    # Extract the actual record GUID (needed for approve/reject API)
+                    record_guid = _compoff_extract_record_id(r)
+                    if is_leave_backed:
+                        # Comp-off stored as leave type
+                        formatted_leaves.append({
+                            "leave_id": r.get("crc6f_leaveid"),
+                            "compoff_id": record_guid,
+                            "id": record_guid,
+                            "leave_type": r.get("crc6f_leavetype", "Compensatory Off"),
+                            "start_date": r.get("crc6f_startdate"),
+                            "end_date": r.get("crc6f_enddate"),
+                            "total_days": r.get("crc6f_totaldays"),
+                            "status": r.get("crc6f_status"),
+                            "paid_unpaid": r.get("crc6f_paidunpaid", "Paid"),
+                            "approved_by": r.get("crc6f_approvedby"),
+                            "rejection_reason": r.get("crc6f_rejectionreason"),
+                            "reason": r.get("crc6f_rejectionreason", ""),
+                            "employee_id": r.get("crc6f_employeeid"),
+                            "request_type": "compoff"
+                        })
+                    else:
+                        # Comp-off in separate entity
+                        date_worked = r.get("crc6f_dateworked") or r.get("crc6f_applieddate") or ""
+                        formatted_leaves.append({
+                            "leave_id": r.get("crc6f_compensatoryrequestid") or r.get("crc6f_compoffrequestid"),
+                            "compoff_id": record_guid,
+                            "id": record_guid,
+                            "leave_type": "Compensatory Off",
+                            "start_date": date_worked,
+                            "end_date": date_worked,
+                            "total_days": r.get("crc6f_totaldays", 1),
+                            "status": r.get("crc6f_status"),
+                            "paid_unpaid": "Paid",
+                            "approved_by": r.get("crc6f_approvedby"),
+                            "rejection_reason": r.get("crc6f_reason", ""),
+                            "reason": r.get("crc6f_reason", ""),
+                            "employee_id": r.get("crc6f_employeeid"),
+                            "request_type": "compoff"
+                        })
+            else:
+                print(f"   [WARN] Failed to fetch comp-off requests: {compoff_response.status_code}")
+        except Exception as compoff_err:
+            print(f"   [WARN] Error fetching comp-off requests: {compoff_err}")
         
-        formatted_leaves = []
-        for r in records:
-            formatted_leaves.append({
-                "leave_id": r.get("crc6f_leaveid"),
-                "leave_type": r.get("crc6f_leavetype"),
-                "start_date": r.get("crc6f_startdate"),
-                "end_date": r.get("crc6f_enddate"),
-                "total_days": r.get("crc6f_totaldays"),
-                "status": r.get("crc6f_status"),
-                "paid_unpaid": r.get("crc6f_paidunpaid"),
-                "approved_by": r.get("crc6f_approvedby"),
-                "rejection_reason": r.get("crc6f_rejectionreason"),
-                "reason": r.get("crc6f_rejectionreason", ""),
-                "employee_id": r.get("crc6f_employeeid")
-            })
+        # Sort by creation date (most recent first) if available
+        formatted_leaves.sort(key=lambda x: x.get("start_date", ""), reverse=True)
         
-        print(f"[OK] Successfully fetched {len(formatted_leaves)} pending leaves")
+        print(f"[OK] Successfully fetched {len(formatted_leaves)} total pending requests")
         print(f"{'='*70}\n")
         
         return jsonify({
@@ -11671,6 +11844,35 @@ def submit_attendance_to_inbox():
         print(f"[ERROR] Error submitting attendance to inbox: {str(e)}")
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        # Send notification to L2/L3
+        try:
+            emp_name = get_employee_name(emp_id) or emp_id
+            l2_l3_recipients = get_l2_l3_emails()
+            if l2_l3_recipients:
+                recipient_emails = [r["email"] for r in l2_l3_recipients if r.get("email")]
+                if recipient_emails:
+                    import calendar
+                    month_name = calendar.month_name[int(month)]
+                    send_email(
+                        subject=f"Attendance Submission: {emp_name} ({emp_id}) - {month_name} {year}",
+                        recipients=recipient_emails,
+                        body=f"Employee {emp_name} ({emp_id}) has submitted their attendance report for {month_name} {year}. Please review in HR Tool.",
+                        html=f"""
+                        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                            <h2 style="color:#1a73e8;">📋 Attendance Submission</h2>
+                            <table style="width:100%;border-collapse:collapse;">
+                                <tr><td style="padding:8px;font-weight:bold;">Employee</td><td style="padding:8px;">{emp_name} ({emp_id})</td></tr>
+                                <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Period</td><td style="padding:8px;">{month_name} {year}</td></tr>
+                            </table>
+                            <p style="margin-top:16px;color:#5f6368;">Please review this submission in the HR Tool.</p>
+                        </div>
+                        """,
+                        async_send=True
+                    )
+                    print(f"[MAIL] Attendance submission notification sent to {len(recipient_emails)} L2/L3 recipients")
+        except Exception as mail_err:
+            print(f"[WARN] Failed to send attendance submission notification: {mail_err}")
 
 
 @app.route('/api/attendance/submission-status/<employee_id>/<int:year>/<int:month>', methods=['GET'])
@@ -11859,6 +12061,32 @@ def approve_attendance_submission(marker_id):
         payload = {FIELD_DURATION_INTEXT: _submission_payload_text(emp, y, m, 'approved')}
         record_id = row.get(FIELD_RECORD_ID) or row.get('id')
         update_record(ATTENDANCE_ENTITY, record_id, payload)
+
+        # Send approval email to employee
+        try:
+            if emp:
+                emp_email = get_employee_email(emp)
+                emp_name = get_employee_name(emp) or emp
+                if emp_email and isinstance(emp_email, str):
+                    import calendar
+                    month_name = calendar.month_name[m] if 1 <= m <= 12 else str(m)
+                    send_email(
+                        subject=f"Attendance Approved: {month_name} {y}",
+                        recipients=[emp_email],
+                        body=f"Hello {emp_name} ({emp}), your attendance submission for {month_name} {y} has been approved.",
+                        html=f"""
+                        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                            <h2 style="color:#15803d;">✅ Attendance Approved</h2>
+                            <p>Hello <strong>{emp_name}</strong> ({emp}),</p>
+                            <p>Your attendance submission for <strong>{month_name} {y}</strong> has been <strong style="color:#15803d;">approved</strong>.</p>
+                        </div>
+                        """,
+                        async_send=True
+                    )
+                    print(f"[MAIL] Attendance approval notification sent to {emp_email}")
+        except Exception as mail_err:
+            print(f"[WARN] Failed to send attendance approval email: {mail_err}")
+
         return jsonify({"success": True, "message": "Attendance submission approved"})
 
     except Exception as e:
@@ -11893,6 +12121,33 @@ def reject_attendance_submission(marker_id):
         payload = {FIELD_DURATION_INTEXT: _submission_payload_text(emp, y, m, 'rejected', reason)}
         record_id = row.get(FIELD_RECORD_ID) or row.get('id')
         update_record(ATTENDANCE_ENTITY, record_id, payload)
+
+        # Send rejection email to employee
+        try:
+            if emp:
+                emp_email = get_employee_email(emp)
+                emp_name = get_employee_name(emp) or emp
+                if emp_email and isinstance(emp_email, str):
+                    import calendar
+                    month_name = calendar.month_name[m] if 1 <= m <= 12 else str(m)
+                    send_email(
+                        subject=f"Attendance Rejected: {month_name} {y}",
+                        recipients=[emp_email],
+                        body=f"Hello {emp_name} ({emp}), your attendance submission for {month_name} {y} has been rejected.{f' Reason: {reason}' if reason else ''}",
+                        html=f"""
+                        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                            <h2 style="color:#b91c1c;">❌ Attendance Rejected</h2>
+                            <p>Hello <strong>{emp_name}</strong> ({emp}),</p>
+                            <p>Your attendance submission for <strong>{month_name} {y}</strong> has been <strong style="color:#b91c1c;">rejected</strong>.</p>
+                            {f'<p><strong>Reason:</strong> {reason}</p>' if reason else ''}
+                        </div>
+                        """,
+                        async_send=True
+                    )
+                    print(f"[MAIL] Attendance rejection notification sent to {emp_email}")
+        except Exception as mail_err:
+            print(f"[WARN] Failed to send attendance rejection email: {mail_err}")
+
         return jsonify({"success": True, "message": "Attendance submission rejected"})
     except Exception as e:
         print("[ERROR] Error rejecting attendance submission:", e)
@@ -14346,6 +14601,10 @@ def _compoff_extract_record_id(row):
     preferred = [
         "crc6f_compensatoryrequestid",
         "crc6f_hr_compensatoryrequestid",
+        "crc6f_compoffrequestid",
+        "crc6f_hr_leavedetailsid",
+        "crc6f_leavedetailsid",
+        "crc6f_table14id",
         "id",
     ]
     for key in preferred:
@@ -14572,6 +14831,36 @@ def create_comp_off_request():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
+    finally:
+        # Send notification to L2/L3 (runs even after return via finally)
+        try:
+            emp_name = get_employee_name(employee_id) or employee_id
+            l2_l3_recipients = get_l2_l3_emails()
+            if l2_l3_recipients:
+                recipient_emails = [r["email"] for r in l2_l3_recipients if r.get("email")]
+                if recipient_emails:
+                    send_email(
+                        subject=f"Comp Off Request: {emp_name} ({employee_id})",
+                        recipients=recipient_emails,
+                        body=f"Employee {emp_name} ({employee_id}) has submitted a Compensatory Off request for {total_days} day(s). Date worked: {date_worked or 'N/A'}. Reason: {reason or 'Not provided'}. Please review in HR Tool.",
+                        html=f"""
+                        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                            <h2 style="color:#1a73e8;">📋 New Comp Off Request</h2>
+                            <table style="width:100%;border-collapse:collapse;">
+                                <tr><td style="padding:8px;font-weight:bold;">Employee</td><td style="padding:8px;">{emp_name} ({employee_id})</td></tr>
+                                <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Days</td><td style="padding:8px;">{total_days}</td></tr>
+                                <tr><td style="padding:8px;font-weight:bold;">Date Worked</td><td style="padding:8px;">{date_worked or 'N/A'}</td></tr>
+                                <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Reason</td><td style="padding:8px;">{reason or 'Not provided'}</td></tr>
+                            </table>
+                            <p style="margin-top:16px;color:#5f6368;">Please review this request in the HR Tool.</p>
+                        </div>
+                        """,
+                        async_send=True
+                    )
+                    print(f"[MAIL] Comp off request notification sent to {len(recipient_emails)} L2/L3 recipients")
+        except Exception as mail_err:
+            print(f"[WARN] Failed to send comp off notification to L2/L3: {mail_err}")
+
 
 @app.route('/api/comp-off/requests/<request_id>/approve', methods=['POST'])
 def approve_comp_off_request(request_id):
@@ -14665,6 +14954,33 @@ def approve_comp_off_request(request_id):
         print(f"[ERROR] Failed to approve comp off request {request_id}: {e}")
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        # Send approval email to the employee
+        try:
+            if employee_id:
+                emp_email = get_employee_email(employee_id)
+                emp_name = get_employee_name(employee_id) or employee_id
+                if emp_email and isinstance(emp_email, str):
+                    send_email(
+                        subject=f"Comp Off Request Approved",
+                        recipients=[emp_email],
+                        body=f"Hello {emp_name} ({employee_id}), your Compensatory Off request for {requested_days} day(s) has been approved.",
+                        html=f"""
+                        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                            <h2 style="color:#15803d;">✅ Comp Off Approved</h2>
+                            <p>Hello <strong>{emp_name}</strong> ({employee_id}),</p>
+                            <p>Your Compensatory Off request has been <strong style="color:#15803d;">approved</strong>.</p>
+                            <table style="width:100%;border-collapse:collapse;">
+                                <tr><td style="padding:8px;font-weight:bold;">Days</td><td style="padding:8px;">{requested_days}</td></tr>
+                                <tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Approved By</td><td style="padding:8px;">{approved_by}</td></tr>
+                            </table>
+                        </div>
+                        """,
+                        async_send=True
+                    )
+                    print(f"[MAIL] Comp off approval notification sent to {emp_email}")
+        except Exception as mail_err:
+            print(f"[WARN] Failed to send comp off approval email: {mail_err}")
 
 
 @app.route('/api/comp-off/requests/<request_id>/reject', methods=['POST'])
@@ -14727,6 +15043,33 @@ def reject_comp_off_request(request_id):
         print(f"[ERROR] Failed to reject comp off request {request_id}: {e}")
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        # Send rejection email to the employee
+        try:
+            if employee_id:
+                emp_email = get_employee_email(employee_id)
+                emp_name = get_employee_name(employee_id) or employee_id
+                if emp_email and isinstance(emp_email, str):
+                    send_email(
+                        subject=f"Comp Off Request Rejected",
+                        recipients=[emp_email],
+                        body=f"Hello {emp_name} ({employee_id}), your Compensatory Off request has been rejected.{f' Reason: {rejection_reason}' if rejection_reason else ''}",
+                        html=f"""
+                        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+                            <h2 style="color:#b91c1c;">❌ Comp Off Rejected</h2>
+                            <p>Hello <strong>{emp_name}</strong> ({employee_id}),</p>
+                            <p>Your Compensatory Off request has been <strong style="color:#b91c1c;">rejected</strong>.</p>
+                            <table style="width:100%;border-collapse:collapse;">
+                                <tr><td style="padding:8px;font-weight:bold;">Rejected By</td><td style="padding:8px;">{rejected_by}</td></tr>
+                                {f'<tr style="background:#f8f9fa;"><td style="padding:8px;font-weight:bold;">Reason</td><td style="padding:8px;">{rejection_reason}</td></tr>' if rejection_reason else ''}
+                            </table>
+                        </div>
+                        """,
+                        async_send=True
+                    )
+                    print(f"[MAIL] Comp off rejection notification sent to {emp_email}")
+        except Exception as mail_err:
+            print(f"[WARN] Failed to send comp off rejection email: {mail_err}")
 
 
 @app.route('/api/comp-off', methods=['GET'])

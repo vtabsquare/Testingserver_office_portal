@@ -293,6 +293,7 @@ CREATE TABLE IF NOT EXISTS crc6f_hr_projectdetailses (
     crc6f_boardid VARCHAR(50) UNIQUE,
     crc6f_boardname VARCHAR(200) NOT NULL,
     crc6f_boarddescription TEXT,
+    crc6f_boardstatus VARCHAR(50) DEFAULT 'Active',
     crc6f_nooftasks INTEGER DEFAULT 0,
     crc6f_noofmembers INTEGER DEFAULT 0,
     crc6f_projectid VARCHAR(50) NOT NULL,

@@ -12,9 +12,9 @@ module.exports = {
       env: {
         FLASK_ENV: "production",
         PORT: "5000",
-        SOCKET_SERVER_URL: "https://officeportal.vtabsquare.com",
-        FRONTEND_BASE_URL: "https://officeportal.vtabsquare.com",
-        GOOGLE_REDIRECT_URI: "https://officeportal.vtabsquare.com/google/oauth2callback",
+        SOCKET_SERVER_URL: "https://socket.officehub360.vtabsquare.com",
+        FRONTEND_BASE_URL: "https://officehub360.vtabsquare.com",
+        GOOGLE_REDIRECT_URI: "https://officehub360.vtabsquare.com/google/oauth2callback",
       },
       // Secrets (TENANT_ID, CLIENT_ID, etc.) are loaded from /var/www/vtab/backend/id.env by dotenv inside the app
       max_restarts: 10,
@@ -29,7 +29,7 @@ module.exports = {
       env: {
         PORT: "4001",
         NODE_ENV: "production",
-        SOCKET_ORIGINS: "https://officeportal.vtabsquare.com",
+        SOCKET_ORIGINS: "https://officehub360.vtabsquare.com",
         PY_API_BASE: "http://127.0.0.1:5000/chat",
         BACKEND_URL: "http://127.0.0.1:5000",
       },
