@@ -15885,6 +15885,199 @@ def update_leave_allocation_type(type_name):
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+# ==============================================================================
+# ROLE PERMISSIONS ENDPOINTS
+# ==============================================================================
+
+@app.route('/api/role-permissions', methods=['GET'])
+def get_role_permissions():
+    try:
+        from supabase_helper import get_supabase
+        sb = get_supabase()
+        
+        response = sb.table("role_permissions").select("*").execute()
+        permissions = response.data or []
+        
+        return jsonify({"success": True, "permissions": permissions}), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching role permissions: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/role-permissions', methods=['PUT'])
+def update_role_permission():
+    data = request.json
+    if not data:
+        return jsonify({"success": False, "error": "No data provided"}), 400
+        
+    role_key = data.get('role_key')
+    perm_type = data.get('permission_type')
+    perm_key = data.get('permission_key')
+    enabled = data.get('enabled', False)
+    
+    if not all([role_key, perm_type, perm_key]):
+        return jsonify({"success": False, "error": "Missing required fields"}), 400
+        
+    try:
+        from supabase_helper import get_supabase
+        sb = get_supabase()
+        
+        # Check if exists
+        check_resp = sb.table("role_permissions").select("id").eq("role_key", role_key).eq("permission_type", perm_type).eq("permission_key", perm_key).execute()
+        
+        if check_resp.data and len(check_resp.data) > 0:
+            # Update
+            record_id = check_resp.data[0]['id']
+            sb.table("role_permissions").update({"enabled": enabled}).eq("id", record_id).execute()
+        else:
+            # Insert
+            sb.table("role_permissions").insert({
+                "role_key": role_key,
+                "permission_type": perm_type,
+                "permission_key": perm_key,
+                "enabled": enabled
+            }).execute()
+            
+        return jsonify({"success": True}), 200
+        
+    except Exception as e:
+        logger.error(f"Error updating role permission: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/custom-roles', methods=['GET'])
+def get_custom_roles():
+    try:
+        from supabase_helper import get_supabase
+        sb = get_supabase()
+        
+        # Fetch meta permissions that store custom role names
+        response = sb.table("role_permissions").select("role_key, permission_key").eq("permission_type", "meta").execute()
+        records = response.data or []
+        
+        custom_roles = []
+        for r in records:
+            if str(r.get("permission_key", "")).startswith("role_name_"):
+                role_name = r["permission_key"].replace("role_name_", "", 1)
+                custom_roles.append({
+                    "key": r["role_key"],
+                    "name": role_name
+                })
+                
+        return jsonify({"success": True, "roles": custom_roles}), 200
+    except Exception as e:
+        logger.error(f"Error fetching custom roles: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/custom-roles', methods=['POST'])
+def create_custom_role():
+    data = request.json
+    role_name = data.get('role_name', '').strip()
+    if not role_name:
+        return jsonify({"success": False, "error": "Role name is required"}), 400
+        
+    try:
+        from supabase_helper import get_supabase
+        sb = get_supabase()
+        import uuid
+        
+        # Generate a unique key for the role (max 10 chars for role_key)
+        role_key = f"C_{str(uuid.uuid4())[:8].upper()}"
+        
+        # Store the name in role_permissions as a meta entry
+        sb.table("role_permissions").insert({
+            "role_key": role_key,
+            "permission_type": "meta",
+            "permission_key": f"role_name_{role_name}",
+            "enabled": True
+        }).execute()
+        
+        return jsonify({"success": True, "role": {"key": role_key, "name": role_name}}), 201
+    except Exception as e:
+        logger.error(f"Error creating custom role: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/custom-roles/<role_key>', methods=['DELETE'])
+def delete_custom_role(role_key):
+    if not role_key or not role_key.startswith('C_'):
+        return jsonify({"success": False, "error": "Invalid custom role key"}), 400
+        
+    try:
+        from supabase_helper import get_supabase
+        sb = get_supabase()
+        
+        # Delete all permissions and meta entries for this role
+        sb.table("role_permissions").delete().eq("role_key", role_key).execute()
+        
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        logger.error(f"Error deleting custom role: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/role-permissions/seed', methods=['POST'])
+def seed_role_permissions():
+    try:
+        from supabase_helper import get_supabase
+        sb = get_supabase()
+        
+        # Default permissions dictionary
+        defaults = {
+            'L3': {
+                'applications': ['home', 'admin_dashboard', 'employee', 'employees', 'interns', 'team_management', 'inbox', 'onboarding', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_clients', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'assets', 'settings', 'leave_settings', 'login_settings', 'faceauth_settings', 'role_settings', 'faceauth_admin'],
+                'functions': ['view_admin_dashboard', 'view_employee_directory', 'view_interns', 'manage_onboarding', 'view_team_timesheet', 'manage_clients', 'view_team_attendance', 'view_team_leaves', 'manage_leave_settings', 'manage_login_settings', 'manage_faceauth_settings', 'manage_role_settings']
+            },
+            'L2': {
+                'applications': ['home', 'employee', 'employees', 'interns', 'inbox', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_clients', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'assets'],
+                'functions': ['view_employee_directory', 'view_interns', 'view_team_timesheet', 'manage_clients', 'view_team_attendance', 'view_team_leaves']
+            },
+            'L4': {
+                'applications': ['home', 'employee', 'employees', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'assets'],
+                'functions': ['view_employee_directory', 'view_team_timesheet', 'view_team_attendance', 'view_team_leaves']
+            },
+            'L1': {
+                'applications': ['home', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_holidays', 'leave_tracker', 'leave_my', 'compoff', 'assets'],
+                'functions': []
+            }
+        }
+        
+        # First clear all existing permissions
+        sb.table("role_permissions").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+        
+        # Build batch insert data
+        all_apps = defaults['L3']['applications']
+        all_funcs = defaults['L3']['functions']
+        
+        full_insert_data = []
+        for role in ['L1', 'L2', 'L3', 'L4']:
+            for app_key in all_apps:
+                is_enabled = app_key in defaults[role].get('applications', [])
+                full_insert_data.append({
+                    "role_key": role,
+                    "permission_type": "application",
+                    "permission_key": app_key,
+                    "enabled": is_enabled
+                })
+                
+            for func_key in all_funcs:
+                is_enabled = func_key in defaults[role].get('functions', [])
+                full_insert_data.append({
+                    "role_key": role,
+                    "permission_type": "function",
+                    "permission_key": func_key,
+                    "enabled": is_enabled
+                })
+                
+        # Insert in batches of 100 to avoid limits
+        batch_size = 100
+        for i in range(0, len(full_insert_data), batch_size):
+            batch = full_insert_data[i:i+batch_size]
+            sb.table("role_permissions").insert(batch).execute()
+            
+        return jsonify({"success": True}), 200
+        
+    except Exception as e:
+        logger.error(f"Error seeding role permissions: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 if __name__ == '__main__':
     print('\n' + '== ' * 30)
     print('UNIFIED OFFICE TOOL SERVER STARTING...')
