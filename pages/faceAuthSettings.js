@@ -3,6 +3,7 @@
 import { state } from '../state.js';
 import { getPageContentHTML } from '../utils.js';
 import { isAdminUser } from '../utils/accessControl.js';
+import { canUseFunction } from '../utils/roleSettings.js';
 import { API_BASE_URL } from '../config.js';
 
 let cachedEmployees = [];
@@ -188,8 +189,8 @@ export async function renderFaceAuthSettings() {
     const container = document.getElementById('app-content');
     if (!container) return;
     
-    // Check admin access
-    if (!isAdminUser()) {
+    // Admin-only access
+    if (!canUseFunction('manage_faceauth_settings')) {
         container.innerHTML = getPageContentHTML(`
             <div class="card" style="padding: 40px; text-align: center;">
                 <i class="fa-solid fa-lock" style="font-size: 48px; color: #e74c3c; margin-bottom: 16px;"></i>

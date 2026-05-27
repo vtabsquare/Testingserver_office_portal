@@ -4,8 +4,10 @@ import { state } from '../state.js';
 import { getPageContentHTML } from '../utils.js';
 import { renderModal, closeModal } from '../components/modal.js';
 import { listLoginAccounts, createLoginAccount, updateLoginAccount, deleteLoginAccount, fetchLoginEvents, updateLoginActivity, fetchAuthSessionEvents, triggerForceLogout } from '../features/loginSettingsApi.js';
+import { fetchCustomRoles } from '../features/roleSettingsApi.js';
 import { listAllEmployees } from '../features/employeeApi.js';
 import { isAdminUser, isL2OrL3User } from '../utils/accessControl.js';
+import { canUseFunction } from '../utils/roleSettings.js';
 
 let currentLoginSettingsView = 'accounts';
 let cachedLoginAccounts = [];
@@ -13,6 +15,14 @@ let cachedLoginActivitySummary = [];
 let cachedAuthSessionEvents = [];
 let loginAccountNameIndex = {};
 let cachedEmployeeDirectory = [];
+
+const DEFAULT_ROLES = [
+    { key: 'L1', name: 'User' },
+    { key: 'L2', name: 'Manager' },
+    { key: 'L4', name: 'Team Lead' },
+    { key: 'L3', name: 'Admin' }
+];
+let availableRoles = [...DEFAULT_ROLES];
 
 const formatLastLogin = (value) => {
     if (!value) return 'N/A';
@@ -36,11 +46,8 @@ const formatLastLogin = (value) => {
 
 const formatAccessLevelLabel = (level) => {
     const normalized = String(level || '').trim().toUpperCase();
-    if (normalized === 'L1') return 'User';
-    if (normalized === 'L2') return 'Manager';
-    if (normalized === 'L3') return 'Admin';
-    if (normalized === 'L4') return 'Team Lead';
-    return level || '';
+    const role = availableRoles.find(r => r.key.toUpperCase() === normalized);
+    return role ? role.name : (level || '');
 };
 
 const formatTime = (isoString) => {
@@ -491,7 +498,9 @@ const buildTableHTML = (accounts = []) => {
         <tr>
             <td>${acc.username || ''}</td>
             <td>${acc.employeeName || ''}</td>
-            <td>${formatAccessLevelLabel(acc.accessLevel)}</td>
+            <td>
+                <span class="role-badge" style="background: var(--surface-hover); padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; color: var(--text-primary); border: 1px solid var(--border-color);">${formatAccessLevelLabel(acc.accessLevel)}</span>
+            </td>
             <td>${formatLastLogin(acc.lastLogin)}</td>
             <td>${typeof acc.loginAttempts === 'number' ? acc.loginAttempts : ''}</td>
             <td>
@@ -697,10 +706,7 @@ const openAddLoginModal = () => {
                     <div class="form-field">
                         <label class="form-label" for="login-access-level">Access Level</label>
                         <select id="login-access-level" class="input-control">
-                            <option value="L1" selected>User</option>
-                            <option value="L2">Manager</option>
-                            <option value="L3">Admin</option>
-                            <option value="L4">Team Lead</option>
+                            ${availableRoles.map(r => `<option value="${r.key}" ${r.key === 'L1' ? 'selected' : ''}>${r.name}</option>`).join('')}
                         </select>
                     </div>
                     <div class="form-field">
@@ -758,10 +764,7 @@ const openEditLoginModal = (account) => {
                     <div class="form-field">
                         <label class="form-label" for="login-edit-access-level">Access Level</label>
                         <select id="login-edit-access-level" class="input-control">
-                            <option value="L1" ${account.accessLevel === 'L1' ? 'selected' : ''}>User</option>
-                            <option value="L2" ${account.accessLevel === 'L2' ? 'selected' : ''}>Manager</option>
-                            <option value="L3" ${account.accessLevel === 'L3' ? 'selected' : ''}>Admin</option>
-                            <option value="L4" ${account.accessLevel === 'L4' ? 'selected' : ''}>Team Lead</option>
+                            ${availableRoles.map(r => `<option value="${r.key}" ${String(account.accessLevel).toUpperCase() === r.key.toUpperCase() ? 'selected' : ''}>${r.name}</option>`).join('')}
                         </select>
                     </div>
                     <div class="form-field">
@@ -911,8 +914,8 @@ const attachRowHandlers = (accounts) => {
 export const renderLoginSettingsPage = async () => {
     console.log('⚙️ Rendering Login Settings Page...');
 
-    // Check if user is admin or L2/L3
-    if (!isL2OrL3User()) {
+    // Check if user has permission
+    if (!canUseFunction('manage_login_settings')) {
         const content = `
             <div class="card">
                 <div class="access-denied-content">
@@ -948,13 +951,15 @@ export const renderLoginSettingsPage = async () => {
 
     try {
         // Fetch login accounts and login events in parallel
-        const [accounts, loginEventsData, employeeDirectory, authEventsData] = await Promise.all([
+        const [accounts, loginEventsData, employeeDirectory, authEventsData, customRoles] = await Promise.all([
             listLoginAccounts(),
             fetchLoginEvents().catch(() => ({ daily_summary: [] })),
             listAllEmployees().catch(() => []),
-            fetchAuthSessionEvents({ limit: 200 }).catch(() => ({ items: [] }))
+            fetchAuthSessionEvents({ limit: 200 }).catch(() => ({ items: [] })),
+            fetchCustomRoles().catch(() => [])
         ]);
         
+        availableRoles = [...DEFAULT_ROLES, ...customRoles];
         cachedLoginAccounts = accounts;
         cachedLoginActivitySummary = loginEventsData.daily_summary || [];
         cachedAuthSessionEvents = authEventsData.items || [];

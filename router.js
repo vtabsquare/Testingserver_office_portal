@@ -1,4 +1,5 @@
 import { isAdminUser, isManagerOrAdmin, isL2OrL3User, isTeamLeadUser } from './utils/accessControl.js';
+import { canViewApplication, canUseFunction } from './utils/roleSettings.js';
 
 // Access denied page for non-admin users
 const renderAccessDenied = (redirectPath = '#/') => {
@@ -45,6 +46,7 @@ const loaders = {
   "/onboarding": async () => (await import('./pages/onboarding.js')).renderOnboardingPage,
   "/interns/detail": async () => (await import('./pages/internDetail.js')).renderInternDetailPage,
   "/faceauth-settings": async () => (await import('./pages/faceAuthSettings.js')).renderFaceAuthSettings,
+  "/role-settings": async () => (await import('./pages/roleSettings.js')).renderRoleSettingsPage,
 };
 
 export const router = async () => {
@@ -96,38 +98,44 @@ export const router = async () => {
   }
 
   // Access checks
-  if (path.startsWith('/employees') || path === '/team-management') {
-    if (!(isManagerOrAdmin() || isTeamLeadUser())) {
+  if (path.startsWith('/employees')) {
+    if (!canViewApplication('employees')) {
+      renderAccessDenied("#/");
+      return;
+    }
+  }
+  if (path === '/team-management') {
+    if (!canViewApplication('team_management')) {
       renderAccessDenied("#/");
       return;
     }
   }
   if (path === '/employees/bulk-upload' || path === '/employees/bulk-delete') {
-    if (!isManagerOrAdmin()) {
+    if (!canUseFunction('view_employee_directory')) {
       renderAccessDenied("#/employees");
       return;
     }
   }
   if (path === '/interns') {
-    if (!isManagerOrAdmin()) {
+    if (!canViewApplication('interns')) {
       renderAccessDenied("#/");
       return;
     }
   }
   if (path === '/time-team-timesheet') {
-    if (!(isL2OrL3User() || isTeamLeadUser())) {
+    if (!canViewApplication('time_team_timesheet')) {
       renderAccessDenied("#/time-my-timesheet");
       return;
     }
   }
   if (path === '/time-clients') {
-    if (!isL2OrL3User()) {
+    if (!canViewApplication('time_clients')) {
       renderAccessDenied("#/time-my-timesheet");
       return;
     }
   }
   if (path === '/leave-team') {
-    if (!(isL2OrL3User() || isTeamLeadUser())) {
+    if (!canViewApplication('leave_team')) {
       renderAccessDenied("#/leave-my");
       return;
     }
@@ -136,31 +144,37 @@ export const router = async () => {
     window.__leaveViewMode = "my";
   }
   if (path === '/login-settings') {
-    if (!isL2OrL3User()) {
+    if (!canViewApplication('login_settings')) {
       renderAccessDenied("#/");
       return;
     }
   }
   if (path === '/attendance-team') {
-    if (!(isL2OrL3User() || isTeamLeadUser())) {
+    if (!canViewApplication('attendance_team')) {
       renderAccessDenied("#/attendance-my");
       return;
     }
   }
   if (path === '/admin-dashboard') {
-    if (!isAdminUser()) {
+    if (!canViewApplication('admin_dashboard')) {
       renderAccessDenied("#/");
       return;
     }
   }
   if (path === '/onboarding') {
-    if (!isManagerOrAdmin()) {
+    if (!canViewApplication('onboarding')) {
       renderAccessDenied("#/");
       return;
     }
   }
   if (path === '/faceauth-settings') {
-    if (!isAdminUser()) {
+    if (!canViewApplication('faceauth_settings')) {
+      renderAccessDenied("#/");
+      return;
+    }
+  }
+  if (path === '/role-settings') {
+    if (!canViewApplication('role_settings')) {
       renderAccessDenied("#/");
       return;
     }
