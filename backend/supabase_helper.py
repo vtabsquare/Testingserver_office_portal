@@ -363,6 +363,13 @@ class _SupabaseODataAdapter:
             val = m.group(2)
             return query.ilike(field, f"%{val}%")
 
+        # startswith(field, 'value') -> ilike
+        m_starts = _re.match(r"startswith\((\S+),\s*'([^']*)'\)", cond, _re.IGNORECASE)
+        if m_starts:
+            field = m_starts.group(1)
+            val = m_starts.group(2)
+            return query.ilike(field, f"{val}%")
+
         logger.warning(f"[ODataAdapter] Unsupported filter condition: {cond}")
         return query
 
@@ -611,6 +618,53 @@ def get_employee_email(employee_id: str):
     except Exception as e:
         print(f"Error fetching email for {employee_id}: {e}")
         return None, employee_id
+
+
+def get_l2_l3_emails():
+    """Fetch email addresses of all L2 (Manager) and L3 (Admin) users.
+    Retrieves email directly from crc6f_username in the login details table.
+    Returns a list of dicts: [{"email": "...", "name": "..."}, ...]
+    """
+    try:
+        sb = _get_supabase()
+        results = []
+        
+        # 1. First, always add the fallback ADMIN_EMAIL from environment
+        admin_email = os.getenv("ADMIN_EMAIL")
+        if admin_email:
+            results.append({"email": admin_email.strip(), "name": "System Admin"})
+
+        # 2. Query all login details to avoid Supabase strict matching issues
+        resp = sb.table("crc6f_hr_login_detailses").select("*").execute()
+        if not resp.data:
+            print("[MAIL] No L2/L3 users found in login_details")
+            return results
+
+        seen_emails = {admin_email.strip().lower()} if admin_email else set()
+
+        for login in resp.data:
+            # Case-insensitive checks
+            access_level = str(login.get("crc6f_accesslevel") or "").strip().upper()
+            status = str(login.get("crc6f_user_status") or "").strip().lower()
+            
+            # Allow "active" or empty status for L2/L3 users
+            if access_level in ["L2", "L3"] and status in ["active", ""]:
+                email = str(login.get("crc6f_username") or "").strip()
+                if email and "@" in email:
+                    if email.lower() not in seen_emails:
+                        seen_emails.add(email.lower())
+                        name = str(login.get("crc6f_employeename") or "").strip() or "Admin/Manager"
+                        results.append({"email": email, "name": name})
+
+        print(f"[MAIL] Found {len(results)} L2/L3 email recipients")
+        return results
+    except Exception as e:
+        print(f"[MAIL] Error fetching L2/L3 emails: {e}")
+        # Return fallback on error
+        admin_email = os.getenv("ADMIN_EMAIL")
+        if admin_email:
+            return [{"email": admin_email.strip(), "name": "System Admin"}]
+        return []
 
 
 # -------------------- Query helpers (Supabase-native) --------------------

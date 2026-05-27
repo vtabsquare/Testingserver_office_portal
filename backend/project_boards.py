@@ -241,6 +241,7 @@ F_NO_TASKS = "crc6f_nooftasks"
 F_NO_MEMBERS = "crc6f_noofmembers"
 F_PROJECT_ID = "crc6f_projectid"
 F_GUID = "crc6f_hr_projectdetailsid"
+F_STATUS = "crc6f_boardstatus"
 
 BOARD_RPT_MAP = {
     F_NO_TASKS: "crc6f_RPT_nooftasks",
@@ -333,7 +334,7 @@ def get_boards(project_code):
         url = (
             f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_BOARDS}"
             f"?$filter={F_PROJECT_ID} eq '{project_code}'"
-            f"&$select={F_GUID},{F_BOARD_ID},{F_BOARD_NAME},{F_DESC},{F_PROJECT_ID}"
+            f"&$select={F_GUID},{F_BOARD_ID},{F_BOARD_NAME},{F_DESC},{F_PROJECT_ID},{F_STATUS}"
         )
         res = get_dataverse_session().get(url, headers=hdr, timeout=15)
         if not res.ok:
@@ -392,6 +393,7 @@ def get_boards(project_code):
                 "board_id": board_id,
                 "board_name": r.get(F_BOARD_NAME),
                 "board_description": r.get(F_DESC),
+                "status": r.get(F_STATUS) or "Active",
                 "no_of_tasks": no_of_tasks,
                 "no_of_members": no_of_members,
                 "project_id": r.get(F_PROJECT_ID),
@@ -433,6 +435,7 @@ def add_board(project_code):
             F_BOARD_ID: board_id,
             F_BOARD_NAME: name,
             F_DESC: body.get("board_description"),
+            F_STATUS: body.get("status") or "Active",
             F_NO_TASKS: str(body.get("no_of_tasks", 0)),
             F_NO_MEMBERS: str(body.get("no_of_members", 0)),
             F_PROJECT_ID: project_code,
@@ -472,6 +475,8 @@ def update_board(guid):
             data[F_BOARD_NAME] = body["board_name"]
         if "board_description" in body:
             data[F_DESC] = body["board_description"]
+        if "status" in body:
+            data[F_STATUS] = body["status"]
         if "no_of_tasks" in body:
             data[F_NO_TASKS] = str(body["no_of_tasks"])
         if "no_of_members" in body:

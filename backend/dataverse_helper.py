@@ -19,6 +19,7 @@ from supabase_helper import (
     update_record_by_alt_key,
     get_employee_name,
     get_employee_email,
+    get_l2_l3_emails,
     get_access_token,
     get_dataverse_session,
     get_supabase,

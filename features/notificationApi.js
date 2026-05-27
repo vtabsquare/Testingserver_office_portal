@@ -33,18 +33,60 @@ export const updateNotificationBadge = async () => {
         const isAdmin = isAdminUser();
         
         let count = 0;
+        let leavesCount = 0;
+        let timesheetsCount = 0;
+        let attendanceCount = 0;
+        const apiBase = window.API_BASE_URL || window.location.origin;
+
         if (isAdmin) {
             const pendingLeaves = await fetchPendingLeaves();
             const compOffAll = await fetchCompOffRequests({ status: 'Pending' });
             const pendingCompOff = compOffAll.filter(r => (r.status || 'pending').toLowerCase() === 'pending');
-            count = (pendingLeaves?.length || 0) + (pendingCompOff.length || 0);
+            leavesCount = (pendingLeaves?.length || 0) + (pendingCompOff.length || 0);
+
+            try {
+                const tsRes = await fetch(`${apiBase}/api/time-tracker/timesheet/submissions?status=pending`);
+                const tsData = await tsRes.json();
+                timesheetsCount = tsData.success ? (tsData.submissions?.length || 0) : 0;
+            } catch(e) { console.warn('Failed to fetch pending timesheets', e); }
+
+            try {
+                const attRes = await fetch(`${apiBase}/api/attendance/submissions?status=pending`);
+                const attData = await attRes.json();
+                attendanceCount = attData.success ? (attData.submissions?.length || 0) : 0;
+            } catch(e) { console.warn('Failed to fetch pending attendance', e); }
+
+            count = leavesCount + timesheetsCount + attendanceCount;
         } else {
             const allLeaves = await fetchEmployeeLeaves(employeeId);
             const myPendingLeaves = allLeaves.filter(l => l.status?.toLowerCase() === 'pending');
             const compOffAll = await fetchCompOffRequests({ status: 'Pending', employeeId });
             const myPendingCompOff = compOffAll.filter(r => String(r.employeeId).toUpperCase() === String(employeeId).toUpperCase() && (r.status || 'pending').toLowerCase() === 'pending');
-            count = (myPendingLeaves.length || 0) + (myPendingCompOff.length || 0);
+            leavesCount = (myPendingLeaves.length || 0) + (myPendingCompOff.length || 0);
+
+            try {
+                const tsRes = await fetch(`${apiBase}/api/time-tracker/timesheet/submissions?employee_id=${employeeId}&status=pending`);
+                const tsData = await tsRes.json();
+                timesheetsCount = tsData.success ? (tsData.submissions?.length || 0) : 0;
+            } catch(e) { console.warn('Failed to fetch pending timesheets', e); }
+
+            try {
+                const attRes = await fetch(`${apiBase}/api/attendance/submissions?employee_id=${employeeId}&status=pending`);
+                const attData = await attRes.json();
+                attendanceCount = attData.success ? (attData.submissions?.length || 0) : 0;
+            } catch(e) { console.warn('Failed to fetch pending attendance', e); }
+
+            count = leavesCount + timesheetsCount + attendanceCount;
         }
+
+        // Update dropdown breakdown
+        const leavesElem = document.getElementById('notif-leaves');
+        const tsElem = document.getElementById('notif-timesheets');
+        const attElem = document.getElementById('notif-attendance');
+        
+        if (leavesElem) leavesElem.textContent = leavesCount;
+        if (tsElem) tsElem.textContent = timesheetsCount;
+        if (attElem) attElem.textContent = attendanceCount;
 
         // Update badge
         const badge = document.getElementById('notification-badge');

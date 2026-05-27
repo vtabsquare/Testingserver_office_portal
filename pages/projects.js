@@ -2749,11 +2749,12 @@ function renderBoardsTab(projectId, canManageOverride = null, canCreateBoardsOve
             <th>Board Name</th>
             <th>No. of Tasks</th>
             <th>No. of Members</th>
+            <th>Status</th>
             ${canManage ? '<th style="text-align:right;">Actions</th>' : ""}
           </tr>
         </thead>
         <tbody>
-          <tr><td colspan="4" class="placeholder-text">Loading...</td></tr>
+          <tr><td colspan="5" class="placeholder-text">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -2799,9 +2800,25 @@ function renderBoardsTable(boards, projectId, canManage) {
   if (!tbody) return;
 
   if (!boards || boards.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" class="placeholder-text">No boards</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="placeholder-text">No boards</td></tr>`;
     return;
   }
+
+  const boardStatusDropdown = (b, canManage) => {
+    const status = b.status || "Active";
+    const options = PROJECT_STATUS_OPTIONS.map(
+      (opt) => `<option value="${opt}" ${status === opt ? "selected" : ""}>${opt}</option>`
+    ).join("");
+    return `
+      <select class="project-status-select board-status-select ${projectStatusClass(status)}"
+              data-guid="${b.guid}"
+              data-current-status="${status}"
+              ${!canManage ? 'disabled="disabled"' : ''}
+              title="Change board status">
+        ${options}
+      </select>
+    `;
+  };
 
   tbody.innerHTML = boards
     .map(
@@ -2814,6 +2831,7 @@ function renderBoardsTable(boards, projectId, canManage) {
           </td>
           <td>${b.no_of_tasks || 0}</td>
           <td>${b.no_of_members || 0}</td>
+          <td>${boardStatusDropdown(b, canManage)}</td>
           ${canManage
           ? `<td style="text-align:right;">
             <button class="icon-btn board-edit" data-guid="${b.guid}" title="Edit">
@@ -2843,6 +2861,41 @@ function renderBoardsTable(boards, projectId, canManage) {
       )}&tab=crm&board=${encodeURIComponent(
         boardCode
       )}&boardName=${encodeURIComponent(boardName)}`;
+    });
+  });
+
+  // Attach status change events
+  document.querySelectorAll(".board-status-select").forEach((select) => {
+    select.addEventListener("click", (e) => e.stopPropagation());
+    select.addEventListener("change", async (e) => {
+      e.stopPropagation();
+      const el = e.currentTarget;
+      const guid = (el.getAttribute("data-guid") || "").trim();
+      const previous = el.getAttribute("data-current-status") || "Active";
+      const nextStatus = el.value;
+
+      if (!guid || !nextStatus || nextStatus === previous) {
+        el.value = previous;
+        return;
+      }
+
+      el.setAttribute("disabled", "disabled");
+      try {
+        const res = await fetch(`${API_ROOT}/api/boards/${encodeURIComponent(guid)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: nextStatus }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || out.success === false) {
+          throw new Error(out.error || "Failed to update board status");
+        }
+        await fetchBoards(projectId, canManage);
+      } catch (err) {
+        alert(err?.message || "Failed to update board status");
+        el.value = previous;
+        el.removeAttribute("disabled");
+      }
     });
   });
 

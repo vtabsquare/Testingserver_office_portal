@@ -4632,7 +4632,7 @@ const loadInboxLeaves = async () => {
             const showActions = currentInboxTab === 'awaiting' && isAdmin;
             const isRejected = status.toLowerCase() === 'rejected';
             const isApproved = status.toLowerCase() === 'approved';
-            const isCompOff = leave._source === 'compoff' || (String(leaveType).toLowerCase() === 'comp off');
+            const isCompOff = leave._source === 'compoff' || leave.request_type === 'compoff';
 
             return `
                 <div class="inbox-item">
@@ -4663,10 +4663,10 @@ const loadInboxLeaves = async () => {
                     </div>
                     ${showActions ? `
                         <div class="inbox-item-actions">
-                            <button class="btn btn-success btn-sm inbox-approve-btn" data-leave-id="${leaveId}" data-source="${isCompOff ? 'compoff' : 'leave'}" data-compoff-id="${isCompOff ? (leave._raw?.id || '') : ''}">
+                            <button class="btn btn-success btn-sm inbox-approve-btn" data-leave-id="${leaveId}" data-source="${isCompOff ? 'compoff' : 'leave'}" data-compoff-id="${isCompOff ? (leave._raw?.id || leave.compoff_id || leave.id || '') : ''}">
                                 <i class="fa-solid fa-check"></i> Approve
                             </button>
-                            <button class="btn btn-danger btn-sm inbox-reject-btn" data-leave-id="${leaveId}" data-source="${isCompOff ? 'compoff' : 'leave'}" data-compoff-id="${isCompOff ? (leave._raw?.id || '') : ''}">
+                            <button class="btn btn-danger btn-sm inbox-reject-btn" data-leave-id="${leaveId}" data-source="${isCompOff ? 'compoff' : 'leave'}" data-compoff-id="${isCompOff ? (leave._raw?.id || leave.compoff_id || leave.id || '') : ''}">
                                 <i class="fa-solid fa-times"></i> Reject
                             </button>
                         </div>
