@@ -47,13 +47,13 @@ export const updateNotificationBadge = async () => {
             try {
                 const tsRes = await fetch(`${apiBase}/api/time-tracker/timesheet/submissions?status=pending`);
                 const tsData = await tsRes.json();
-                timesheetsCount = tsData.success ? (tsData.submissions?.length || 0) : 0;
+                timesheetsCount = tsData.success ? (tsData.items?.length || 0) : 0;
             } catch(e) { console.warn('Failed to fetch pending timesheets', e); }
 
             try {
                 const attRes = await fetch(`${apiBase}/api/attendance/submissions?status=pending`);
                 const attData = await attRes.json();
-                attendanceCount = attData.success ? (attData.submissions?.length || 0) : 0;
+                attendanceCount = attData.success ? (attData.items?.length || 0) : 0;
             } catch(e) { console.warn('Failed to fetch pending attendance', e); }
 
             count = leavesCount + timesheetsCount + attendanceCount;
@@ -67,13 +67,13 @@ export const updateNotificationBadge = async () => {
             try {
                 const tsRes = await fetch(`${apiBase}/api/time-tracker/timesheet/submissions?employee_id=${employeeId}&status=pending`);
                 const tsData = await tsRes.json();
-                timesheetsCount = tsData.success ? (tsData.submissions?.length || 0) : 0;
+                timesheetsCount = tsData.success ? (tsData.items?.length || 0) : 0;
             } catch(e) { console.warn('Failed to fetch pending timesheets', e); }
 
             try {
                 const attRes = await fetch(`${apiBase}/api/attendance/submissions?employee_id=${employeeId}&status=pending`);
                 const attData = await attRes.json();
-                attendanceCount = attData.success ? (attData.submissions?.length || 0) : 0;
+                attendanceCount = attData.success ? (attData.items?.length || 0) : 0;
             } catch(e) { console.warn('Failed to fetch pending attendance', e); }
 
             count = leavesCount + timesheetsCount + attendanceCount;

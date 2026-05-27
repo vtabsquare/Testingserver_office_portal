@@ -3956,7 +3956,7 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
 
             <div class="form-field">
               <label class="form-label" for="tk-duetime">Due Time</label>
-              <input class="input-control" type="time" id="tk-duetime" />
+              <input class="input-control" type="text" id="tk-duetime" placeholder="Select time" />
             </div>
           </div>
         </div>
@@ -3979,6 +3979,16 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
   assignedInput.readOnly = true; // ❌ user cannot change date
 
   document.getElementById("tk-due").setAttribute("min", today);
+
+  // Initialize Flatpickr for Due Time
+  if (window.flatpickr) {
+    flatpickr("#tk-duetime", {
+      enableTime: true,
+      noCalendar: true,
+      dateFormat: "H:i",
+      time_24hr: true
+    });
+  }
 
   // =========================
   // Load Contributors
@@ -4193,6 +4203,11 @@ async function openTaskDetailsPage(projectId, taskId) {
     }" readonly class="readonly-input">
         </div>
 
+        <div class="task-detail-group"><label>Due Time</label>
+          <input type="text" id="td-duetime" value="${t.due_time || ""
+    }" readonly class="readonly-input">
+        </div>
+
       </div>
 
       <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
@@ -4286,6 +4301,15 @@ async function openTaskDetailsPage(projectId, taskId) {
       const today = new Date().toISOString().split("T")[0];
       document.getElementById("td-due").setAttribute("min", today);
 
+      if (window.flatpickr) {
+        flatpickr("#td-duetime", {
+          enableTime: true,
+          noCalendar: true,
+          dateFormat: "H:i",
+          time_24hr: true
+        });
+      }
+
       editBtn.textContent = "Save";
     } else {
       const today = new Date().toISOString().split("T")[0];
@@ -4308,6 +4332,7 @@ async function openTaskDetailsPage(projectId, taskId) {
         task_status: document.getElementById("td-status").value,
         assigned_to: assignedTo,
         due_date: dueDate,
+        due_time: document.getElementById("td-duetime").value || null,
       };
 
       const resPatch = await fetch(`${API_BASE}/api/tasks/${taskId}`, {
