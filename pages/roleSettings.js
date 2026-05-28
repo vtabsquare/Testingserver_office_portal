@@ -4,6 +4,7 @@ import { getPageContentHTML } from '../utils.js';
 import { isAdminUser } from '../utils/accessControl.js';
 import { canUseFunction, getRolePermissions } from '../utils/roleSettings.js';
 import { fetchAllRolePermissions, updateRolePermission, seedDefaultPermissions, fetchCustomRoles, createCustomRole, deleteCustomRole } from '../features/roleSettingsApi.js';
+import { renderSettingsLayout } from '../components/settingsLayout.js';
 
 let cachedPermissions = {};
 let activeRole = 'L1';
@@ -27,8 +28,7 @@ const APPLICATIONS_GROUPS = [
             { key: 'home', name: 'Home', icon: 'fa-house', desc: 'Main landing page' },
             { key: 'admin_dashboard', name: 'Admin Dashboard', icon: 'fa-chart-line', desc: 'Overview of system metrics' },
             { key: 'inbox', name: 'Inbox', icon: 'fa-inbox', desc: 'Centralized messages and approvals' },
-            { key: 'onboarding', name: 'Onboarding', icon: 'fa-user-plus', desc: 'New employee onboarding process' },
-            { key: 'team_management', name: 'Team Management', icon: 'fa-sitemap', desc: 'View and manage team structure' }
+            { key: 'onboarding', name: 'Onboarding', icon: 'fa-user-plus', desc: 'New employee onboarding process' }
         ]
     },
     {
@@ -37,7 +37,8 @@ const APPLICATIONS_GROUPS = [
         items: [
             { key: 'employee', name: 'Employee (Group)', icon: 'fa-users', desc: 'Parent menu for directory' },
             { key: 'employees', name: 'Employees List', icon: 'fa-address-card', desc: 'Full employee directory' },
-            { key: 'interns', name: 'Interns List', icon: 'fa-user-graduate', desc: 'Directory of interns' }
+            { key: 'interns', name: 'Interns List', icon: 'fa-user-graduate', desc: 'Directory of interns' },
+            { key: 'team_management', name: 'Team Management', icon: 'fa-sitemap', desc: 'View and manage team structure' }
         ]
     },
     {
@@ -96,7 +97,8 @@ const FUNCTIONS_GROUPS = [
         icon: 'fa-solid fa-address-book',
         items: [
             { key: 'view_employee_directory', name: 'View Employee Directory', icon: 'fa-address-card', desc: 'Access full employee profiles' },
-            { key: 'view_interns', name: 'View Interns', icon: 'fa-user-graduate', desc: 'Access intern profiles' }
+            { key: 'view_interns', name: 'View Interns', icon: 'fa-user-graduate', desc: 'Access intern profiles' },
+            { key: 'manage_team_hierarchy', name: 'Manage Team Hierarchy', icon: 'fa-sitemap', desc: 'Edit team structure and managers' }
         ]
     },
     {
@@ -319,18 +321,18 @@ export async function renderRoleSettingsPage() {
     if (!container) return;
     
     if (!canUseFunction('manage_role_settings')) {
-        container.innerHTML = getPageContentHTML(`
+        container.innerHTML = getPageContentHTML('Settings', renderSettingsLayout('role-settings', `
             <div class="card" style="padding: 40px; text-align: center;">
                 <i class="fa-solid fa-lock" style="font-size: 48px; color: #e74c3c; margin-bottom: 16px;"></i>
                 <h2>Access Denied</h2>
                 <p>Only administrators can access Role Settings.</p>
             </div>
-        `);
+        `));
         return;
     }
     
     // Show loading state
-    container.innerHTML = getPageContentHTML('Role Settings', `
+    container.innerHTML = getPageContentHTML('Settings', renderSettingsLayout('role-settings', `
         <div class="card">
             <h3><i class="fa-solid fa-user-shield"></i> Role Settings</h3>
             <p class="allocation-description">Manage access to applications and functions across different roles.</p>
@@ -339,7 +341,7 @@ export async function renderRoleSettingsPage() {
                 <p style="margin-top: 12px; color: var(--text-secondary);">Loading permissions...</p>
             </div>
         </div>
-    `);
+    `));
     
     // Fetch data
     const [apiData, customRoles] = await Promise.all([
@@ -352,7 +354,7 @@ export async function renderRoleSettingsPage() {
     
     const renderFullPage = () => {
         const isAdmin = activeRole === 'L3';
-        container.innerHTML = getPageContentHTML(`
+        container.innerHTML = getPageContentHTML('Settings', renderSettingsLayout('role-settings', `
             <div class="card role-settings-card">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
                     <div>
@@ -383,7 +385,7 @@ export async function renderRoleSettingsPage() {
                     ${renderContent()}
                 </div>
             </div>
-        `);
+        `));
         
         // Tab clicks
         document.querySelectorAll('.role-tab:not(#add-custom-role-btn)').forEach(tab => {

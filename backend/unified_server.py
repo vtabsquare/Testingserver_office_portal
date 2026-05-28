@@ -8298,7 +8298,20 @@ def get_admin_attendance_monitoring_today():
                         if vals:
                             access_level = _normalize_access_level(vals[0].get('crc6f_accesslevel'))
 
-                return access_level in ('L3', 'L4')
+                if access_level in ('L3', 'L4'):
+                    return True
+
+                if access_level:
+                    try:
+                        from supabase_helper import get_supabase
+                        sb = get_supabase()
+                        res = sb.table('role_permissions').select('permission_key').eq('role_key', access_level).eq('enabled', True).execute()
+                        if any(r.get('permission_key') in ('admin_dashboard', 'view_admin_dashboard') for r in res.data):
+                            return True
+                    except Exception as e:
+                        print(f"Supabase check failed: {e}")
+
+                return False
             except Exception:
                 return False
 
@@ -8502,7 +8515,7 @@ def list_employees():
         entity_set = get_employee_entity_set(token)
         field_map = get_field_map(entity_set)
         print(f"   [ORG] Entity Set: {entity_set}")
-        print(f"   🗺️ Field Map: {field_map}")
+        print(f"   [MAP] Field Map: {field_map}")
         print(f"   [DATE] DOJ Field: {field_map.get('doj')}")
         print(f"   [WARN] DEBUGGING: About to process employee records...")
         import sys
@@ -10396,7 +10409,7 @@ def list_hierarchy():
         if token:
             try:
                 resp = get_dataverse_session().get(url, headers=headers, timeout=15)
-                print(f"   \u21a9\ufe0e Dataverse status: {resp.status_code}")
+                print(f"   -> Dataverse status: {resp.status_code}")
                 if resp.status_code == 200:
                     rows = resp.json().get('value', [])
                 else:
@@ -10409,7 +10422,7 @@ def list_hierarchy():
         if not rows:
             local_rows = _load_team_hierarchy_local()
             if local_rows:
-                print(f"\u21a9\ufe0e Using local hierarchy cache with {len(local_rows)} rows")
+                print(f"-> Using local hierarchy cache with {len(local_rows)} rows")
                 # Local rows are already in display format; adapt to serialization path
                 # Convert to row dicts compatible with _serialize_hierarchy_row
                 rows = [
@@ -10424,7 +10437,7 @@ def list_hierarchy():
                 used_fallback = True
             else:
                 # No data anywhere
-                print("\u2139 No hierarchy data available from Dataverse or local cache")
+                print("(i) No hierarchy data available from Dataverse or local cache")
                 rows = []
 
         employee_ids = set()
@@ -16366,11 +16379,11 @@ def seed_role_permissions():
         defaults = {
             'L3': {
                 'applications': ['home', 'admin_dashboard', 'employee', 'employees', 'interns', 'team_management', 'inbox', 'onboarding', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_clients', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'assets', 'settings', 'leave_settings', 'login_settings', 'faceauth_settings', 'role_settings', 'faceauth_admin'],
-                'functions': ['view_admin_dashboard', 'view_employee_directory', 'view_interns', 'manage_onboarding', 'view_team_timesheet', 'manage_clients', 'view_team_attendance', 'view_team_leaves', 'manage_leave_settings', 'manage_login_settings', 'manage_faceauth_settings', 'manage_role_settings']
+                'functions': ['view_admin_dashboard', 'view_employee_directory', 'view_interns', 'manage_onboarding', 'view_team_timesheet', 'manage_clients', 'view_team_attendance', 'view_team_leaves', 'manage_leave_settings', 'manage_login_settings', 'manage_faceauth_settings', 'manage_role_settings', 'manage_team_hierarchy']
             },
             'L2': {
                 'applications': ['home', 'employee', 'employees', 'interns', 'inbox', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_clients', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'assets'],
-                'functions': ['view_employee_directory', 'view_interns', 'view_team_timesheet', 'manage_clients', 'view_team_attendance', 'view_team_leaves']
+                'functions': ['view_employee_directory', 'view_interns', 'view_team_timesheet', 'manage_clients', 'view_team_attendance', 'view_team_leaves', 'manage_team_hierarchy']
             },
             'L4': {
                 'applications': ['home', 'employee', 'employees', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'assets'],

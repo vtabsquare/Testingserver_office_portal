@@ -1082,17 +1082,27 @@ def admin_active_tasks_snapshot():
                         return _normalize_access_level(values[0].get("crc6f_accesslevel"))
                 return ""
 
+            level = None
             if requester_email:
                 safe_email = requester_email.replace("'", "''")
                 level = _fetch_level(f"crc6f_username eq '{safe_email}'")
-                if level in ("L3", "L4"):
-                    return True
 
-            if requester_employee_id:
+            if not level and requester_employee_id:
                 safe_emp = requester_employee_id.replace("'", "''")
                 level = _fetch_level(f"crc6f_userid eq '{safe_emp}'")
-                if level in ("L3", "L4"):
-                    return True
+
+            if level in ("L3", "L4"):
+                return True
+
+            if level:
+                try:
+                    from supabase_helper import get_supabase
+                    sb = get_supabase()
+                    res = sb.table('role_permissions').select('permission_key').eq('role_key', level).eq('enabled', True).execute()
+                    if any(r.get('permission_key') in ('admin_dashboard', 'view_admin_dashboard') for r in res.data):
+                        return True
+                except Exception as e:
+                    print(f"Supabase check failed: {e}")
 
             return False
 

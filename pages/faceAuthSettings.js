@@ -5,6 +5,7 @@ import { getPageContentHTML } from '../utils.js';
 import { isAdminUser } from '../utils/accessControl.js';
 import { canUseFunction } from '../utils/roleSettings.js';
 import { API_BASE_URL } from '../config.js';
+import { renderSettingsLayout } from '../components/settingsLayout.js';
 
 let cachedEmployees = [];
 let isLoading = false;
@@ -191,18 +192,18 @@ export async function renderFaceAuthSettings() {
     
     // Admin-only access
     if (!canUseFunction('manage_faceauth_settings')) {
-        container.innerHTML = getPageContentHTML(`
+        container.innerHTML = getPageContentHTML('Settings', renderSettingsLayout('faceauth-settings', `
             <div class="card" style="padding: 40px; text-align: center;">
                 <i class="fa-solid fa-lock" style="font-size: 48px; color: #e74c3c; margin-bottom: 16px;"></i>
                 <h2>Access Denied</h2>
                 <p>Only administrators can access FaceAuth settings.</p>
             </div>
-        `);
+        `));
         return;
     }
     
     // Show loading state
-    container.innerHTML = getPageContentHTML(`
+    container.innerHTML = getPageContentHTML('Settings', renderSettingsLayout('faceauth-settings', `
         <div class="card">
             <h3><i class="fa-solid fa-shield-halved"></i> FaceAuth Settings</h3>
             <p class="allocation-description">Manage face verification requirements for employees.</p>
@@ -211,7 +212,7 @@ export async function renderFaceAuthSettings() {
                 <p style="margin-top: 12px; color: var(--text-secondary);">Loading employees...</p>
             </div>
         </div>
-    `);
+    `));
     
     // Fetch data
     isLoading = true;
@@ -219,7 +220,7 @@ export async function renderFaceAuthSettings() {
     isLoading = false;
     
     // Render full page
-    container.innerHTML = getPageContentHTML(`
+    container.innerHTML = getPageContentHTML('Settings', renderSettingsLayout('faceauth-settings', `
         <div class="card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                 <div>
@@ -248,7 +249,7 @@ export async function renderFaceAuthSettings() {
                 ${renderTable(cachedEmployees)}
             </div>
         </div>
-    `);
+    `));
     
     // Add event listeners
     document.addEventListener('click', handleToggleClick);

@@ -6,8 +6,9 @@ import { renderModal, closeModal } from '../components/modal.js';
 import { listLoginAccounts, createLoginAccount, updateLoginAccount, deleteLoginAccount, fetchLoginEvents, updateLoginActivity, fetchAuthSessionEvents, triggerForceLogout } from '../features/loginSettingsApi.js';
 import { fetchCustomRoles } from '../features/roleSettingsApi.js';
 import { listAllEmployees } from '../features/employeeApi.js';
-import { isAdminUser, isL2OrL3User } from '../utils/accessControl.js';
+import { getUserAccessContext } from '../utils/accessControl.js';
 import { canUseFunction } from '../utils/roleSettings.js';
+import { renderSettingsLayout } from '../components/settingsLayout.js';
 
 let currentLoginSettingsView = 'accounts';
 let cachedLoginAccounts = [];
@@ -926,7 +927,7 @@ export const renderLoginSettingsPage = async () => {
                 </div>
             </div>
         `;
-        document.getElementById('app-content').innerHTML = getPageContentHTML('Login Settings', content);
+        document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('login-settings', content));
         return;
     }
 
@@ -947,7 +948,7 @@ export const renderLoginSettingsPage = async () => {
         </div>
     `;
 
-    document.getElementById('app-content').innerHTML = getPageContentHTML('Login Settings', loadingContent, controls);
+    document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('login-settings', loadingContent), controls);
 
     try {
         // Fetch login accounts and login events in parallel
@@ -967,7 +968,7 @@ export const renderLoginSettingsPage = async () => {
         buildLoginAccountNameIndex(cachedLoginAccounts, cachedEmployeeDirectory);
 
         const layoutHTML = buildLoginSettingsLayout(cachedLoginAccounts, cachedLoginActivitySummary, cachedAuthSessionEvents);
-        document.getElementById('app-content').innerHTML = getPageContentHTML('Login Settings', layoutHTML, controls);
+        document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('login-settings', layoutHTML), controls);
 
         const addBtn = document.getElementById('add-login-account-btn');
         if (addBtn) {
@@ -987,6 +988,6 @@ export const renderLoginSettingsPage = async () => {
                 <p class="placeholder-text error-message">Error loading login accounts.</p>
             </div>
         `;
-        document.getElementById('app-content').innerHTML = getPageContentHTML('Login Settings', errorContent, controls);
+        document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('login-settings', errorContent), controls);
     }
 };

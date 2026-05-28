@@ -190,7 +190,10 @@ export const router = async () => {
 };
 
 const updateActiveNav = (path) => {
-  const page = (path === '/') ? 'home' : path.slice(1);
+  let page = (path === '/') ? 'home' : path.slice(1);
+  if (['leave-settings', 'login-settings', 'faceauth-settings', 'role-settings'].includes(page)) {
+    page = 'settings';
+  }
 
   document.querySelectorAll('.nav-group').forEach((group) => {
     group.classList.remove('open');
