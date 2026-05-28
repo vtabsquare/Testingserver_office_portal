@@ -2138,12 +2138,37 @@ def _resolve_employee_identifier(raw_identifier: str, token: str = None) -> str:
 
 
 def calculate_leave_days(start_date, end_date):
-    """Calculate number of days between start and end date"""
+    """Calculate leave days excluding Sundays."""
     start = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
-    days = (end - start).days + 1
-    print(f"   [DATE] Calculated Leave Days: {days} (from {start_date} to {end_date})")
+    if end < start:
+        raise ValueError("end_date cannot be earlier than start_date")
+
+    days = 0
+    cursor = start
+    while cursor <= end:
+        # Sunday is weekly day off and should not be charged as leave.
+        if cursor.weekday() != 6:
+            days += 1
+        cursor += timedelta(days=1)
+
+    print(f"   [DATE] Calculated Leave Days (excluding Sundays): {days} (from {start_date} to {end_date})")
     return days
+
+
+def _date_for_nth_chargeable_leave_day(start_dt, chargeable_days):
+    """Return date for Nth non-Sunday day starting from start_dt (inclusive)."""
+    if chargeable_days <= 0:
+        return start_dt
+
+    remaining = int(chargeable_days)
+    cursor = start_dt
+    while True:
+        if cursor.weekday() != 6:
+            remaining -= 1
+            if remaining == 0:
+                return cursor
+        cursor = cursor + timedelta(days=1)
 
 
 def calculate_experience(doj_str):
@@ -5925,6 +5950,10 @@ def get_monthly_attendance(employee_id, year, month):
                         continue
                     cur = rng_start
                     while cur <= rng_end:
+                        if cur.weekday() == 6:
+                            # Sunday is day off; do not overlay leave on attendance for this day.
+                            cur = cur + timedelta(days=1)
+                            continue
                         day_idx = cur.day
                         # Create or update day's record
                         rec = by_day.get(day_idx)
@@ -6260,6 +6289,11 @@ def apply_leave():
 
         leave_id = generate_leave_id()
         leave_days = calculate_leave_days(start_date, end_date)
+        if leave_days <= 0:
+            return jsonify({
+                "error": "Selected date range contains only weekly day-off (Sunday). No leave will be deducted.",
+                "leave_days": leave_days
+            }), 400
 
         token = get_access_token()
         balance_row = None
@@ -6287,7 +6321,7 @@ def apply_leave():
 
             if paid_days > 0:
                 paid_leave_id = leave_id
-                paid_end_dt = start_dt + timedelta(days=int(paid_days) - 1)
+                paid_end_dt = _date_for_nth_chargeable_leave_day(start_dt, int(paid_days))
                 record_data_paid = {
                     "crc6f_leaveid": paid_leave_id,
                     "crc6f_leavetype": leave_type,
@@ -6312,7 +6346,7 @@ def apply_leave():
 
             if unpaid_days > 0:
                 unpaid_leave_id = generate_leave_id()
-                unpaid_start_dt = start_dt + timedelta(days=int(paid_days))
+                unpaid_start_dt = paid_end_dt + timedelta(days=1) if paid_days > 0 else start_dt
                 record_data_unpaid = {
                     "crc6f_leaveid": unpaid_leave_id,
                     "crc6f_leavetype": leave_type,

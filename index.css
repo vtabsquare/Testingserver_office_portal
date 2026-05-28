@@ -5923,6 +5923,21 @@ body.dark-theme .task-link {
   box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
 }
 
+.status-do {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  padding: 8px 12px;
+  min-height: 38px;
+  border-radius: 6px;
+  background: #64748b;
+  color: white;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+}
+
 .leave-lop-text {
   font-size: 9px;
   font-weight: 600;
@@ -7271,6 +7286,11 @@ body.dark-theme .task-link {
 .legend-code-inl {
   color: #f97316;
   /* INL – orange */
+}
+
+.legend-code-do {
+  color: #64748b;
+  /* DO – day off */
 }
 
 .leave-code {

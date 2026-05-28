@@ -45,13 +45,20 @@ const isHolidayDate = (year, month, day) => {
     });
 };
 
+const isSundayDate = (year, month, day) => new Date(year, month, day).getDay() === 0;
+
 const renderAttendanceTrackerPage = async (mode) => {
     const date = state.currentAttendanceDate;
     const monthName = date.toLocaleString('default', { month: 'long' });
     const year = date.getFullYear();
 
-    const getStatusCellHTML = (dayData, isHoliday = false) => {
+    const getStatusCellHTML = (dayData, isHoliday = false, isSunday = false) => {
         if (!dayData) {
+            if (isSunday) {
+                return `
+                    <div class="status-cell status-do">DO</div>
+                `;
+            }
             // If it's a holiday but no attendance data, show INL
             if (isHoliday) {
                 return `
@@ -159,6 +166,7 @@ const renderAttendanceTrackerPage = async (mode) => {
         employeeIds.forEach(empId => {
             const empData = state.attendanceData[empId] || {};
             for (let day = 1; day <= daysInMonth; day++) {
+                if (isSundayDate(year, date.getMonth(), day)) continue;
                 const dayData = empData[day];
                 if (dayData) {
                     if (dayData.leaveType) {
@@ -192,7 +200,8 @@ const renderAttendanceTrackerPage = async (mode) => {
                 const dayNum = i + 1;
                 const dayData = empData[dayNum];
                 const isHoliday = isHolidayDate(year, date.getMonth(), dayNum);
-                const cellHTML = getStatusCellHTML(dayData, isHoliday);
+                const isSunday = isSundayDate(year, date.getMonth(), dayNum);
+                const cellHTML = getStatusCellHTML(dayData, isHoliday, isSunday);
                 return `<td class="team-day-cell" data-emp-id="${empId}" data-day="${dayNum}">${cellHTML}</td>`;
             }).join('');
 
@@ -250,6 +259,7 @@ const renderAttendanceTrackerPage = async (mode) => {
                 <div class="legend-item"><span class="legend-code legend-code-cl">CL</span><span>Casual leave</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-sl">SL</span><span>Sick leave</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-co">CO</span><span>Comp off</span></div>
+                <div class="legend-item"><span class="legend-code legend-code-do">DO</span><span>Sunday day off</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-inl">INL</span><span>Indian national holiday</span></div>
             </div>
             
@@ -274,7 +284,8 @@ const renderAttendanceTrackerPage = async (mode) => {
             const dayData = myAttendance[i];
             const isSelected = i === state.selectedAttendanceDay;
             const isHoliday = isHolidayDate(year, month, i);
-            const statusHTML = getStatusCellHTML(dayData, isHoliday);
+            const isSunday = isSundayDate(year, month, i);
+            const statusHTML = getStatusCellHTML(dayData, isHoliday, isSunday);
 
             calendarCells.push(`
                 <div class="calendar-day ${isSelected ? 'selected' : ''}" data-day="${i}">
@@ -510,6 +521,7 @@ const renderAttendanceTrackerPage = async (mode) => {
                 <div class="legend-item"><span class="legend-code legend-code-cl">CL</span><span>Casual leave</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-sl">SL</span><span>Sick leave</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-co">CO</span><span>Comp off</span></div>
+                <div class="legend-item"><span class="legend-code legend-code-do">DO</span><span>Sunday day off</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-inl">INL</span><span>Indian national holiday</span></div>
             </div>
             
@@ -769,6 +781,10 @@ const exportTeamAttendanceToCSV = (monthName, year) => {
 
         // Add status for each day
         for (let day = 1; day <= daysInMonth; day++) {
+            if (isSundayDate(year, date.getMonth(), day)) {
+                row.push('DO');
+                continue;
+            }
             const dayData = empData[day];
             let status = '';
             if (dayData) {
