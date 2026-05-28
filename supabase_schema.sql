@@ -794,5 +794,26 @@ CREATE POLICY "Service role has full access to auth_session_policy" ON auth_sess
 CREATE POLICY "Service role has full access to crc6f_hr_projectcolumns" ON crc6f_hr_projectcolumns FOR ALL USING (true);
 
 -- ============================================================================
+-- 27. ROLE PERMISSIONS (role_permissions)
+-- Admin-controlled access settings for applications and functions
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS role_permissions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    role_key VARCHAR(10) NOT NULL,        -- 'L1', 'L2', 'L3', 'L4'
+    permission_type VARCHAR(20) NOT NULL, -- 'application' or 'function'
+    permission_key VARCHAR(100) NOT NULL, -- e.g. 'admin_dashboard', 'manage_leave_settings'
+    enabled BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ,
+    CONSTRAINT uq_role_perm UNIQUE (role_key, permission_type, permission_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_role_permissions_role_key ON role_permissions(role_key);
+CREATE INDEX IF NOT EXISTS idx_role_permissions_type ON role_permissions(permission_type);
+
+ALTER TABLE role_permissions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Service role has full access to role_permissions" ON role_permissions FOR ALL USING (true);
+
+-- ============================================================================
 -- END OF SCHEMA
 -- ============================================================================

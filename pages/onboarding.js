@@ -2,6 +2,7 @@ import { state } from '../state.js';
 import { getPageContentHTML } from '../utils.js';
 import { API_BASE_URL } from '../config.js';
 import { isManagerOrAdmin } from '../utils/accessControl.js';
+import { canViewApplication } from '../utils/roleSettings.js';
 
 const getStageStatus = (record, stageNum, currentStage) => {
     const ok = (v) => String(v || '').trim().length > 0;
@@ -539,13 +540,13 @@ let currentOnboardingRecord = null;
 
 // ==================== MAIN PAGE RENDER ====================
 export const renderOnboardingPage = async () => {
-    if (!isManagerOrAdmin()) {
+    if (!canViewApplication('onboarding')) {
         document.getElementById('app-content').innerHTML = `
             <div class="access-denied-card">
                 <i class="fa-solid fa-lock access-denied-icon"></i>
                 <h2 class="access-denied-title">Access Denied</h2>
                 <p class="access-denied-message">You don't have permission to access the Onboarding module.</p>
-                <p class="access-denied-submessage">Only managers or admins can view this page.</p>
+                <p class="access-denied-submessage">Contact your administrator if you need access.</p>
                 <button class="btn btn-primary" onclick="window.location.hash='#/'">
                     <i class="fa-solid fa-arrow-left"></i> Go Back to Home
                 </button>

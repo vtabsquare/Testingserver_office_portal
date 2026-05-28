@@ -5,6 +5,7 @@ import { fetchOnLeaveToday } from '../features/leaveApi.js';
 import { listAllEmployees } from '../features/employeeApi.js';
 import { fetchLoginEvents } from '../features/loginSettingsApi.js';
 import { isAdminUser } from '../utils/accessControl.js';
+import { canViewApplication } from '../utils/roleSettings.js';
 import { state } from '../state.js';
 
 const BASE_URL = API_BASE_URL.replace(/\/$/, '');
@@ -1017,7 +1018,7 @@ export const renderAdminDashboardPage = async () => {
   const appContent = document.getElementById('app-content');
   if (!appContent) return;
 
-  if (!isAdminUser()) {
+  if (!canViewApplication('admin_dashboard')) {
     appContent.innerHTML = getPageContentHTML('Admin Dashboard', `
       <div class="card access-denied-card">
         <i class="fa-solid fa-lock access-denied-icon"></i>

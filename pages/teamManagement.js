@@ -4,6 +4,7 @@ import { renderModal, closeModal } from '../components/modal.js';
 import { showToast } from '../components/toast.js';
 import { listEmployees } from '../features/employeeApi.js';
 import { getUserAccessContext } from '../utils/accessControl.js';
+import { canUseFunction } from '../utils/roleSettings.js';
 import {
   listHierarchy,
   createHierarchyMapping,
@@ -67,8 +68,7 @@ const isManagerEmployee = (emp = {}) => {
 
 const canManageTeamHierarchy = () => {
   try {
-    const { isAdmin, isManager } = getUserAccessContext();
-    return isAdmin || isManager;
+    return canUseFunction('manage_team_hierarchy');
   } catch {
     return false;
   }

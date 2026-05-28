@@ -4,7 +4,9 @@ import { getPageContentHTML } from '../utils.js';
 import { listEmployees } from '../features/employeeApi.js';
 import { renderModal, closeModal } from '../components/modal.js';
 import { isAdminUser, isL2OrL3User } from '../utils/accessControl.js';
+import { canUseFunction } from '../utils/roleSettings.js';
 import { API_BASE_URL } from '../config.js';
+import { renderSettingsLayout } from '../components/settingsLayout.js';
 
 const API_BASE = `${API_BASE_URL}/api`;
 
@@ -919,8 +921,8 @@ export const renderLeaveSettingsPage = async () => {
     // Load latest allocation types from backend
     await loadAllocationTypes();
 
-    // Check if user is admin or L2/L3
-    if (!isL2OrL3User()) {
+    // Check if user has permission
+    if (!canUseFunction('manage_leave_settings')) {
         const content = `
             <div class="card">
                 <div class="access-denied-content">
@@ -931,7 +933,7 @@ export const renderLeaveSettingsPage = async () => {
                 </div>
             </div>
         `;
-        document.getElementById('app-content').innerHTML = getPageContentHTML('Leave Settings', content);
+        document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('leave-settings', content));
         return;
     }
 
@@ -945,7 +947,7 @@ export const renderLeaveSettingsPage = async () => {
         ${renderEditAllocationTypeModal()}
     `;
 
-    document.getElementById('app-content').innerHTML = getPageContentHTML('Leave Settings', loadingContent);
+    document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('leave-settings', loadingContent));
 
     // Load employee allocation table
     try {
@@ -956,7 +958,7 @@ export const renderLeaveSettingsPage = async () => {
             ${renderEditAllocationTypeModal()}
         `;
 
-        document.getElementById('app-content').innerHTML = getPageContentHTML('Leave Settings', finalContent);
+        document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('leave-settings', finalContent));
         console.log('✅ Leave Settings page loaded successfully');
 
     } catch (error) {
@@ -969,7 +971,7 @@ export const renderLeaveSettingsPage = async () => {
             </div>
             ${renderEditAllocationTypeModal()}
         `;
-        document.getElementById('app-content').innerHTML = getPageContentHTML('Leave Settings', errorContent);
+        document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('leave-settings', errorContent));
     }
 };
 

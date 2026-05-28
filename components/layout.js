@@ -1,17 +1,16 @@
 import { state } from '../state.js';
-import { isAdminUser, isManagerOrAdmin, isL2OrL3User, getUserAccessContext } from '../utils/accessControl.js';
+import { canUseFunction, canViewApplication } from '../utils/roleSettings.js';
 
 export const getSidebarHTML = () => {
-    const isAdmin = isAdminUser();
-    const { role } = getUserAccessContext();
-    const isL2OrL3 = isL2OrL3User();
-    const canViewTeamTimesheet = isL2OrL3 || role === 'L4';
-    const canViewTeamAttendance = isL2OrL3 || role === 'L4';
-    const canViewTeamLeaves = isL2OrL3 || role === 'L4';
-    const canManage = isManagerOrAdmin();
-    const canViewEmployeeModule = isL2OrL3 || role === 'L4';
-    const canViewInternsModule = isL2OrL3;
-    const canViewSettings = role === 'L3' || isAdmin;
+    const canViewTeamTimesheet = canViewApplication('time_team_timesheet');
+    const canViewTeamAttendance = canViewApplication('attendance_team');
+    const canViewTeamLeaves = canViewApplication('leave_team');
+    const canViewEmployeeModule = canViewApplication('employee') || canViewApplication('employees') || canViewApplication('interns') || canViewApplication('team_management');
+    const canViewInternsModule = canViewApplication('interns');
+    const canViewSettings = canViewApplication('settings') || canViewApplication('leave_settings') || canViewApplication('login_settings') || canViewApplication('faceauth_settings') || canViewApplication('role_settings');
+    const canViewTimeTrackerModule = canViewApplication('time_tracker') || canViewApplication('time_my_tasks') || canViewApplication('time_my_timesheet') || canViewTeamTimesheet || canViewApplication('time_clients') || canViewApplication('time_projects');
+    const canViewAttendanceModule = canViewApplication('attendance_tracker') || canViewApplication('attendance_my') || canViewTeamAttendance || canViewApplication('attendance_holidays');
+    const canViewLeaveModule = canViewApplication('leave_tracker') || canViewApplication('leave_my') || canViewTeamLeaves || canViewApplication('compoff');
     
     return `
     <div class="sidebar-header">
@@ -23,14 +22,8 @@ export const getSidebarHTML = () => {
     <ul class="sidebar-nav">
         <li><p class="nav-section-title">APPLICATIONS</p></li>
         <li><a href="#/" class="nav-link" data-page="home"><i class="fa-solid fa-house"></i> Home</a></li>
-        ${
-          isAdmin
-            ? '<li><a href="#/admin-dashboard" class="nav-link" data-page="admin-dashboard"><i class="fa-solid fa-chart-line"></i> Admin Dashboard</a></li>'
-            : ""
-        }
-        ${
-          canViewEmployeeModule
-            ? `
+        ${canViewApplication('admin_dashboard') ? '<li><a href="#/admin-dashboard" class="nav-link" data-page="admin-dashboard"><i class="fa-solid fa-chart-line"></i> Admin Dashboard</a></li>' : ''}
+        ${canViewEmployeeModule ? `
         <li class="nav-group" data-group="employee-module">
             <a href="#" class="nav-link nav-toggle">
                 <span class="nav-toggle-label">
@@ -40,20 +33,14 @@ export const getSidebarHTML = () => {
                 <i class="fa-solid fa-chevron-down"></i>
             </a>
             <ul class="nav-submenu">
-                <li><a href="#/employees" class="nav-link" data-page="employees">Employees</a></li>
+                ${canViewApplication('employees') ? '<li><a href="#/employees" class="nav-link" data-page="employees">Employees</a></li>' : ''}
                 ${canViewInternsModule ? '<li><a href="#/interns" class="nav-link" data-page="interns">Interns</a></li>' : ''}
-                <li><a href="#/team-management" class="nav-link" data-page="team-management">Team Management</a></li>
+                ${canViewApplication('team_management') ? '<li><a href="#/team-management" class="nav-link" data-page="team-management">Team Management</a></li>' : ''}
             </ul>
-        </li>
-        `
-            : ""
-        }
-        <li><a href="#/inbox" class="nav-link" data-page="inbox"><i class="fa-solid fa-inbox"></i> Inbox</a></li>
-        ${
-          canManage
-            ? '<li><a href="#/onboarding" class="nav-link" data-page="onboarding"><i class="fa-solid fa-user-plus"></i> Onboarding</a></li>'
-            : ""
-        }
+        </li>` : ''}
+        ${canViewApplication('inbox') ? '<li><a href="#/inbox" class="nav-link" data-page="inbox"><i class="fa-solid fa-inbox"></i> Inbox</a></li>' : ''}
+        ${canViewApplication('onboarding') ? '<li><a href="#/onboarding" class="nav-link" data-page="onboarding"><i class="fa-solid fa-user-plus"></i> Onboarding</a></li>' : ''}
+        ${canViewTimeTrackerModule ? `
         <li class="nav-group" data-group="time-tracker">
             <a href="#" class="nav-link nav-toggle">
                 <span class="nav-toggle-label">
@@ -63,22 +50,14 @@ export const getSidebarHTML = () => {
                 <i class="fa-solid fa-chevron-down"></i>
             </a>
             <ul class="nav-submenu">
-                <li><a href="#/time-my-tasks" class="nav-link" data-page="time-my-tasks">My Tasks</a></li>
-                <li><a href="#/time-my-timesheet" class="nav-link" data-page="time-my-timesheet">My Timesheet</a></li>
-                ${
-                  canViewTeamTimesheet
-                    ? '<li><a href="#/time-team-timesheet" class="nav-link" data-page="time-team-timesheet">My Team Timesheet</a></li>'
-                    : ""
-                }
-                ${
-                  isL2OrL3
-                    ? '<li><a href="#/time-clients" class="nav-link" data-page="time-clients">Clients</a></li>'
-                    : ""
-                }
-                <li><a href="#/time-projects" class="nav-link" data-page="time-projects">Projects</a></li>
+                ${canViewApplication('time_my_tasks') ? '<li><a href="#/time-my-tasks" class="nav-link" data-page="time-my-tasks">My Tasks</a></li>' : ''}
+                ${canViewApplication('time_my_timesheet') ? '<li><a href="#/time-my-timesheet" class="nav-link" data-page="time-my-timesheet">My Timesheet</a></li>' : ''}
+                ${canViewTeamTimesheet ? '<li><a href="#/time-team-timesheet" class="nav-link" data-page="time-team-timesheet">My Team Timesheet</a></li>' : ''}
+                ${canViewApplication('time_clients') ? '<li><a href="#/time-clients" class="nav-link" data-page="time-clients">Clients</a></li>' : ''}
+                ${canViewApplication('time_projects') ? '<li><a href="#/time-projects" class="nav-link" data-page="time-projects">Projects</a></li>' : ''}
             </ul>
-        </li>
-        
+        </li>` : ''}
+        ${canViewAttendanceModule ? `
         <li class="nav-group" data-group="attendance-tracker">
             <a href="#" class="nav-link nav-toggle">
                 <span class="nav-toggle-label">
@@ -88,16 +67,12 @@ export const getSidebarHTML = () => {
                 <i class="fa-solid fa-chevron-down"></i>
             </a>
             <ul class="nav-submenu">
-                <li><a href="#/attendance-my" class="nav-link" data-page="attendance-my">My Attendance</a></li>
-                ${
-                  canViewTeamAttendance
-                    ? '<li><a href="#/attendance-team" class="nav-link" data-page="attendance-team">My Team Attendance</a></li>'
-                    : ""
-                }
-                <li><a href="#/attendance-holidays" class="nav-link" data-page="attendance-holidays"><i class="fa-solid fa-umbrella-beach" style="margin-right:6px;"></i>Holidays</a></li>
+                ${canViewApplication('attendance_my') ? '<li><a href="#/attendance-my" class="nav-link" data-page="attendance-my">My Attendance</a></li>' : ''}
+                ${canViewTeamAttendance ? '<li><a href="#/attendance-team" class="nav-link" data-page="attendance-team">My Team Attendance</a></li>' : ''}
+                ${canViewApplication('attendance_holidays') ? '<li><a href="#/attendance-holidays" class="nav-link" data-page="attendance-holidays"><i class="fa-solid fa-umbrella-beach" style="margin-right:6px;"></i>Holidays</a></li>' : ''}
             </ul>
-        </li>
-
+        </li>` : ''}
+        ${canViewLeaveModule ? `
         <li class="nav-group" data-group="leave-tracker">
             <a href="#" class="nav-link nav-toggle">
                 <span class="nav-toggle-label">
@@ -107,41 +82,22 @@ export const getSidebarHTML = () => {
                 <i class="fa-solid fa-chevron-down"></i>
             </a>
             <ul class="nav-submenu">
-                <li><a href="#/leave-my" class="nav-link" data-page="leave-my">My Leaves</a></li>
-                ${
-                  canViewTeamLeaves
-                    ? '<li><a href="#/leave-team" class="nav-link" data-page="leave-team">My Team Leaves</a></li>'
-                    : ""
-                }
-                <li><a href="#/compoff" class="nav-link" data-page="compoff">Comp Off</a></li>
+                ${canViewApplication('leave_my') ? '<li><a href="#/leave-my" class="nav-link" data-page="leave-my">My Leaves</a></li>' : ''}
+                ${canViewTeamLeaves ? '<li><a href="#/leave-team" class="nav-link" data-page="leave-team">My Team Leaves</a></li>' : ''}
+                ${canViewApplication('compoff') ? '<li><a href="#/compoff" class="nav-link" data-page="compoff">Comp Off</a></li>' : ''}
             </ul>
-        </li>
-        <li><a href="#/assets" class="nav-link" data-page="assets"><i class="fa-solid fa-box"></i> Assets</a></li>
-        ${
-          canViewSettings
-            ? `
-        <li class="nav-group" data-group="settings">
-            <a href="#" class="nav-link nav-toggle">
-                <span class="nav-toggle-label">
-                    <i class="fa-solid fa-gear"></i>
-                    <span>Settings</span>
-                </span>
-                <i class="fa-solid fa-chevron-down"></i>
+        </li>` : ''}
+        ${canViewApplication('assets') ? '<li><a href="#/assets" class="nav-link" data-page="assets"><i class="fa-solid fa-box"></i> Assets</a></li>' : ''}
+        ${canViewSettings ? `
+        <li>
+            <a href="${canViewApplication('leave_settings') && canUseFunction('manage_leave_settings') ? '#/leave-settings' : (canViewApplication('login_settings') && canUseFunction('manage_login_settings') ? '#/login-settings' : (canViewApplication('faceauth_settings') && canUseFunction('manage_faceauth_settings') ? '#/faceauth-settings' : '#/role-settings'))}" class="nav-link" data-page="settings">
+                <i class="fa-solid fa-gear" style="margin-right: 8px;"></i>Settings
             </a>
-            <ul class="nav-submenu">
-                <li><a href="#/leave-settings" class="nav-link" data-page="leave-settings">Leave Settings</a></li>
-                <li><a href="#/login-settings" class="nav-link" data-page="login-settings">Login Settings</a></li>
-                <li><a href="#/faceauth-settings" class="nav-link" data-page="faceauth-settings">FaceAuth Settings</a></li>
-            </ul>
         </li>
-        <li><a href="#" class="nav-link" id="faceauth-admin-btn"><i class="fa-solid fa-fingerprint"></i> FaceAuth Admin</a></li>`
-            : ""
-        }
-
+        ${canViewApplication('faceauth_admin') ? '<li><a href="#" class="nav-link" id="faceauth-admin-btn"><i class="fa-solid fa-fingerprint"></i> FaceAuth Admin</a></li>' : ''}` : ''}
     </ul>
 `;
 };
-
 const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour >= 5 && hour < 12) return 'Good Morning';

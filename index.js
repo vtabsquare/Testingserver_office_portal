@@ -31,6 +31,7 @@ import { runWithSubmissionLoading } from './utils/submissionLoading.js';
 import { API_BASE_URL as CONFIG_API_BASE_URL } from './config.js';
 import { initFaceAuthAlerts, refreshFaceAuthStatus, getFaceAuthReturnUrl } from './features/faceAuthAlert.js';
 import { createAuthSessionEvent, fetchAuthSessionPolicy } from './features/loginSettingsApi.js';
+import { loadRolePermissions } from './utils/roleSettings.js';
 
 const normalizeApiBase = () => String(CONFIG_API_BASE_URL).replace(/\/$/, '');
 
@@ -1122,6 +1123,7 @@ const init = async () => {
     }
     if (state.authenticated) {
       await syncAccessLevelFromServer();
+      await loadRolePermissions();
     }
   } catch {}
 
