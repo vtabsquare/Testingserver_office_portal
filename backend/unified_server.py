@@ -910,6 +910,7 @@ DOCUMENT_INDEX_FILE = os.path.join(STORAGE_DIR, "document_index.json")
 GOOGLE_TOKEN_FILE = os.path.join(STORAGE_DIR, "google_tokens.json")
 AUTH_SESSION_EVENTS_FILE = os.path.join(STORAGE_DIR, "auth_session_events.json")
 AUTH_SESSION_POLICY_FILE = os.path.join(STORAGE_DIR, "auth_session_policy.json")
+SHIFT_SETTINGS_FILE = os.path.join(STORAGE_DIR, "shift_settings.json")
 
 def _load_json_file(path, default_value):
     try:
@@ -979,6 +980,159 @@ def _save_auth_session_policy(policy):
         "updated_by": policy.get("updated_by"),
     }
     return _save_json_file(AUTH_SESSION_POLICY_FILE, safe_policy)
+
+def _normalize_shift_time(value, fallback):
+    try:
+        raw = str(value or "").strip()
+        parts = raw.split(":")
+        if len(parts) < 2:
+            return fallback
+        hh = int(parts[0])
+        mm = int(parts[1])
+        if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+            return fallback
+        return f"{hh:02d}:{mm:02d}"
+    except Exception:
+        return fallback
+
+def _time_to_minutes(time_str):
+    normalized = _normalize_shift_time(time_str, "00:00")
+    hh, mm = normalized.split(":")
+    return (int(hh) * 60) + int(mm)
+
+def _default_shift_settings():
+    return {
+        "defaults": {
+            "shift_start": "09:00",
+            "shift_end": "18:00",
+            "grace_minutes": 15,
+            "minimum_shift_hours": 9,
+            "work_week": "mon-sat",
+        },
+        "by_employee": {},
+        "updated_at": None,
+        "updated_by": None,
+    }
+
+def _read_shift_settings():
+    defaults = _default_shift_settings().get("defaults", {})
+    normalized_defaults = {
+        "shift_start": _normalize_shift_time(defaults.get("shift_start"), "09:00"),
+        "shift_end": _normalize_shift_time(defaults.get("shift_end"), "18:00"),
+        "grace_minutes": 15,
+        "minimum_shift_hours": 9,
+        "work_week": "mon-fri" if str(defaults.get("work_week") or "").strip().lower() == "mon-fri" else "mon-sat",
+    }
+    result = {
+        "defaults": normalized_defaults,
+        "by_employee": {},
+        "updated_at": None,
+        "updated_by": None,
+    }
+    try:
+        sb = get_supabase()
+        try:
+            rows_resp = sb.table("employee_shift_settings").select(
+                "employee_id, shift_start, shift_end, grace_minutes, work_week, updated_at, updated_by"
+            ).limit(5000).execute()
+        except Exception:
+            # Backward compatibility for existing DBs before work_week column is added.
+            rows_resp = sb.table("employee_shift_settings").select(
+                "employee_id, shift_start, shift_end, grace_minutes, updated_at, updated_by"
+            ).limit(5000).execute()
+        rows = rows_resp.data or []
+        latest_updated_at = None
+        latest_updated_by = None
+        for row in rows:
+            key = str(row.get("employee_id") or "").strip().upper()
+            if not key:
+                continue
+            start = _normalize_shift_time(row.get("shift_start"), normalized_defaults["shift_start"])
+            end = _normalize_shift_time(row.get("shift_end"), normalized_defaults["shift_end"])
+            result["by_employee"][key] = {
+                "shift_start": start,
+                "shift_end": end,
+                "grace_minutes": 15,
+                "work_week": "mon-fri" if str(row.get("work_week") or "").strip().lower() == "mon-fri" else "mon-sat",
+            }
+            row_updated_at = row.get("updated_at")
+            if row_updated_at and (latest_updated_at is None or str(row_updated_at) > str(latest_updated_at)):
+                latest_updated_at = row_updated_at
+                latest_updated_by = row.get("updated_by")
+        result["updated_at"] = latest_updated_at
+        result["updated_by"] = latest_updated_by
+        return result
+    except Exception as e:
+        print(f"[SHIFT-SETTINGS] Failed to read from Supabase: {e}")
+        return result
+
+def _save_shift_settings(settings):
+    payload = settings if isinstance(settings, dict) else {}
+    by_employee = payload.get("by_employee") if isinstance(payload.get("by_employee"), dict) else {}
+    updated_by = payload.get("updated_by")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        sb = get_supabase()
+        for emp_id, row in by_employee.items():
+            key = str(emp_id or "").strip().upper()
+            if not key:
+                continue
+            row_obj = row if isinstance(row, dict) else {}
+            start = _normalize_shift_time(row_obj.get("shift_start"), "09:00")
+            end = _normalize_shift_time(row_obj.get("shift_end"), "18:00")
+            if (_time_to_minutes(end) - _time_to_minutes(start)) < (9 * 60):
+                continue
+            record = {
+                "employee_id": key,
+                "shift_start": start,
+                "shift_end": end,
+                "grace_minutes": 15,
+                "work_week": "mon-fri" if str(row_obj.get("work_week") or "").strip().lower() == "mon-fri" else "mon-sat",
+                "updated_by": str(updated_by or key),
+                "updated_at": now_iso,
+            }
+            sb.table("employee_shift_settings").upsert(record, on_conflict="employee_id").execute()
+        return True
+    except Exception as e:
+        print(f"[SHIFT-SETTINGS] Failed to save to Supabase: {e}")
+        return False
+
+def _resolve_employee_shift(employee_id):
+    settings = _read_shift_settings()
+    defaults = settings.get("defaults", {})
+    emp_key = str(employee_id or "").strip().upper()
+    row = settings.get("by_employee", {}).get(emp_key, {})
+    shift_start = _normalize_shift_time(row.get("shift_start"), defaults.get("shift_start", "09:00"))
+    shift_end = _normalize_shift_time(row.get("shift_end"), defaults.get("shift_end", "18:00"))
+    grace_minutes = 15
+    return {
+        "shift_start": shift_start,
+        "shift_end": shift_end,
+        "grace_minutes": grace_minutes,
+        "work_week": "mon-fri" if str(row.get("work_week") or "").strip().lower() == "mon-fri" else "mon-sat",
+    }
+
+def _is_late_login_for_shift(checkin_value, shift_start, grace_minutes):
+    try:
+        if not checkin_value:
+            return False
+        checkin_str = str(checkin_value).strip()
+        if "T" in checkin_str:
+            dt = datetime.fromisoformat(checkin_str.replace("Z", "+00:00"))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(_attendance_business_tz())
+            checkin_minutes = dt.hour * 60 + dt.minute
+        else:
+            normalized = _normalize_shift_time(checkin_str, "")
+            if not normalized:
+                return False
+            hh, mm = normalized.split(":")
+            checkin_minutes = int(hh) * 60 + int(mm)
+        shift_minutes = _time_to_minutes(shift_start)
+        threshold = shift_minutes + int(grace_minutes or 15)
+        return checkin_minutes > threshold
+    except Exception:
+        return False
 
 def _load_document_index():
     try:
@@ -5798,6 +5952,8 @@ def get_monthly_attendance(employee_id, year, month):
         except Exception as e:
             print(f"[WARN] Failed to fetch login activity: {e}")
         
+        shift_info = _resolve_employee_shift(normalized_emp_id)
+
         for r in records:
             date_str = r.get(FIELD_DATE)
             checkin = r.get(FIELD_CHECKIN)
@@ -5821,7 +5977,10 @@ def get_monthly_attendance(employee_id, year, month):
                             # Parse and format time
                             if 'T' in first_checkin:
                                 # ISO format
-                                actual_checkin = datetime.fromisoformat(first_checkin.replace('Z', '+00:00')).strftime('%H:%M:%S')
+                                parsed_in = datetime.fromisoformat(first_checkin.replace('Z', '+00:00'))
+                                if parsed_in.tzinfo is not None:
+                                    parsed_in = parsed_in.astimezone(_attendance_business_tz())
+                                actual_checkin = parsed_in.strftime('%H:%M:%S')
                             else:
                                 # Time only format
                                 actual_checkin = first_checkin[:8] if len(first_checkin) > 8 else first_checkin
@@ -5832,7 +5991,10 @@ def get_monthly_attendance(employee_id, year, month):
                             # Parse and format time
                             if 'T' in last_checkout:
                                 # ISO format
-                                actual_checkout = datetime.fromisoformat(last_checkout.replace('Z', '+00:00')).strftime('%H:%M:%S')
+                                parsed_out = datetime.fromisoformat(last_checkout.replace('Z', '+00:00'))
+                                if parsed_out.tzinfo is not None:
+                                    parsed_out = parsed_out.astimezone(_attendance_business_tz())
+                                actual_checkout = parsed_out.strftime('%H:%M:%S')
                             else:
                                 # Time only format
                                 actual_checkout = last_checkout[:8] if len(last_checkout) > 8 else last_checkout
@@ -5882,6 +6044,12 @@ def get_monthly_attendance(employee_id, year, month):
             if (not is_manual_override) and live_augmented:
                 duration_text = _format_duration_text_from_hours(effective_hours)
             
+            is_late = _is_late_login_for_shift(
+                actual_checkin,
+                shift_info.get("shift_start"),
+                shift_info.get("grace_minutes", 15),
+            )
+
             formatted_records.append({
                 "date": date_str,
                 "day": day_num,
@@ -5891,6 +6059,8 @@ def get_monthly_attendance(employee_id, year, month):
                 "duration": effective_hours,
                 "duration_text": duration_text,
                 "status": status,
+                "isLate": is_late,
+                "workWeek": shift_info.get("work_week", "mon-sat"),
                 "isManual": is_manual_override,
                 "liveAugmented": live_augmented
             })
@@ -16155,6 +16325,69 @@ def trigger_force_logout():
             "forced_at": now_iso,
             "reason": reason,
         })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ================== SHIFT SETTINGS API ==================
+@app.route('/api/shift-settings', methods=['GET'])
+def get_shift_settings():
+    try:
+        settings = _read_shift_settings()
+        return jsonify({"success": True, **settings}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/shift-settings', methods=['PUT'])
+def update_shift_settings():
+    try:
+        data = request.get_json() or {}
+        employee_id = str(data.get('employee_id') or '').strip().upper()
+        shift_start = _normalize_shift_time(data.get('shift_start'), '')
+        shift_end = _normalize_shift_time(data.get('shift_end'), '')
+        grace_minutes = int(data.get('grace_minutes') or 15)
+        work_week = str(data.get('work_week') or 'mon-sat').strip().lower()
+
+        if not employee_id:
+            return jsonify({"success": False, "error": "employee_id is required"}), 400
+        if not shift_start or not shift_end:
+            return jsonify({"success": False, "error": "shift_start and shift_end are required (HH:MM)"}), 400
+        if grace_minutes != 15:
+            return jsonify({"success": False, "error": "Grace minutes must be 15"}), 400
+        if work_week not in ('mon-fri', 'mon-sat'):
+            return jsonify({"success": False, "error": "work_week must be mon-fri or mon-sat"}), 400
+        if (_time_to_minutes(shift_end) - _time_to_minutes(shift_start)) < (9 * 60):
+            return jsonify({"success": False, "error": "Shift timing should be minimum 9 hours"}), 400
+
+        sb = get_supabase()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "employee_id": employee_id,
+            "shift_start": shift_start,
+            "shift_end": shift_end,
+            "grace_minutes": 15,
+            "work_week": work_week,
+            "updated_by": str(data.get("updated_by") or employee_id),
+            "updated_at": now_iso,
+        }
+        try:
+            sb.table("employee_shift_settings").upsert(payload, on_conflict="employee_id").execute()
+        except Exception:
+            # Backward compatibility for DBs where work_week column is not added yet.
+            fallback_payload = dict(payload)
+            fallback_payload.pop("work_week", None)
+            sb.table("employee_shift_settings").upsert(fallback_payload, on_conflict="employee_id").execute()
+
+        return jsonify({
+            "success": True,
+            "employee_id": employee_id,
+            "shift": {
+                "shift_start": shift_start,
+                "shift_end": shift_end,
+                "grace_minutes": 15,
+                "work_week": work_week,
+            },
+        }), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

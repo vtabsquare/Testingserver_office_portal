@@ -36,6 +36,7 @@ const loaders = {
   "/leave-my": async () => (await import('./pages/leaveTracker.js')).renderLeaveTrackerPage,
   "/leave-team": async () => (await import('./pages/leaveTracker.js')).renderLeaveTrackerPage,
   "/leave-settings": async () => (await import('./pages/leaveSettings.js')).renderLeaveSettingsPage,
+  "/shift-settings": async () => (await import('./pages/shiftSettings.js')).renderShiftSettingsPage,
   "/login-settings": async () => (await import('./pages/loginSettings.js')).renderLoginSettingsPage,
   "/compoff": async () => (await import('./pages/comp_off.js')).renderCompOffPage,
   "/attendance-my": async () => (await import('./pages/attendance.js')).renderMyAttendancePage,
@@ -149,6 +150,12 @@ export const router = async () => {
       return;
     }
   }
+  if (path === '/shift-settings') {
+    if (!canViewApplication('shift_settings')) {
+      renderAccessDenied("#/");
+      return;
+    }
+  }
   if (path === '/attendance-team') {
     if (!canViewApplication('attendance_team')) {
       renderAccessDenied("#/attendance-my");
@@ -191,7 +198,7 @@ export const router = async () => {
 
 const updateActiveNav = (path) => {
   let page = (path === '/') ? 'home' : path.slice(1);
-  if (['leave-settings', 'login-settings', 'faceauth-settings', 'role-settings'].includes(page)) {
+  if (['leave-settings', 'shift-settings', 'login-settings', 'faceauth-settings', 'role-settings'].includes(page)) {
     page = 'settings';
   }
 

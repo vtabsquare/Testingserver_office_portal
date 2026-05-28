@@ -6,6 +6,7 @@ import { renderModal, closeModal } from '../components/modal.js';
 import { clearCacheByPrefix } from '../features/cache.js';
 import { isAdminUser, isManagerOrAdmin, isTeamLeadUser } from '../utils/accessControl.js';
 import { fetchLoginEvents } from '../features/loginSettingsApi.js';
+import { fetchShiftSettings } from '../features/shiftSettingsApi.js';
 import { runWithSubmissionLoading } from '../utils/submissionLoading.js';
 
 const isManagerUserAttendance = () => {
@@ -45,16 +46,22 @@ const isHolidayDate = (year, month, day) => {
     });
 };
 
-const isSundayDate = (year, month, day) => new Date(year, month, day).getDay() === 0;
+const normalizeWorkWeek = (value) => (String(value || '').toLowerCase() === 'mon-fri' ? 'mon-fri' : 'mon-sat');
+const isWeeklyOffDate = (year, month, day, workWeek = 'mon-sat') => {
+    const dayOfWeek = new Date(year, month, day).getDay();
+    if (dayOfWeek === 0) return true; // Sunday always weekly off
+    if (dayOfWeek === 6 && normalizeWorkWeek(workWeek) === 'mon-fri') return true; // Saturday weekly off for Mon-Fri
+    return false;
+};
 
 const renderAttendanceTrackerPage = async (mode) => {
     const date = state.currentAttendanceDate;
     const monthName = date.toLocaleString('default', { month: 'long' });
     const year = date.getFullYear();
 
-    const getStatusCellHTML = (dayData, isHoliday = false, isSunday = false) => {
+    const getStatusCellHTML = (dayData, isHoliday = false, isWeeklyOff = false) => {
         if (!dayData) {
-            if (isSunday) {
+            if (isWeeklyOff) {
                 return `
                     <div class="status-cell status-do">DO</div>
                 `;
@@ -165,8 +172,9 @@ const renderAttendanceTrackerPage = async (mode) => {
 
         employeeIds.forEach(empId => {
             const empData = state.attendanceData[empId] || {};
+            const workWeek = normalizeWorkWeek(empData.workWeek || 'mon-sat');
             for (let day = 1; day <= daysInMonth; day++) {
-                if (isSundayDate(year, date.getMonth(), day)) continue;
+                if (isWeeklyOffDate(year, date.getMonth(), day, workWeek)) continue;
                 const dayData = empData[day];
                 if (dayData) {
                     if (dayData.leaveType) {
@@ -188,6 +196,7 @@ const renderAttendanceTrackerPage = async (mode) => {
                 normalizedMeta[empId] ||
                 empData.employeeName ||
                 empId;
+            const workWeek = normalizeWorkWeek(empData.workWeek || 'mon-sat');
 
             // Get initials for avatar
             const nameParts = employeeName.split(' ');
@@ -200,8 +209,8 @@ const renderAttendanceTrackerPage = async (mode) => {
                 const dayNum = i + 1;
                 const dayData = empData[dayNum];
                 const isHoliday = isHolidayDate(year, date.getMonth(), dayNum);
-                const isSunday = isSundayDate(year, date.getMonth(), dayNum);
-                const cellHTML = getStatusCellHTML(dayData, isHoliday, isSunday);
+                const isWeeklyOff = isWeeklyOffDate(year, date.getMonth(), dayNum, workWeek);
+                const cellHTML = getStatusCellHTML(dayData, isHoliday, isWeeklyOff);
                 return `<td class="team-day-cell" data-emp-id="${empId}" data-day="${dayNum}">${cellHTML}</td>`;
             }).join('');
 
@@ -259,7 +268,7 @@ const renderAttendanceTrackerPage = async (mode) => {
                 <div class="legend-item"><span class="legend-code legend-code-cl">CL</span><span>Casual leave</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-sl">SL</span><span>Sick leave</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-co">CO</span><span>Comp off</span></div>
-                <div class="legend-item"><span class="legend-code legend-code-do">DO</span><span>Sunday day off</span></div>
+                <div class="legend-item"><span class="legend-code legend-code-do">DO</span><span>Weekly day off</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-inl">INL</span><span>Indian national holiday</span></div>
             </div>
             
@@ -271,6 +280,7 @@ const renderAttendanceTrackerPage = async (mode) => {
     const getMyViewHTML = async () => {
         const normalizedUserId = String(state.user?.id || '').toUpperCase();
         const myAttendance = state.attendanceData[normalizedUserId] || state.attendanceData[state.user.id] || {};
+        const myWorkWeek = normalizeWorkWeek(myAttendance.workWeek || 'mon-sat');
         const month = date.getMonth();
         const firstDayIndex = new Date(year, month, 1).getDay(); // Sunday = 0
 
@@ -284,8 +294,8 @@ const renderAttendanceTrackerPage = async (mode) => {
             const dayData = myAttendance[i];
             const isSelected = i === state.selectedAttendanceDay;
             const isHoliday = isHolidayDate(year, month, i);
-            const isSunday = isSundayDate(year, month, i);
-            const statusHTML = getStatusCellHTML(dayData, isHoliday, isSunday);
+            const isWeeklyOff = isWeeklyOffDate(year, month, i, myWorkWeek);
+            const statusHTML = getStatusCellHTML(dayData, isHoliday, isWeeklyOff);
 
             calendarCells.push(`
                 <div class="calendar-day ${isSelected ? 'selected' : ''}" data-day="${i}">
@@ -521,7 +531,7 @@ const renderAttendanceTrackerPage = async (mode) => {
                 <div class="legend-item"><span class="legend-code legend-code-cl">CL</span><span>Casual leave</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-sl">SL</span><span>Sick leave</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-co">CO</span><span>Comp off</span></div>
-                <div class="legend-item"><span class="legend-code legend-code-do">DO</span><span>Sunday day off</span></div>
+                <div class="legend-item"><span class="legend-code legend-code-do">DO</span><span>Weekly day off</span></div>
                 <div class="legend-item"><span class="legend-code legend-code-inl">INL</span><span>Indian national holiday</span></div>
             </div>
             
@@ -730,8 +740,8 @@ const normalizeEmployeeFlagForWorkingDays = (value) => {
     return normalized === 'intern' ? 'Intern' : 'Employee';
 };
 
-const getMonthlyWorkingDays = (year, monthIndex, employeeFlag) => {
-    const includeSaturdays = normalizeEmployeeFlagForWorkingDays(employeeFlag) === 'Intern';
+const getMonthlyWorkingDays = (year, monthIndex, employeeFlag, workWeek = 'mon-sat') => {
+    const includeSaturdays = normalizeWorkWeek(workWeek) === 'mon-sat' || normalizeEmployeeFlagForWorkingDays(employeeFlag) === 'Intern';
     const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
     let workingDays = 0;
 
@@ -770,7 +780,7 @@ const exportTeamAttendanceToCSV = (monthName, year) => {
         const empData = state.attendanceData[empId] || {};
         const employeeName = empData.employeeName || empId;
         const employeeFlag = normalizeEmployeeFlagForWorkingDays(empData.employeeFlag);
-        const totalWorkingDays = getMonthlyWorkingDays(year, date.getMonth(), employeeFlag);
+        const totalWorkingDays = getMonthlyWorkingDays(year, date.getMonth(), employeeFlag, empData.workWeek);
         const row = [employeeName, empId];
 
         // Track totals
@@ -781,7 +791,8 @@ const exportTeamAttendanceToCSV = (monthName, year) => {
 
         // Add status for each day
         for (let day = 1; day <= daysInMonth; day++) {
-            if (isSundayDate(year, date.getMonth(), day)) {
+            const workWeek = normalizeWorkWeek(empData.workWeek || 'mon-sat');
+            if (isWeeklyOffDate(year, date.getMonth(), day, workWeek)) {
                 row.push('DO');
                 continue;
             }
@@ -1036,7 +1047,10 @@ export const renderMyAttendancePage = async () => {
         console.log(`📅 Loaded ${currentMonthHolidays.length} holidays for ${year}-${month}`);
 
         const uid = String(state.user.id || '').toUpperCase();
-        const records = await fetchMonthlyAttendance(uid, year, month);
+        const [records, shiftRes] = await Promise.all([
+            fetchMonthlyAttendance(uid, year, month),
+            fetchShiftSettings().catch(() => ({ defaults: { work_week: 'mon-sat' }, by_employee: {} })),
+        ]);
 
         const attendanceMap = {};
         records.forEach(rec => {
@@ -1044,6 +1058,8 @@ export const renderMyAttendancePage = async () => {
                 attendanceMap[rec.day] = {
                     day: rec.day,
                     status: rec.status,
+                    isLate: !!rec.isLate,
+                    workWeek: normalizeWorkWeek(rec.workWeek),
                     checkIn: rec.checkIn,
                     checkOut: rec.checkOut,
                     duration: rec.duration,
@@ -1058,6 +1074,8 @@ export const renderMyAttendancePage = async () => {
             }
         });
         attendanceMap.employeeName = state.user?.name || state.user?.full_name || state.user?.id || '';
+        const shiftWorkWeek = shiftRes?.by_employee?.[uid]?.work_week || shiftRes?.defaults?.work_week;
+        attendanceMap.workWeek = normalizeWorkWeek(shiftWorkWeek || records[0]?.workWeek);
         state.attendanceData[uid] = attendanceMap;
         state.attendanceData[state.user.id] = attendanceMap;
     } catch (err) {
@@ -1117,6 +1135,7 @@ export const renderTeamAttendancePage = async () => {
     // For other employees, use the filtered list as before
     let employeesToFetch = [];
     const employeeMeta = {};
+    let shiftRes = { defaults: { work_week: 'mon-sat' }, by_employee: {} };
 
     try {
         // Load holidays for the current month
@@ -1126,6 +1145,9 @@ export const renderTeamAttendancePage = async () => {
             return hDate.getFullYear() === year && hDate.getMonth() + 1 === month;
         });
         console.log(`📅 Loaded ${currentMonthHolidays.length} holidays for ${year}-${month}`);
+
+        // Load shift settings once (so DO logic works even on empty months)
+        shiftRes = await fetchShiftSettings().catch(() => ({ defaults: { work_week: 'mon-sat' }, by_employee: {} }));
 
         // Admin always sees all employees
         console.log('✅ Admin user detected. Fetching attendance for ALL employees from Dataverse');
@@ -1161,6 +1183,8 @@ export const renderTeamAttendancePage = async () => {
                     attendanceMap[rec.day] = {
                         day: rec.day, // Explicitly include the day property
                         status: rec.status,
+                        isLate: !!rec.isLate,
+                        workWeek: normalizeWorkWeek(rec.workWeek),
                         checkIn: rec.checkIn,
                         checkOut: rec.checkOut,
                         duration: rec.duration,
@@ -1178,6 +1202,8 @@ export const renderTeamAttendancePage = async () => {
             const meta = employeeMeta[empId] || {};
             attendanceMap.employeeName = meta.name || empId;
             attendanceMap.employeeFlag = meta.employeeFlag || 'Employee';
+            const empShiftWorkWeek = shiftRes?.by_employee?.[empId]?.work_week || shiftRes?.defaults?.work_week;
+            attendanceMap.workWeek = normalizeWorkWeek(empShiftWorkWeek || records[0]?.workWeek);
 
             // Store both attendance data and employee info
             state.attendanceData[empId] = attendanceMap;
