@@ -1373,13 +1373,9 @@ export const handleApplyLeave = async (e) => {
     ? "Paid"
     : compensationType;
   const reason = document.getElementById("reason")?.value || "";
-  const trimmedReason = reason.trim();
 
   if (!startDate || !endDate)
     return alert("Please select both start and end dates");
-
-  if (trimmedReason.length < 10)
-    return alert("Leave reason must be at least 10 characters.");
 
   const applyMode = String(
     document.getElementById("leave-apply-mode")?.value || "self"
@@ -1405,100 +1401,92 @@ export const handleApplyLeave = async (e) => {
     appliedBy = selectedEmployeeId;
   } else {
     const userName = state.user?.name;
+    const sessionEmpId = String(state.user?.id || "").trim().toUpperCase();
 
-    if (!userName) {
-      return alert("Error: User name not found. Please log in again.");
-    }
-
-    console.log(" Fetching employee ID for name:", userName);
-
-    try {
-      const allEmployees = await listEmployees(1, 5000);
-      console.log("Total employees fetched:", allEmployees.items?.length || 0);
-
-      // First, try to find an exact match
-      let match = (allEmployees.items || []).find((e) => {
-        const empFullName = `${e.first_name || ""} ${e.last_name || ""} `
-          .trim()
-          .toLowerCase();
-        const searchName = userName.toLowerCase().trim();
-        return empFullName === searchName;
-      });
-
-      // If no exact match, try to find a match with "karthick" vs "karthik" specifically
-      if (!match && userName.toLowerCase().includes("karthik")) {
-        match = (allEmployees.items || []).find((e) => {
-          const empFullName = `${e.first_name || ""} ${e.last_name || ""} `
-            .trim()
-            .toLowerCase();
-          return empFullName.includes("karthick");
-        });
-        if (match) {
-          console.log(" Found match using special case for Karthik/Karthick");
-        }
+    // PRIORITY 1: Use employee_id from session if it's a valid EMP format
+    if (sessionEmpId && sessionEmpId.startsWith("EMP") && /^EMP\d+$/.test(sessionEmpId)) {
+      console.log("✅ Using employee ID from session:", sessionEmpId);
+      appliedBy = sessionEmpId;
+    } else {
+      // PRIORITY 2: Resolve by name/email lookup
+      if (!userName) {
+        return alert("Error: User name not found. Please log in again.");
       }
 
-      // If still no match, try more flexible matching
-      if (!match) {
-        match = (allEmployees.items || []).find((e) => {
-          const empFullName = `${e.first_name || ""} ${e.last_name || ""} `
+      console.log("🔍 Fetching employee ID for name:", userName);
+
+      try {
+        const allEmployees = await listEmployees(1, 5000);
+        console.log("Total employees fetched:", allEmployees.items?.length || 0);
+
+        // First, try to find an exact full name match (STRICT - no partial matching)
+        let match = (allEmployees.items || []).find((e) => {
+          const empFullName = `${e.first_name || ""} ${e.last_name || ""}`
             .trim()
             .toLowerCase();
           const searchName = userName.toLowerCase().trim();
-
-          // Remove all non-alphanumeric characters for comparison
-          const normalizedEmpName = empFullName.replace(/[^a-z0-9]/g, "");
-          const normalizedSearchName = searchName.replace(/[^a-z0-9]/g, "");
-
-          // Check if names are similar enough (first name matches)
-          const empFirstName = (e.first_name || "").toLowerCase().trim();
-          const searchFirstName = searchName.split(" ")[0];
-
-          const nameMatches =
-            // Check if normalized names match
-            normalizedEmpName === normalizedSearchName ||
-            // Check if one contains the other
-            normalizedEmpName.includes(normalizedSearchName) ||
-            normalizedSearchName.includes(normalizedEmpName) ||
-            // Check if first names are similar (allowing for spelling variations)
-            empFirstName.replace("ck", "k") === searchFirstName ||
-            searchFirstName.replace("ck", "k") === empFirstName;
-
-          console.log(`Comparing: "${empFullName}" with "${searchName}"`, {
-            nameMatches,
-          });
-
-          return nameMatches;
+          return empFullName === searchName;
         });
-      }
 
-      if (match && match.employee_id) {
-        appliedBy = match.employee_id.trim().toUpperCase();
-        // Update state with correct employee ID
-        state.user.id = appliedBy;
-        try {
-          localStorage.setItem(
-            "auth",
-            JSON.stringify({ authenticated: true, user: state.user })
+        // If no exact match, try email-based lookup (SAFE - unique identifier)
+        if (!match && state.user?.email) {
+          const userEmail = String(state.user.email).toLowerCase().trim();
+          match = (allEmployees.items || []).find(
+            (e) => (e.email || "").toLowerCase().trim() === userEmail
           );
-        } catch { }
-        console.log(` Found employee ID: ${appliedBy} `);
-      } else {
-        console.error(" No employee record found for name:", userName);
-        console.log(
-          "Available employees:",
-          allEmployees.items?.map((e) => ({
-            id: e.employee_id,
-            name: `${e.first_name || ""} ${e.last_name || ""} `.trim(),
-          }))
-        );
-        return alert(
-          "Error: Could not find your employee record. Please contact administrator."
-        );
+          if (match) {
+            console.log("✅ Found match using email:", userEmail);
+          }
+        }
+
+        // If still no match, try normalized exact match (handles spacing/special chars)
+        if (!match) {
+          match = (allEmployees.items || []).find((e) => {
+            const empFullName = `${e.first_name || ""} ${e.last_name || ""}`
+              .trim()
+              .toLowerCase();
+            const searchName = userName.toLowerCase().trim();
+
+            // Remove all non-alphanumeric characters for comparison
+            const normalizedEmpName = empFullName.replace(/[^a-z0-9]/g, "");
+            const normalizedSearchName = searchName.replace(/[^a-z0-9]/g, "");
+
+            // STRICT: Only exact normalized match (no partial/contains matching)
+            return normalizedEmpName === normalizedSearchName;
+          });
+          if (match) {
+            console.log("✅ Found match using normalized exact name");
+          }
+        }
+
+        if (match && match.employee_id) {
+          appliedBy = match.employee_id.trim().toUpperCase();
+          // Update state with correct employee ID
+          state.user.id = appliedBy;
+          try {
+            localStorage.setItem(
+              "auth",
+              JSON.stringify({ authenticated: true, user: state.user })
+            );
+          } catch { }
+          console.log(`✅ Found employee ID: ${appliedBy}`);
+        } else {
+          console.error("❌ No employee record found for name:", userName);
+          console.log(
+            "Available employees:",
+            allEmployees.items?.map((e) => ({
+              id: e.employee_id,
+              name: `${e.first_name || ""} ${e.last_name || ""}`.trim(),
+            }))
+          );
+          return alert(
+            "Error: Could not find your employee record. Please contact administrator."
+          );
+        }
+      } catch (err) {
+        console.error("❌ Failed to fetch employee data:", err);
+        return alert("Error: Failed to verify employee information.");
       }
-    } catch (err) {
-      console.error(" Failed to fetch employee data:", err);
-      return alert("Error: Failed to verify employee information.");
     }
   }
 
@@ -1510,10 +1498,10 @@ export const handleApplyLeave = async (e) => {
     applied_by: appliedBy,
     paid_unpaid: payloadCompensationType,
     status: "Pending",
-    reason: trimmedReason,
+    reason,
   };
 
-  console.log(" Payload prepared:", leavePayload);
+  console.log("📤 Payload prepared:", leavePayload);
 
   try {
     // Client-side guard for paid-like compensation modes
