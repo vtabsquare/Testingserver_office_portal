@@ -3,11 +3,19 @@ import { canUseFunction } from '../utils/roleSettings.js';
 import { renderSettingsLayout } from '../components/settingsLayout.js';
 import { renderModal, closeModal } from '../components/modal.js';
 import { listEmployees } from '../features/employeeApi.js';
-import { fetchShiftSettings, updateEmployeeShiftSetting } from '../features/shiftSettingsApi.js';
+import {
+    fetchShiftSettings,
+    updateEmployeeShiftSetting,
+    createShiftPreset,
+    updateShiftPreset,
+    deleteShiftPreset,
+} from '../features/shiftSettingsApi.js';
 
 const DEFAULT_GRACE_MINUTES = 15;
 const MIN_SHIFT_HOURS = 9;
 const DEFAULT_WORK_WEEK = 'mon-sat';
+
+let cachedPresets = [];
 
 const parseTimeToMinutes = (timeValue) => {
     const parts = String(timeValue || '').split(':');
@@ -31,16 +39,90 @@ const isValidShiftWindow = (start, end) => getShiftDurationHours(start, end) >= 
 
 const formatWorkWeek = (value) => (String(value || DEFAULT_WORK_WEEK).toLowerCase() === 'mon-fri' ? 'Mon-Fri' : 'Mon-Sat');
 
+const PROTECTED_PRESET_NAMES = new Set(['shift 1', 'shift 2']);
+
+const canDeletePreset = (preset) => {
+    if (preset && typeof preset.can_delete === 'boolean') return preset.can_delete;
+    return !PROTECTED_PRESET_NAMES.has(String(preset?.name || '').trim().toLowerCase());
+};
+
+const buildPresetsSection = (presets = []) => `
+    <div class="card" style="margin-bottom: 1.25rem;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap;">
+            <div>
+                <h3><i class="fa-solid fa-clock"></i> Shift Presets</h3>
+                <p class="allocation-description">Define reusable shift timings and work weeks, then assign a preset to each employee below.</p>
+            </div>
+            <button type="button" class="btn btn-primary" id="add-shift-preset-btn">
+                <i class="fa-solid fa-plus"></i> Add Preset
+            </button>
+        </div>
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Preset Name</th>
+                        <th>Shift Start</th>
+                        <th>Shift End</th>
+                        <th>Work Week</th>
+                        <th>Grace Time</th>
+                        <th>Duration</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${presets.map((p) => `
+                        <tr>
+                            <td><strong>${p.name}</strong></td>
+                            <td>${p.shift_start}</td>
+                            <td>${p.shift_end}</td>
+                            <td>${formatWorkWeek(p.work_week)}</td>
+                            <td>${p.grace_minutes || DEFAULT_GRACE_MINUTES} mins</td>
+                            <td>${getShiftDurationHours(p.shift_start, p.shift_end).toFixed(2)}h</td>
+                            <td style="display: flex; gap: 0.35rem; align-items: center;">
+                                <button
+                                    type="button"
+                                    class="icon-btn edit-preset-btn"
+                                    title="Edit preset"
+                                    data-preset-id="${p.id}"
+                                    data-preset-name="${p.name}"
+                                    data-shift-start="${p.shift_start}"
+                                    data-shift-end="${p.shift_end}"
+                                    data-work-week="${p.work_week}"
+                                >
+                                    <i class="fa-solid fa-pen-to-square"></i>
+                                </button>
+                                ${canDeletePreset(p) ? `
+                                <button
+                                    type="button"
+                                    class="icon-btn delete-preset-btn"
+                                    title="Delete preset"
+                                    data-preset-id="${p.id}"
+                                    data-preset-name="${p.name}"
+                                >
+                                    <i class="fa-solid fa-trash"></i>
+                                </button>
+                                ` : ''}
+                            </td>
+                        </tr>
+                    `).join('') || '<tr><td colspan="7" class="placeholder-text">No presets yet. Add Shift 1, Shift 2, etc.</td></tr>'}
+                </tbody>
+            </table>
+        </div>
+    </div>
+`;
+
 const buildShiftTable = (rows = []) => `
     <div class="card">
         <h3><i class="fa-solid fa-business-time"></i> Employee Shift Settings</h3>
-        <p class="allocation-description">Set per-employee shift timings. Grace time is fixed at 15 minutes. Minimum shift length is 9 hours.</p>
+        <p class="allocation-description">Assign a shift preset or set custom timings per employee. Grace time is fixed at 15 minutes. Minimum shift length is 9 hours.</p>
         <div class="table-container">
             <table class="table">
                 <thead>
                     <tr>
                         <th>Employee ID</th>
                         <th>Employee Name</th>
+                        <th>Assigned Shift</th>
                         <th>Shift Start</th>
                         <th>Shift End</th>
                         <th>Work Week</th>
@@ -54,6 +136,7 @@ const buildShiftTable = (rows = []) => `
                         <tr>
                             <td><strong>${row.employee_id}</strong></td>
                             <td>${row.employee_name || row.employee_id}</td>
+                            <td>${row.preset_name || 'Custom'}</td>
                             <td>${row.shift_start}</td>
                             <td>${row.shift_end}</td>
                             <td>${formatWorkWeek(row.work_week)}</td>
@@ -69,19 +152,54 @@ const buildShiftTable = (rows = []) => `
                                     data-shift-start="${row.shift_start}"
                                     data-shift-end="${row.shift_end}"
                                     data-work-week="${row.work_week}"
+                                    data-preset-id="${row.preset_id || ''}"
                                 >
                                     <i class="fa-solid fa-pen-to-square"></i>
                                 </button>
                             </td>
                         </tr>
-                    `).join('') || '<tr><td colspan="8" class="placeholder-text">No employees found.</td></tr>'}
+                    `).join('') || '<tr><td colspan="9" class="placeholder-text">No employees found.</td></tr>'}
                 </tbody>
             </table>
         </div>
     </div>
 `;
 
-const openEditShiftModal = (employeeId, employeeName, shiftStart, shiftEnd, workWeek) => {
+const presetOptionsHtml = (selectedId = '') => {
+    const options = cachedPresets.map((p) => `
+        <option value="${p.id}" ${String(selectedId) === String(p.id) ? 'selected' : ''}>${p.name} (${p.shift_start}–${p.shift_end}, ${formatWorkWeek(p.work_week)})</option>
+    `).join('');
+    return `<option value="">— Custom timings —</option>${options}`;
+};
+
+const toggleCustomFields = (useCustom) => {
+    const start = document.getElementById('shift-start');
+    const end = document.getElementById('shift-end');
+    const week = document.getElementById('work-week');
+    if (start) start.disabled = !useCustom;
+    if (end) end.disabled = !useCustom;
+    if (week) week.disabled = !useCustom;
+};
+
+const onPresetSelectChange = () => {
+    const select = document.getElementById('shift-preset-select');
+    const presetId = select?.value || '';
+    const useCustom = !presetId;
+    toggleCustomFields(useCustom);
+    if (!useCustom) {
+        const preset = cachedPresets.find((p) => String(p.id) === String(presetId));
+        if (preset) {
+            const start = document.getElementById('shift-start');
+            const end = document.getElementById('shift-end');
+            const week = document.getElementById('work-week');
+            if (start) start.value = preset.shift_start;
+            if (end) end.value = preset.shift_end;
+            if (week) week.value = preset.work_week;
+        }
+    }
+};
+
+const openEditShiftModal = (employeeId, employeeName, shiftStart, shiftEnd, workWeek, presetId = '') => {
     const body = `
         <div class="modal-form modern-form team-modal">
             <div class="form-section">
@@ -100,6 +218,13 @@ const openEditShiftModal = (employeeId, employeeName, shiftStart, shiftEnd, work
                     <div class="form-field">
                         <label class="form-label">Grace Time</label>
                         <input class="input-control" type="text" value="${DEFAULT_GRACE_MINUTES} minutes (fixed)" disabled />
+                    </div>
+                    <div class="form-field" style="grid-column: 1 / -1;">
+                        <label class="form-label" for="shift-preset-select">Assign Shift Preset</label>
+                        <select id="shift-preset-select" class="input-control">
+                            ${presetOptionsHtml(presetId)}
+                        </select>
+                        <p class="helper-text">Choose a preset to apply its timings, or select custom to set times manually.</p>
                     </div>
                     <div class="form-field">
                         <label class="form-label" for="shift-start">Shift Start</label>
@@ -127,42 +252,135 @@ const openEditShiftModal = (employeeId, employeeName, shiftStart, shiftEnd, work
         { id: 'save-shift-btn', text: 'Save Changes', className: 'btn btn-primary', type: 'button' },
     ]);
 
+    const presetSelect = document.getElementById('shift-preset-select');
+    if (presetSelect) {
+        presetSelect.onchange = onPresetSelectChange;
+        onPresetSelectChange();
+    }
+
     const cancelBtn = document.getElementById('cancel-shift-btn');
     if (cancelBtn) cancelBtn.onclick = () => closeModal?.();
 
     const saveBtn = document.getElementById('save-shift-btn');
     if (!saveBtn) return;
     saveBtn.onclick = async () => {
+        const selectedPresetId = String(document.getElementById('shift-preset-select')?.value || '').trim();
+        const useCustom = !selectedPresetId;
         const start = document.getElementById('shift-start')?.value;
         const end = document.getElementById('shift-end')?.value;
         const selectedWorkWeek = String(document.getElementById('work-week')?.value || DEFAULT_WORK_WEEK).toLowerCase();
-        if (!start || !end) {
-            alert('Shift start and end time are required.');
-            return;
-        }
-        if (!['mon-fri', 'mon-sat'].includes(selectedWorkWeek)) {
-            alert('Please select a valid work week.');
-            return;
-        }
-        if (!isValidShiftWindow(start, end)) {
-            alert(`Shift timing should be minimum ${MIN_SHIFT_HOURS} hours.`);
-            return;
+
+        if (useCustom) {
+            if (!start || !end) {
+                alert('Shift start and end time are required.');
+                return;
+            }
+            if (!['mon-fri', 'mon-sat'].includes(selectedWorkWeek)) {
+                alert('Please select a valid work week.');
+                return;
+            }
+            if (!isValidShiftWindow(start, end)) {
+                alert(`Shift timing should be minimum ${MIN_SHIFT_HOURS} hours.`);
+                return;
+            }
         }
 
         try {
-            await updateEmployeeShiftSetting({
+            const payload = {
                 employee_id: employeeId,
-                shift_start: start,
-                shift_end: end,
                 grace_minutes: DEFAULT_GRACE_MINUTES,
-                work_week: selectedWorkWeek,
-            });
+            };
+            if (selectedPresetId) {
+                payload.preset_id = selectedPresetId;
+                payload.use_custom = false;
+            } else {
+                payload.use_custom = true;
+                payload.shift_start = start;
+                payload.shift_end = end;
+                payload.work_week = selectedWorkWeek;
+            }
+            await updateEmployeeShiftSetting(payload);
             closeModal?.();
             await renderShiftSettingsPage();
         } catch (err) {
             alert(err.message || 'Failed to update shift setting');
         }
     };
+};
+
+const openPresetModal = (preset = null) => {
+    const isEdit = Boolean(preset?.id);
+    const title = isEdit ? 'Edit Shift Preset' : 'Add Shift Preset';
+    const body = `
+        <div class="modal-form modern-form team-modal">
+            <div class="form-section">
+                <input type="hidden" id="preset-id" value="${preset?.id || ''}" />
+                <div class="form-grid two-col">
+                    <div class="form-field">
+                        <label class="form-label" for="preset-name">Preset Name</label>
+                        <input id="preset-name" class="input-control" type="text" value="${preset?.name || ''}" placeholder="e.g. Shift 1" required />
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label">Grace Time</label>
+                        <input class="input-control" type="text" value="${DEFAULT_GRACE_MINUTES} minutes (fixed)" disabled />
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label" for="preset-shift-start">Shift Start</label>
+                        <input id="preset-shift-start" class="input-control" type="time" value="${preset?.shift_start || '09:00'}" required />
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label" for="preset-shift-end">Shift End</label>
+                        <input id="preset-shift-end" class="input-control" type="time" value="${preset?.shift_end || '18:00'}" required />
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label" for="preset-work-week">Work Week</label>
+                        <select id="preset-work-week" class="input-control">
+                            <option value="mon-fri" ${String(preset?.work_week || '').toLowerCase() === 'mon-fri' ? 'selected' : ''}>Mon-Fri</option>
+                            <option value="mon-sat" ${String(preset?.work_week || DEFAULT_WORK_WEEK).toLowerCase() !== 'mon-fri' ? 'selected' : ''}>Mon-Sat</option>
+                        </select>
+                    </div>
+                </div>
+                <p class="helper-text">Minimum shift length is ${MIN_SHIFT_HOURS} hours. Employees assigned this preset will use these timings.</p>
+            </div>
+        </div>
+    `;
+
+    renderModal(title, body, [
+        { id: 'cancel-preset-btn', text: 'Cancel', className: 'btn btn-secondary', type: 'button' },
+        { id: 'save-preset-btn', text: 'Save Preset', className: 'btn btn-primary', type: 'button' },
+    ]);
+
+    document.getElementById('cancel-preset-btn')?.addEventListener('click', () => closeModal?.());
+
+    document.getElementById('save-preset-btn')?.addEventListener('click', async () => {
+        const name = document.getElementById('preset-name')?.value?.trim();
+        const start = document.getElementById('preset-shift-start')?.value;
+        const end = document.getElementById('preset-shift-end')?.value;
+        const workWeek = String(document.getElementById('preset-work-week')?.value || DEFAULT_WORK_WEEK).toLowerCase();
+        const id = document.getElementById('preset-id')?.value?.trim();
+
+        if (!name) {
+            alert('Preset name is required.');
+            return;
+        }
+        if (!start || !end || !isValidShiftWindow(start, end)) {
+            alert(`Shift timing should be minimum ${MIN_SHIFT_HOURS} hours.`);
+            return;
+        }
+
+        try {
+            const payload = { name, shift_start: start, shift_end: end, work_week: workWeek };
+            if (id) {
+                await updateShiftPreset(id, payload);
+            } else {
+                await createShiftPreset(payload);
+            }
+            closeModal?.();
+            await renderShiftSettingsPage();
+        } catch (err) {
+            alert(err.message || 'Failed to save preset');
+        }
+    });
 };
 
 const attachShiftHandlers = () => {
@@ -173,8 +391,40 @@ const attachShiftHandlers = () => {
                 btn.getAttribute('data-employee-name'),
                 btn.getAttribute('data-shift-start'),
                 btn.getAttribute('data-shift-end'),
-                btn.getAttribute('data-work-week')
+                btn.getAttribute('data-work-week'),
+                btn.getAttribute('data-preset-id') || ''
             );
+        });
+    });
+
+    document.getElementById('add-shift-preset-btn')?.addEventListener('click', () => openPresetModal());
+
+    document.querySelectorAll('.edit-preset-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            openPresetModal({
+                id: btn.getAttribute('data-preset-id'),
+                name: btn.getAttribute('data-preset-name'),
+                shift_start: btn.getAttribute('data-shift-start'),
+                shift_end: btn.getAttribute('data-shift-end'),
+                work_week: btn.getAttribute('data-work-week'),
+            });
+        });
+    });
+
+    document.querySelectorAll('.delete-preset-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const presetId = btn.getAttribute('data-preset-id');
+            const presetName = btn.getAttribute('data-preset-name') || 'this preset';
+            if (!presetId) return;
+            if (!window.confirm(`Delete "${presetName}"? Employees assigned to it will keep their last saved timings as custom.`)) {
+                return;
+            }
+            try {
+                await deleteShiftPreset(presetId);
+                await renderShiftSettingsPage();
+            } catch (err) {
+                alert(err.message || 'Failed to delete preset');
+            }
         });
     });
 };
@@ -203,12 +453,15 @@ export const renderShiftSettingsPage = async () => {
     document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('shift-settings', loading));
 
     try {
-        const [employeeRes, shiftRes] = await Promise.all([
-            listEmployees(1, 5000),
-            fetchShiftSettings(),
-        ]);
+        const shiftRes = await fetchShiftSettings();
+        const employeeRes = await listEmployees(1, 5000).catch((empErr) => {
+            console.warn('[shift-settings] Employee list unavailable:', empErr);
+            return { items: [] };
+        });
         const employees = employeeRes.items || [];
         const byEmployee = shiftRes.by_employee || {};
+        const presets = shiftRes.presets || [];
+        cachedPresets = presets;
         const defaults = shiftRes.defaults || {
             shift_start: '09:00',
             shift_end: '18:00',
@@ -232,12 +485,14 @@ export const renderShiftSettingsPage = async () => {
                     work_week: workWeek,
                     grace_minutes: Number(entry.grace_minutes || defaults.grace_minutes || DEFAULT_GRACE_MINUTES),
                     duration_hours: getShiftDurationHours(shiftStart, shiftEnd),
+                    preset_id: entry.preset_id || null,
+                    preset_name: entry.preset_name || null,
                 };
             })
             .filter(Boolean)
             .sort((a, b) => a.employee_id.localeCompare(b.employee_id));
 
-        const html = buildShiftTable(rows);
+        const html = buildPresetsSection(presets) + buildShiftTable(rows);
         document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('shift-settings', html));
         attachShiftHandlers();
     } catch (err) {

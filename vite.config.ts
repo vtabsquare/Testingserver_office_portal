@@ -12,6 +12,17 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: '0.0.0.0',
+      // index.html sets API_BASE_URL to this origin; proxy /api to Flask on :5000
+      proxy: {
+        '/api': {
+          target: env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:5000',
+          changeOrigin: true,
+        },
+        '/google': {
+          target: env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:5000',
+          changeOrigin: true,
+        },
+      },
     },
     plugins: [],
     define: {

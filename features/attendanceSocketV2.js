@@ -10,6 +10,7 @@ let isConnected = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 3000;
+let teamAttendanceRefreshHandler = null;
 
 // ================== SOCKET CONNECTION ==================
 
@@ -32,6 +33,23 @@ export function initializeAttendanceSocket(socketInstance) {
 /**
  * Register current user for attendance events
  */
+/**
+ * Register for team-wide attendance updates (Team Attendance page).
+ * @param {(data: { employee_id?: string }) => void|Promise<void>} onUpdate
+ */
+export function registerForTeamAttendanceWatch(onUpdate) {
+    teamAttendanceRefreshHandler = typeof onUpdate === 'function' ? onUpdate : null;
+    if (!socket || !socket.connected) return;
+    socket.emit('attendance:register-team-watcher');
+}
+
+export function unregisterForTeamAttendanceWatch() {
+    teamAttendanceRefreshHandler = null;
+    if (socket?.connected) {
+        socket.emit('attendance:unregister-team-watcher');
+    }
+}
+
 export function registerForAttendanceEvents() {
     const employeeId = state.user?.id;
 
@@ -66,6 +84,9 @@ function setupEventHandlers() {
 
         // Register for events on connect
         registerForAttendanceEvents();
+        if (teamAttendanceRefreshHandler) {
+            socket.emit('attendance:register-team-watcher');
+        }
     });
 
     socket.on('disconnect', (reason) => {
@@ -132,6 +153,16 @@ function setupEventHandlers() {
             await fetchAttendanceStatus(employeeId);
             updateTimerDisplay();
         }
+        if (teamAttendanceRefreshHandler && data?.employee_id) {
+            const selfId = String(state.user?.id || '').toUpperCase();
+            if (String(data.employee_id).toUpperCase() !== selfId) {
+                try {
+                    await teamAttendanceRefreshHandler(data);
+                } catch (err) {
+                    console.warn('[ATTENDANCE-SOCKET-V2] Team refresh (started) failed:', err);
+                }
+            }
+        }
     });
 
     socket.on('attendance:stopped', async (data) => {
@@ -154,6 +185,16 @@ function setupEventHandlers() {
         if (employeeId) {
             await fetchAttendanceStatus(employeeId);
             updateTimerDisplay();
+        }
+    });
+
+    // Team Attendance: any employee check-in/out while manager is watching
+    socket.on('attendance:team-update', async (data) => {
+        if (!teamAttendanceRefreshHandler) return;
+        try {
+            await teamAttendanceRefreshHandler(data);
+        } catch (err) {
+            console.warn('[ATTENDANCE-SOCKET-V2] Team attendance refresh failed:', err);
         }
     });
 }

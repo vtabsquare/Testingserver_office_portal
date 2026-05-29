@@ -76,7 +76,7 @@ const APPLICATIONS_GROUPS = [
             { key: 'leave_settings', name: 'Leave Settings', icon: 'fa-sliders', desc: 'Configure leave types and rules' },
             { key: 'shift_settings', name: 'Shift Settings', icon: 'fa-business-time', desc: 'Configure shift timings and weekly offs' },
             { key: 'login_settings', name: 'Login Settings', icon: 'fa-shield-halved', desc: 'Security and session controls' },
-            { key: 'faceauth_settings', name: 'FaceAuth Settings', icon: 'fa-face-viewfinder', desc: 'Facial recognition settings' },
+            { key: 'faceauth_settings', name: 'FaceAuth Settings', icon: 'fa-id-badge', desc: 'Facial recognition settings' },
             { key: 'role_settings', name: 'Role Settings', icon: 'fa-user-shield', desc: 'Access and permission controls' },
             { key: 'faceauth_admin', name: 'FaceAuth Admin', icon: 'fa-camera', desc: 'Face authentication dashboard' }
         ]
@@ -118,7 +118,7 @@ const FUNCTIONS_GROUPS = [
             { key: 'manage_leave_settings', name: 'Manage Leave Settings', icon: 'fa-gear', desc: 'Modify leave rules and allocations' },
             { key: 'manage_shift_settings', name: 'Manage Shift Settings', icon: 'fa-business-time', desc: 'Modify shift timings and weekly offs' },
             { key: 'manage_login_settings', name: 'Manage Login Settings', icon: 'fa-shield-halved', desc: 'Modify security policies' },
-            { key: 'manage_faceauth_settings', name: 'Manage FaceAuth Settings', icon: 'fa-face-viewfinder', desc: 'Configure facial recognition' },
+            { key: 'manage_faceauth_settings', name: 'Manage FaceAuth Settings', icon: 'fa-id-badge', desc: 'Configure facial recognition' },
             { key: 'manage_role_settings', name: 'Manage Role Settings', icon: 'fa-user-shield', desc: 'Modify role-based access control' }
         ]
     }

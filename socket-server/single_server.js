@@ -84,6 +84,11 @@ app.post("/emit", (req, res) => {
             baseSeconds: baseSeconds || 0,
             serverNow: Date.now(),
           });
+          io.to("attendance:team-watchers").emit("attendance:team-update", {
+            employee_id: uid,
+            event_type: "attendance:checkin",
+            serverNow: Date.now(),
+          });
         }
         break;
       }

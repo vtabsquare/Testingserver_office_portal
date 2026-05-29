@@ -24,7 +24,30 @@ export async function checkIn(employeeId, location = null) {
   if (!res.ok || !data.success) {
     throw new Error(data.error || 'Check-in failed');
   }
-  return data; // { record_id, checkin_time }
+  return data; // { record_id, checkin_time, isLate, ... }
+}
+
+export async function fetchAttendanceLateFlags(employeeId, year, month) {
+  const emp = String(employeeId || '').toUpperCase();
+  const res = await timedFetch(
+    `${BASE_URL}/api/attendance-late-flags/${encodeURIComponent(emp)}/${year}/${month}`,
+    {},
+    'fetchAttendanceLateFlags'
+  );
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || 'Failed to fetch late-entry flags');
+  }
+  return data.markers || {};
+}
+
+export function invalidateAttendanceCache(employeeId, year, month) {
+  try {
+    const key = `${String(employeeId || '').toUpperCase()}|${year}|${month}`;
+    if (state?.cache?.attendance?.[key]) {
+      delete state.cache.attendance[key];
+    }
+  } catch { /* ignore */ }
 }
 
 export async function checkOut(employeeId, location = null) {
@@ -65,7 +88,8 @@ export async function fetchMonthlyAttendance(employeeId, year, month, forceRefre
   if (!res.ok || !data.success) {
     throw new Error(data.error || 'Failed to fetch attendance');
   }
-  const records = data.records || []; // Array of { day, status, checkIn, checkOut, duration }
+  const records = data.records || []; // Array of { day, status, checkIn, checkOut, duration, isLate }
+  records.lateMarkers = data.late_markers || {};
   try {
     if (state?.cache?.attendance) {
       state.cache.attendance[key] = { data: records, fetchedAt: now };

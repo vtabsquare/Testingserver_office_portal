@@ -1,13 +1,62 @@
 import { API_BASE_URL } from '../config.js';
 import { state } from '../state.js';
-import { fetchMonthlyAttendance } from '../features/attendanceApi.js';
+import { fetchMonthlyAttendance, invalidateAttendanceCache } from '../features/attendanceApi.js';
 import { getHolidays } from '../features/holidaysApi.js';
 import { renderModal, closeModal } from '../components/modal.js';
 import { clearCacheByPrefix } from '../features/cache.js';
 import { isAdminUser, isManagerOrAdmin, isTeamLeadUser } from '../utils/accessControl.js';
 import { fetchLoginEvents } from '../features/loginSettingsApi.js';
 import { fetchShiftSettings } from '../features/shiftSettingsApi.js';
+import {
+    computeIsLateForShift,
+    formatCheckInFromTimestamp,
+    maxCheckInTime,
+} from '../features/shiftLate.js';
 import { runWithSubmissionLoading } from '../utils/submissionLoading.js';
+
+/** Set isLate from first check-in vs shift (independent of P/A/HL status). */
+const applyLateFlagsToAttendanceMap = (attendanceMap, employeeId, shiftRes) => {
+    const uid = String(employeeId || '').toUpperCase();
+    const shift = shiftRes?.by_employee?.[uid] || shiftRes?.defaults || {};
+    const shiftStart = shift.shift_start || '09:00';
+    const grace = shift.grace_minutes || 15;
+    attendanceMap.shiftStart = shiftStart;
+    attendanceMap.graceMinutes = grace;
+    Object.keys(attendanceMap).forEach((key) => {
+        if (!/^\d+$/.test(key)) return;
+        const dayData = attendanceMap[key];
+        if (!dayData?.checkIn) return;
+        dayData.isLate = computeIsLateForShift(dayData.checkIn, shiftStart, grace);
+    });
+};
+
+/** When timer is running today, use current session start for late icon (not first punch of day). */
+const mergeActiveTimerLateForToday = (attendanceMap, year, month, shiftStart, graceMin) => {
+    if (!state.timer?.isRunning || !state.timer?.startTime) return;
+    const now = new Date();
+    if (now.getFullYear() !== year || now.getMonth() + 1 !== month) return;
+    const day = now.getDate();
+    const sessionCheckIn = formatCheckInFromTimestamp(state.timer.startTime);
+    if (!sessionCheckIn) return;
+    const row = attendanceMap[day] || { day, status: 'A' };
+    row.checkIn = maxCheckInTime(row.checkIn, sessionCheckIn) || sessionCheckIn;
+    row.isLate = computeIsLateForShift(row.checkIn, shiftStart, graceMin);
+    row.shiftStart = shiftStart;
+    row.graceMinutes = graceMin;
+    attendanceMap[day] = row;
+};
+
+/** Merge late_markers from monthly attendance API (login-activity table on server). */
+const mergeLateFlagsFromTable = (attendanceMap, lateMarkers = {}) => {
+    Object.entries(lateMarkers || {}).forEach(([dayKey, marker]) => {
+        const day = Number(dayKey);
+        if (!day || !marker) return;
+        const row = attendanceMap[day] || { day, status: 'A' };
+        if (marker.checkIn) row.checkIn = marker.checkIn;
+        if (typeof marker.isLate === 'boolean') row.isLate = marker.isLate;
+        attendanceMap[day] = row;
+    });
+};
 
 const isManagerUserAttendance = () => {
     try {
@@ -54,7 +103,7 @@ const isWeeklyOffDate = (year, month, day, workWeek = 'mon-sat') => {
     return false;
 };
 
-const renderAttendanceTrackerPage = async (mode) => {
+export const renderAttendanceTrackerPage = async (mode) => {
     const date = state.currentAttendanceDate;
     const monthName = date.toLocaleString('default', { month: 'long' });
     const year = date.getFullYear();
@@ -131,8 +180,16 @@ const renderAttendanceTrackerPage = async (mode) => {
             `
             : '';
 
+        const shiftStart = dayData.shiftStart || dayData._shiftStart || '09:00';
+        const graceMin = dayData.graceMinutes || dayData._graceMinutes || 15;
+        const showLate = !!isLate || (
+            dayData.checkIn
+                ? computeIsLateForShift(dayData.checkIn, shiftStart, graceMin)
+                : false
+        );
+
         const statusIcons = [
-            isLate ? '<i class="fa-solid fa-clock-rotate-left late-icon" title="Late entry"></i>' : '',
+            showLate ? '<i class="fa-solid fa-clock-rotate-left late-icon" title="Late entry"></i>' : '',
             isManual ? '<i class="fa-solid fa-users manual-icon" title="Manually edited by admin"></i>' : '',
             isPending ? '<i class="fa-solid fa-triangle-exclamation pending-icon" title="Pending"></i>' : ''
         ].filter(Boolean).join('');
@@ -140,8 +197,8 @@ const renderAttendanceTrackerPage = async (mode) => {
         return `
             <div class="status-cell status-${normalizedStatus.toLowerCase()}">
                 ${content}
-                ${statusIcons ? `<div class="status-icons">${statusIcons}</div>` : ''}
                 ${pendingOverlay}
+                ${statusIcons ? `<div class="status-icons">${statusIcons}</div>` : ''}
             </div>
         `;
     }
@@ -290,8 +347,18 @@ const renderAttendanceTrackerPage = async (mode) => {
             calendarCells.push('<div class="calendar-day empty"></div>');
         }
 
+        const mapShiftStart = myAttendance.shiftStart || '09:00';
+        const mapGrace = myAttendance.graceMinutes || 15;
+
         for (let i = 1; i <= daysInMonth; i++) {
-            const dayData = myAttendance[i];
+            const rawDay = myAttendance[i];
+            const dayData = rawDay
+                ? {
+                    ...rawDay,
+                    shiftStart: rawDay.shiftStart || mapShiftStart,
+                    graceMinutes: rawDay.graceMinutes || mapGrace,
+                }
+                : rawDay;
             const isSelected = i === state.selectedAttendanceDay;
             const isHoliday = isHolidayDate(year, month, i);
             const isWeeklyOff = isWeeklyOffDate(year, month, i, myWorkWeek);
@@ -571,7 +638,10 @@ const renderAttendanceTrackerPage = async (mode) => {
     };
 
     const myControls = `
-        <div class="page-header-actions">
+        <div class="page-header-actions" style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary" id="refresh-attendance-btn" title="Reload from database">
+                <i class="fa-solid fa-rotate"></i> Refresh
+            </button>
             <button class="btn btn-success" id="submit-attendance-btn"><i class="fa-solid fa-paper-plane"></i> Submit Attendance</button>
         </div>
     `;
@@ -614,6 +684,16 @@ const renderAttendanceTrackerPage = async (mode) => {
         timeFilter.addEventListener('change', async (e) => {
             state.attendanceFilter = e.target.value;
             await renderAttendanceTrackerPage(mode);
+        });
+    }
+
+    const refreshBtn = document.getElementById('refresh-attendance-btn');
+    if (refreshBtn && mode === 'my') {
+        refreshBtn.addEventListener('click', async () => {
+            const uid = String(state.user?.id || '').toUpperCase();
+            const m = date.getMonth() + 1;
+            invalidateAttendanceCache(uid, year, m);
+            await renderMyAttendancePage();
         });
     }
 
@@ -846,7 +926,7 @@ async function loadHolidaysForMonth(month, year) {
         if (!holidaySection) return;
 
         // Filter holidays for the current month
-        const currentMonthHolidays = holidays.filter(h => {
+        currentMonthHolidays = holidays.filter(h => {
             const holidayDate = new Date(h.crc6f_date);
             return holidayDate.getMonth() === month && holidayDate.getFullYear() === year;
         });
@@ -1047,20 +1127,22 @@ export const renderMyAttendancePage = async () => {
         console.log(`📅 Loaded ${currentMonthHolidays.length} holidays for ${year}-${month}`);
 
         const uid = String(state.user.id || '').toUpperCase();
+        const prevMap = state.attendanceData[uid] || state.attendanceData[state.user.id] || {};
         const [records, shiftRes] = await Promise.all([
-            fetchMonthlyAttendance(uid, year, month),
+            fetchMonthlyAttendance(uid, year, month, true),
             fetchShiftSettings().catch(() => ({ defaults: { work_week: 'mon-sat' }, by_employee: {} })),
         ]);
 
         const attendanceMap = {};
         records.forEach(rec => {
             if (rec.day) {
+                const prev = prevMap[rec.day] || {};
                 attendanceMap[rec.day] = {
                     day: rec.day,
                     status: rec.status,
                     isLate: !!rec.isLate,
                     workWeek: normalizeWorkWeek(rec.workWeek),
-                    checkIn: rec.checkIn,
+                    checkIn: rec.checkIn || prev.checkIn,
                     checkOut: rec.checkOut,
                     duration: rec.duration,
                     isManual: !!(rec.isManual || rec.is_manual),
@@ -1069,9 +1151,37 @@ export const renderMyAttendancePage = async () => {
                     leaveStart: rec.leaveStart,
                     leaveEnd: rec.leaveEnd,
                     leaveStatus: rec.leaveStatus,
-                    pendingLeaves: rec.pendingLeaves || [],
+                    pendingLeaves: rec.pendingLeaves || prev.pendingLeaves || [],
                 };
             }
+        });
+        const now = new Date();
+        if (now.getFullYear() === year && now.getMonth() + 1 === month) {
+            const todayDay = now.getDate();
+            const prevToday = prevMap[todayDay];
+            if (prevToday?.checkIn) {
+                const apiToday = attendanceMap[todayDay] || { day: todayDay };
+                attendanceMap[todayDay] = {
+                    ...apiToday,
+                    checkIn: apiToday.checkIn || prevToday.checkIn,
+                    isLate: !!(apiToday.isLate || prevToday.isLate),
+                    status: apiToday.status ?? prevToday.status,
+                    pendingLeaves: apiToday.pendingLeaves?.length
+                        ? apiToday.pendingLeaves
+                        : (prevToday.pendingLeaves || []),
+                };
+            }
+        }
+        mergeLateFlagsFromTable(attendanceMap, records.lateMarkers || {});
+        const shiftMeta = shiftRes?.by_employee?.[uid] || shiftRes?.defaults || {};
+        const shiftStart = shiftMeta.shift_start || '09:00';
+        const graceMin = shiftMeta.grace_minutes || 15;
+        applyLateFlagsToAttendanceMap(attendanceMap, uid, shiftRes);
+        mergeActiveTimerLateForToday(attendanceMap, year, month, shiftStart, graceMin);
+        Object.keys(attendanceMap).forEach((key) => {
+            if (!/^\d+$/.test(key)) return;
+            attendanceMap[key].shiftStart = shiftStart;
+            attendanceMap[key].graceMinutes = graceMin;
         });
         attendanceMap.employeeName = state.user?.name || state.user?.full_name || state.user?.id || '';
         const shiftWorkWeek = shiftRes?.by_employee?.[uid]?.work_week || shiftRes?.defaults?.work_week;
@@ -1204,6 +1314,14 @@ export const renderTeamAttendancePage = async () => {
             attendanceMap.employeeFlag = meta.employeeFlag || 'Employee';
             const empShiftWorkWeek = shiftRes?.by_employee?.[empId]?.work_week || shiftRes?.defaults?.work_week;
             attendanceMap.workWeek = normalizeWorkWeek(empShiftWorkWeek || records[0]?.workWeek);
+            mergeLateFlagsFromTable(attendanceMap, records.lateMarkers || {});
+            applyLateFlagsToAttendanceMap(attendanceMap, empId, shiftRes);
+            const empShift = shiftRes?.by_employee?.[empId] || shiftRes?.defaults || {};
+            Object.keys(attendanceMap).forEach((key) => {
+                if (!/^\d+$/.test(key)) return;
+                attendanceMap[key].shiftStart = empShift.shift_start || '09:00';
+                attendanceMap[key].graceMinutes = empShift.grace_minutes || 15;
+            });
 
             // Store both attendance data and employee info
             state.attendanceData[empId] = attendanceMap;
@@ -1217,6 +1335,10 @@ export const renderTeamAttendancePage = async () => {
     }
 
     await renderAttendanceTrackerPage('team');
+};
+
+export const leaveTeamAttendancePage = () => {
+    /* no-op: late entry uses HTTP refresh only */
 };
 
 // Check if attendance has been submitted for the current month

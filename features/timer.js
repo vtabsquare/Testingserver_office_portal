@@ -1,7 +1,9 @@
 import { state } from '../state.js';
-import { checkIn, checkOut } from './attendanceApi.js';
+import { checkIn, checkOut, invalidateAttendanceCache } from './attendanceApi.js';
+import { fetchShiftSettings } from './shiftSettingsApi.js';
+import { computeIsLateForShift } from './shiftLate.js';
 import { API_BASE_URL } from '../config.js';
-import { renderMyAttendancePage } from '../pages/attendance.js';
+import { renderAttendanceTrackerPage } from '../pages/attendance.js';
 import { recordUserAction, markBackendStateLoaded } from './attendanceSocket.js';
 
 const HALF_DAY_SECONDS = 4 * 3600;
@@ -48,19 +50,22 @@ const maybeUpdateLiveAttendanceStatus = (totalSeconds = 0, { force = false } = {
     if (state.timer.lastAutoStatus === nextStatus) return;
 
     const { record, day, uid } = info;
+    const wasLate = !!record.isLate;
 
     state.timer.lastAutoStatus = nextStatus;
     record.day = day;
     record.status = nextStatus;
     record.totalHours = Number((totalSeconds / 3600).toFixed(2));
     record.durationSeconds = totalSeconds;
+    if (wasLate) record.isLate = true;
 
     // Preserve existing metadata (check-in/out timestamps) if present
     state.attendanceData[uid][day] = record;
 
-    if (window.location.hash === '#/attendance-my') {
+    const hash = window.location.hash || '';
+    if (hash === '#/attendance-my' || hash.includes('attendance-my')) {
         try {
-            renderMyAttendancePage();
+            renderAttendanceTrackerPage('my');
         } catch (err) {
             console.warn('Failed to refresh attendance view during live status update', err);
         }
@@ -200,7 +205,14 @@ const startTimer = async () => {
             const location = await getGeolocation();
 
             // Call backend check-in
-            const { record_id, checkin_time, total_seconds_today, checkin_timestamp } = await checkIn(state.user.id, location);
+            const checkInResult = await checkIn(state.user.id, location);
+            const {
+                record_id,
+                checkin_time,
+                total_seconds_today,
+                checkin_timestamp,
+                isLate: serverIsLate,
+            } = checkInResult;
 
             // If backend provides authoritative check-in timestamp, prefer it.
             if (typeof checkin_timestamp === 'number' && checkin_timestamp > 0) {
@@ -237,24 +249,47 @@ const startTimer = async () => {
 
             console.log('✅ Check-in confirmed by backend:', checkin_time);
 
+            let shiftStart = '09:00';
+            let graceMin = 15;
+            let isLate = typeof serverIsLate === 'boolean' ? serverIsLate : false;
+            try {
+                const shiftRes = await fetchShiftSettings();
+                const shift = shiftRes?.by_employee?.[uid] || shiftRes?.defaults || {};
+                shiftStart = shift.shift_start || shiftStart;
+                graceMin = shift.grace_minutes || graceMin;
+                if (typeof serverIsLate !== 'boolean') {
+                    isLate = computeIsLateForShift(checkin_time, shiftStart, graceMin);
+                }
+            } catch { /* keep defaults */ }
+
+            const year = today.getFullYear();
+            const month = today.getMonth() + 1;
+            invalidateAttendanceCache(uid, year, month);
+
             // Update attendance state for today
             const day = today.getDate();
             state.attendanceData[uid] = state.attendanceData[uid] || {};
+            state.attendanceData[uid] = state.attendanceData[uid] || {};
+            state.attendanceData[uid].shiftStart = shiftStart;
+            state.attendanceData[uid].graceMinutes = graceMin;
             state.attendanceData[uid][day] = {
                 ...(state.attendanceData[uid][day] || {}),
                 day,
                 status: deriveAttendanceStatusFromSeconds(typeof state.timer.lastDuration === 'number' ? state.timer.lastDuration : backendSeconds),
                 checkIn: checkin_time,
-                isLate: false,
+                isLate,
+                shiftStart,
+                graceMinutes: graceMin,
                 isManual: false,
                 isPending: false,
             };
             state.timer.lastAutoStatus = state.attendanceData[uid][day].status;
             maybeUpdateLiveAttendanceStatus(state.timer.lastDuration || 0, { force: true });
 
-            // Refresh attendance page if user is on it
-            if (window.location.hash === '#/attendance-my') {
-                renderMyAttendancePage();
+            // Refresh calendar from in-memory state (avoid API refetch clearing isLate)
+            const hash = window.location.hash || '';
+            if (hash === '#/attendance-my' || hash.includes('attendance-my')) {
+                await renderAttendanceTrackerPage('my');
             }
         } catch (e) {
             console.error('Check-in API failed:', e);
@@ -376,8 +411,9 @@ const stopTimer = async () => {
             };
 
             // Refresh attendance page if user is on it
-            if (window.location.hash === '#/attendance-my') {
-                renderMyAttendancePage();
+            const hash = window.location.hash || '';
+            if (hash === '#/attendance-my' || hash.includes('attendance-my')) {
+                await renderAttendanceTrackerPage('my');
             }
         } catch (e) {
             console.error('Check-out API failed:', e);

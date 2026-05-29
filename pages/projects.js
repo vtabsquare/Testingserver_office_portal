@@ -2740,23 +2740,8 @@ function renderBoardsTab(projectId, canManageOverride = null, canCreateBoardsOve
       ? canCreateBoardsOverride
       : getProjectAccess().canCreateBoards;
   const html = `
-   
-
-    <div class="table-container">
-      <table class="table" id="boards-table">
-        <thead>
-          <tr>
-            <th>Board Name</th>
-            <th>No. of Tasks</th>
-            <th>No. of Members</th>
-            <th>Status</th>
-            ${canManage ? '<th style="text-align:right;">Actions</th>' : ""}
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td colspan="5" class="placeholder-text">Loading...</td></tr>
-        </tbody>
-      </table>
+    <div id="boards-view-wrapper">
+      <div class="placeholder-text">Loading boards...</div>
     </div>
   `;
 
@@ -2783,9 +2768,8 @@ async function fetchBoards(projectId, canManageOverride = null) {
 
     if (!res.ok || !data.success) {
       console.error("Failed to load boards:", data.error);
-      document.querySelector(
-        "#boards-table tbody"
-      ).innerHTML = `<tr><td colspan="4" class="placeholder-text">Error loading boards</td></tr>`;
+      const errContainer = document.getElementById("boards-view-wrapper");
+      if (errContainer) errContainer.innerHTML = `<div class="placeholder-text">Error loading boards</div>`;
       return;
     }
 
@@ -2796,13 +2780,23 @@ async function fetchBoards(projectId, canManageOverride = null) {
   }
 }
 function renderBoardsTable(boards, projectId, canManage) {
-  const tbody = document.querySelector("#boards-table tbody");
-  if (!tbody) return;
+  const container = document.getElementById("boards-view-wrapper");
+  if (!container) return;
 
-  if (!boards || boards.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="placeholder-text">No boards</td></tr>`;
-    return;
-  }
+  const activeBoards = [];
+  const inactiveBoards = [];
+  const completedBoards = [];
+
+  (boards || []).forEach(b => {
+    const s = normalizeProjectStatus(b.status);
+    if (s === "Inactive" || s === "Cancelled") {
+      inactiveBoards.push(b);
+    } else if (s === "Completed") {
+      completedBoards.push(b);
+    } else {
+      activeBoards.push(b);
+    }
+  });
 
   const boardStatusDropdown = (b, canManage) => {
     const status = b.status || "Active";
@@ -2820,14 +2814,14 @@ function renderBoardsTable(boards, projectId, canManage) {
     `;
   };
 
-  tbody.innerHTML = boards
-    .map(
+  const generateRows = (list) => {
+    if (!list.length) return `<tr><td colspan="${canManage ? 5 : 4}" class="placeholder-text">No boards found in this category.</td></tr>`;
+    return list.map(
       (b, i) => `
         <tr data-guid="${b.guid}">
           <td class="board-name" style="color:#007bff; cursor:pointer; font-weight:500;">
             ${b.board_name || ""}
-            <div style="color:#6b7280;font-size:12px;">${b.board_description || ""
-        }</div>
+            <div style="color:#6b7280;font-size:12px;">${b.board_description || ""}</div>
           </td>
           <td>${b.no_of_tasks || 0}</td>
           <td>${b.no_of_members || 0}</td>
@@ -2844,8 +2838,50 @@ function renderBoardsTable(boards, projectId, canManage) {
           : ""
         }
         </tr>`
-    )
-    .join("");
+    ).join("");
+  };
+
+  const tableHeader = `
+    <thead>
+      <tr>
+        <th>Board Name</th>
+        <th>No. of Tasks</th>
+        <th>No. of Members</th>
+        <th>Status</th>
+        ${canManage ? '<th style="text-align:right;">Actions</th>' : ""}
+      </tr>
+    </thead>
+  `;
+
+  container.innerHTML = `
+    <div class="project-section">
+      <div class="project-section-title">Active Boards <span class="count">${activeBoards.length}</span></div>
+      <div class="table-container" style="margin-bottom: 20px;">
+        <table class="table boards-data-table">
+          ${tableHeader}
+          <tbody>${generateRows(activeBoards)}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="project-section">
+      <div class="project-section-title">Inactive / Cancelled <span class="count">${inactiveBoards.length}</span></div>
+      <div class="table-container" style="margin-bottom: 20px;">
+        <table class="table boards-data-table">
+          ${tableHeader}
+          <tbody>${generateRows(inactiveBoards)}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="project-section">
+      <div class="project-section-title">Completed <span class="count">${completedBoards.length}</span></div>
+      <div class="table-container">
+        <table class="table boards-data-table">
+          ${tableHeader}
+          <tbody>${generateRows(completedBoards)}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
 
   // ✅ Attach click event to open CRM tab when clicking a board name
   document.querySelectorAll(".board-name").forEach((cell) => {

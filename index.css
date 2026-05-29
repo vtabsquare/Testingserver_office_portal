@@ -2944,8 +2944,8 @@ body.dark-theme .icon-btn.header-theme-toggle i {
 /* Simplify employee add modal for single-card feel */
 .employee-form .form-section {
   padding: 1.75rem 2rem;
-  background: rgba(255, 255, 255, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
   box-shadow: 0 25px 50px rgba(15, 23, 42, 0.18);
 }
 
@@ -2972,8 +2972,8 @@ body.dark-theme .icon-btn.header-theme-toggle i {
 .board-form .form-section,
 .project-details-form .form-section {
   padding: 1.75rem 2rem;
-  background: rgba(255, 255, 255, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
   box-shadow: 0 25px 50px rgba(15, 23, 42, 0.18);
 }
 
@@ -7220,9 +7220,10 @@ body.dark-theme .task-link {
   gap: 2px;
   padding: 1px 3px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.92);
   line-height: 1;
-  z-index: 2;
+  z-index: 5;
+  pointer-events: none;
 }
 
 .status-cell .status-icons [class*="-icon"] {
@@ -7380,6 +7381,12 @@ body.dark-theme .task-link {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+}
+
+.day-content .status-cell {
+  position: relative;
+  width: 100%;
 }
 
 .attendance-details-grid {

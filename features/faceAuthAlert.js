@@ -184,7 +184,7 @@ function createAlertElement() {
     alertElement.innerHTML = `
         <div class="faceauth-alert-content">
             <div class="faceauth-alert-icon">
-                <i class="fa-solid fa-face-viewfinder"></i>
+                <i class="fa-solid fa-expand"></i>
             </div>
             <div class="faceauth-alert-text">
                 <span class="faceauth-alert-title">Face Verification Required</span>

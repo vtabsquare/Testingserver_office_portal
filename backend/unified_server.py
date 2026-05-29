@@ -1000,6 +1000,73 @@ def _time_to_minutes(time_str):
     hh, mm = normalized.split(":")
     return (int(hh) * 60) + int(mm)
 
+def _normalize_work_week(value, default="mon-sat"):
+    return "mon-fri" if str(value or "").strip().lower() == "mon-fri" else "mon-sat"
+
+PROTECTED_SHIFT_PRESET_NAMES = frozenset({"shift 1", "shift 2"})
+
+def _is_protected_shift_preset(name):
+    return str(name or "").strip().lower() in PROTECTED_SHIFT_PRESET_NAMES
+
+def _validate_shift_window(shift_start, shift_end):
+    if not shift_start or not shift_end:
+        return False, "shift_start and shift_end are required (HH:MM)"
+    if (_time_to_minutes(shift_end) - _time_to_minutes(shift_start)) < (9 * 60):
+        return False, "Shift timing should be minimum 9 hours"
+    return True, None
+
+def _read_shift_presets(sb=None):
+    sb = sb or get_supabase()
+    try:
+        resp = sb.table("shift_presets").select(
+            "id, name, shift_start, shift_end, work_week, grace_minutes, updated_at"
+        ).order("name").limit(100).execute()
+        presets = []
+        for row in resp.data or []:
+            pid = row.get("id")
+            if not pid:
+                continue
+            preset_name = str(row.get("name") or "").strip()
+            presets.append({
+                "id": str(pid),
+                "name": preset_name,
+                "shift_start": _normalize_shift_time(row.get("shift_start"), "09:00"),
+                "shift_end": _normalize_shift_time(row.get("shift_end"), "18:00"),
+                "work_week": _normalize_work_week(row.get("work_week")),
+                "grace_minutes": 15,
+                "can_delete": not _is_protected_shift_preset(preset_name),
+            })
+        return presets
+    except Exception as e:
+        print(f"[SHIFT-PRESETS] Failed to read presets: {e}")
+        return []
+
+def _presets_by_id(presets):
+    return {str(p.get("id")): p for p in (presets or []) if p.get("id")}
+
+def _effective_shift_from_employee_row(row, presets_map, defaults):
+    preset_id = row.get("preset_id")
+    if preset_id is not None:
+        preset_key = str(preset_id)
+        preset = presets_map.get(preset_key)
+        if preset:
+            return {
+                "shift_start": preset["shift_start"],
+                "shift_end": preset["shift_end"],
+                "work_week": preset["work_week"],
+                "grace_minutes": 15,
+                "preset_id": preset_key,
+                "preset_name": preset.get("name"),
+            }
+    return {
+        "shift_start": _normalize_shift_time(row.get("shift_start"), defaults.get("shift_start", "09:00")),
+        "shift_end": _normalize_shift_time(row.get("shift_end"), defaults.get("shift_end", "18:00")),
+        "work_week": _normalize_work_week(row.get("work_week"), defaults.get("work_week", "mon-sat")),
+        "grace_minutes": 15,
+        "preset_id": str(preset_id) if preset_id else None,
+        "preset_name": None,
+    }
+
 def _default_shift_settings():
     return {
         "defaults": {
@@ -1025,21 +1092,28 @@ def _read_shift_settings():
     }
     result = {
         "defaults": normalized_defaults,
+        "presets": [],
         "by_employee": {},
         "updated_at": None,
         "updated_by": None,
     }
     try:
         sb = get_supabase()
+        presets = _read_shift_presets(sb)
+        presets_map = _presets_by_id(presets)
+        result["presets"] = presets
+        select_cols = "employee_id, shift_start, shift_end, grace_minutes, work_week, preset_id, updated_at, updated_by"
         try:
-            rows_resp = sb.table("employee_shift_settings").select(
-                "employee_id, shift_start, shift_end, grace_minutes, work_week, updated_at, updated_by"
-            ).limit(5000).execute()
+            rows_resp = sb.table("employee_shift_settings").select(select_cols).limit(5000).execute()
         except Exception:
-            # Backward compatibility for existing DBs before work_week column is added.
-            rows_resp = sb.table("employee_shift_settings").select(
-                "employee_id, shift_start, shift_end, grace_minutes, updated_at, updated_by"
-            ).limit(5000).execute()
+            try:
+                rows_resp = sb.table("employee_shift_settings").select(
+                    "employee_id, shift_start, shift_end, grace_minutes, work_week, updated_at, updated_by"
+                ).limit(5000).execute()
+            except Exception:
+                rows_resp = sb.table("employee_shift_settings").select(
+                    "employee_id, shift_start, shift_end, grace_minutes, updated_at, updated_by"
+                ).limit(5000).execute()
         rows = rows_resp.data or []
         latest_updated_at = None
         latest_updated_by = None
@@ -1047,14 +1121,8 @@ def _read_shift_settings():
             key = str(row.get("employee_id") or "").strip().upper()
             if not key:
                 continue
-            start = _normalize_shift_time(row.get("shift_start"), normalized_defaults["shift_start"])
-            end = _normalize_shift_time(row.get("shift_end"), normalized_defaults["shift_end"])
-            result["by_employee"][key] = {
-                "shift_start": start,
-                "shift_end": end,
-                "grace_minutes": 15,
-                "work_week": "mon-fri" if str(row.get("work_week") or "").strip().lower() == "mon-fri" else "mon-sat",
-            }
+            effective = _effective_shift_from_employee_row(row, presets_map, normalized_defaults)
+            result["by_employee"][key] = effective
             row_updated_at = row.get("updated_at")
             if row_updated_at and (latest_updated_at is None or str(row_updated_at) > str(latest_updated_at)):
                 latest_updated_at = row_updated_at
@@ -1102,14 +1170,18 @@ def _resolve_employee_shift(employee_id):
     defaults = settings.get("defaults", {})
     emp_key = str(employee_id or "").strip().upper()
     row = settings.get("by_employee", {}).get(emp_key, {})
-    shift_start = _normalize_shift_time(row.get("shift_start"), defaults.get("shift_start", "09:00"))
-    shift_end = _normalize_shift_time(row.get("shift_end"), defaults.get("shift_end", "18:00"))
-    grace_minutes = 15
+    if row:
+        return {
+            "shift_start": row.get("shift_start", defaults.get("shift_start", "09:00")),
+            "shift_end": row.get("shift_end", defaults.get("shift_end", "18:00")),
+            "grace_minutes": 15,
+            "work_week": _normalize_work_week(row.get("work_week"), defaults.get("work_week", "mon-sat")),
+        }
     return {
-        "shift_start": shift_start,
-        "shift_end": shift_end,
-        "grace_minutes": grace_minutes,
-        "work_week": "mon-fri" if str(row.get("work_week") or "").strip().lower() == "mon-fri" else "mon-sat",
+        "shift_start": defaults.get("shift_start", "09:00"),
+        "shift_end": defaults.get("shift_end", "18:00"),
+        "grace_minutes": 15,
+        "work_week": _normalize_work_week(defaults.get("work_week"), "mon-sat"),
     }
 
 def _is_late_login_for_shift(checkin_value, shift_start, grace_minutes):
@@ -1133,6 +1205,355 @@ def _is_late_login_for_shift(checkin_value, shift_start, grace_minutes):
         return checkin_minutes > threshold
     except Exception:
         return False
+
+def _checkin_is_late_for_employee(employee_id, checkin_value):
+    shift = _resolve_employee_shift(employee_id)
+    return _is_late_login_for_shift(
+        checkin_value,
+        shift.get("shift_start"),
+        shift.get("grace_minutes", 15),
+    )
+
+def _checkin_time_from_epoch(epoch_seconds):
+    """Derive IST check-in time string from a Unix epoch timestamp.
+    This is the most reliable source because epoch is timezone-agnostic."""
+    if not epoch_seconds:
+        return None
+    try:
+        ts = int(float(epoch_seconds))
+        if ts <= 0:
+            return None
+        dt_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+        dt_local = dt_utc.astimezone(_attendance_business_tz())
+        return dt_local.strftime("%H:%M:%S")
+    except Exception:
+        return None
+
+def _checkin_time_from_record(record):
+    """Get the IST check-in time from a login-activity record.
+    Prefers epoch timestamp (always correct) over the time string (may be UTC)."""
+    if not record or not isinstance(record, dict):
+        return None
+    # Prefer epoch timestamp – it is timezone-agnostic and always reliable
+    epoch_time = _checkin_time_from_epoch(record.get(LA_FIELD_CHECKIN_TS))
+    if epoch_time:
+        return epoch_time
+    # Fall back to the stored time string
+    return _format_login_checkin_time(record.get(LA_FIELD_CHECKIN_TIME))
+
+def _format_login_checkin_time(first_checkin):
+    if not first_checkin:
+        return None
+    raw = str(first_checkin).strip()
+    if not raw:
+        return None
+    try:
+        if "T" in raw:
+            parsed_in = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed_in.tzinfo is not None:
+                parsed_in = parsed_in.astimezone(_attendance_business_tz())
+            return parsed_in.strftime("%H:%M:%S")
+        return raw[:8] if len(raw) > 8 else raw
+    except Exception:
+        return _normalize_shift_time(raw, None) or raw
+
+def _latest_checkin_from_day_records(day_records):
+    """Latest check-in on a calendar day (multiple sessions)."""
+    best_ci = None
+    best_minutes = -1
+    for row in day_records or []:
+        formatted = _checkin_time_from_record(row)
+        if not formatted:
+            continue
+        mins = _time_to_minutes(_normalize_shift_time(formatted, "00:00"))
+        if mins >= best_minutes:
+            best_minutes = mins
+            best_ci = formatted
+    return best_ci
+
+def _max_checkin_time_str(*candidates):
+    """Return the latest HH:MM(:SS) among candidates (same calendar day)."""
+    best_ci = None
+    best_minutes = -1
+    for raw in candidates:
+        if not raw:
+            continue
+        formatted = _format_login_checkin_time(raw)
+        if not formatted:
+            continue
+        mins = _time_to_minutes(_normalize_shift_time(formatted, "00:00"))
+        if mins >= best_minutes:
+            best_minutes = mins
+            best_ci = formatted
+    return best_ci
+
+def _live_session_checkin_for_date(normalized_emp_id, date_str):
+    """Current active session check-in (in-memory or open login-activity row)."""
+    key = str(normalized_emp_id or "").strip().upper()
+    if not key or not date_str:
+        return None
+    sess = active_sessions.get(key)
+    if sess and sess.get("local_date") == date_str:
+        ci = sess.get("checkin_time")
+        if ci:
+            return _format_login_checkin_time(ci)
+    try:
+        token = get_access_token()
+        la_rec = _fetch_login_activity_record(token, key, date_str)
+        if la_rec and not (la_rec.get(LA_FIELD_CHECKOUT_TS) or la_rec.get(LA_FIELD_CHECKOUT_TIME)):
+            return _checkin_time_from_record(la_rec)
+    except Exception:
+        pass
+    return None
+
+def _hydrate_active_session_from_dataverse(normalized_emp_id, date_str):
+    """Restore in-memory active_sessions for an open day (monthly fetch / server restart)."""
+    key = str(normalized_emp_id or "").strip().upper()
+    if not key or not date_str:
+        return
+    if key in active_sessions and active_sessions[key].get("local_date") == date_str:
+        return
+    try:
+        token = get_access_token()
+        la_rec = _fetch_login_activity_record(token, key, date_str)
+        la_open = bool(
+            la_rec
+            and not (la_rec.get(LA_FIELD_CHECKOUT_TS) or la_rec.get(LA_FIELD_CHECKOUT_TIME))
+        )
+        if not la_open:
+            return
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+        }
+        filter_query = (
+            f"?$filter={FIELD_EMPLOYEE_ID} eq '{key}' "
+            f"and {FIELD_DATE} eq '{date_str}'"
+        )
+        url = f"{RESOURCE}/api/data/v9.2/{ATTENDANCE_ENTITY}{filter_query}"
+        resp = get_dataverse_session().get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return
+        vals = resp.json().get("value", [])
+        if not vals:
+            return
+        rec = vals[0]
+        checkin_time_rec = rec.get(FIELD_CHECKIN)
+        if not checkin_time_rec:
+            return
+        checkout_time_rec = rec.get(FIELD_CHECKOUT)
+        if checkout_time_rec and str(checkout_time_rec).strip():
+            return
+        record_id = rec.get(FIELD_RECORD_ID) or rec.get("cr6f_table13id") or rec.get("id")
+        try:
+            existing_hours = float(rec.get(FIELD_DURATION) or "0")
+        except Exception:
+            existing_hours = 0.0
+        try:
+            checkin_dt = datetime.strptime(checkin_time_rec, "%H:%M:%S").replace(
+                year=datetime.now().year,
+                month=datetime.now().month,
+                day=datetime.now().day,
+            )
+        except Exception:
+            checkin_dt = datetime.now()
+        base_seconds = int(round(existing_hours * 3600)) if existing_hours else 0
+        if la_rec:
+            la_base = int(la_rec.get(LA_FIELD_BASE_SECONDS) or 0)
+            la_total = int(la_rec.get(LA_FIELD_TOTAL_SECONDS) or 0)
+            base_seconds = max(base_seconds, la_base, la_total)
+        active_sessions[key] = {
+            "record_id": record_id,
+            "checkin_time": checkin_time_rec,
+            "checkin_datetime": checkin_dt.isoformat(),
+            "checkin_timestamp": int(checkin_dt.timestamp() * 1000),
+            "attendance_id": rec.get(FIELD_ATTENDANCE_ID_CUSTOM),
+            "local_date": date_str,
+            "base_seconds": base_seconds,
+            "source": "monthly_hydrate",
+        }
+    except Exception as hydrate_err:
+        print(f"[WARN] Failed to hydrate active session for {key}: {hydrate_err}")
+
+def _first_checkin_from_day_records(day_records):
+    """First check-in on a calendar day (multiple sessions)."""
+    best_ci = None
+    best_minutes = float('inf')
+    for row in day_records or []:
+        formatted = _checkin_time_from_record(row)
+        if not formatted:
+            continue
+        mins = _time_to_minutes(_normalize_shift_time(formatted, "00:00"))
+        if mins < best_minutes:
+            best_minutes = mins
+            best_ci = formatted
+    return best_ci
+
+def _min_checkin_time_str(*candidates):
+    """Return the earliest HH:MM(:SS) among candidates (same calendar day)."""
+    best_ci = None
+    best_minutes = float('inf')
+    for raw in candidates:
+        if not raw:
+            continue
+        formatted = _format_login_checkin_time(raw)
+        if not formatted:
+            continue
+        mins = _time_to_minutes(_normalize_shift_time(formatted, "00:00"))
+        if mins < best_minutes:
+            best_minutes = mins
+            best_ci = formatted
+    return best_ci
+
+def _primary_checkin_for_late(date_str, actual_checkin, day_records, normalized_emp_id, attendance_checkin=None):
+    """
+    Determine the primary check-in time for late logic.
+    Prioritizes actual_checkin (epoch-derived from login_activity).
+    If missing, checks active sessions or attendance_checkin.
+    """
+    # 1. If we have actual_checkin (from epoch), we trust it completely.
+    # We do NOT want to compare it with attendance_checkin because attendance_checkin
+    # might be a bugged UTC string (e.g. 10:53 vs 16:23).
+    if actual_checkin:
+        return actual_checkin
+
+    candidates = []
+    
+    # 2. Fetch manual attendance record if no login activity and not provided
+    if attendance_checkin is None:
+        try:
+            token = get_access_token()
+            att_rec = _fetch_attendance_for_date(token, normalized_emp_id, date_str)
+            if att_rec and att_rec.get(FIELD_CHECKIN):
+                attendance_checkin = _format_login_checkin_time(att_rec.get(FIELD_CHECKIN))
+        except Exception:
+            pass
+
+    if attendance_checkin:
+        candidates.append(attendance_checkin)
+        
+    try:
+        biz_today = datetime.now(_attendance_business_tz()).date().isoformat()
+        if date_str == biz_today:
+            live_ci = _live_session_checkin_for_date(normalized_emp_id, date_str)
+            if live_ci:
+                candidates.append(live_ci)
+    except Exception:
+        pass
+        
+    first = _first_checkin_from_day_records(day_records)
+    if first:
+        candidates.append(first)
+        
+    if candidates:
+        return _min_checkin_time_str(*candidates)
+        
+    return None
+
+def _apply_late_flags_from_login_activity(formatted_records, login_activity_by_date, shift_info, normalized_emp_id):
+    """Set checkIn + isLate from login-activity table (independent of P/A status)."""
+    if not formatted_records:
+        return
+    by_day = {}
+    for fr in formatted_records:
+        if fr.get("day"):
+            by_day[fr["day"]] = fr
+    shift_start = shift_info.get("shift_start", "09:00")
+    grace = shift_info.get("grace_minutes", 15)
+
+    for date_str, day_records in (login_activity_by_date or {}).items():
+        if not day_records:
+            continue
+        try:
+            day_num = int(str(date_str).split("-")[2])
+        except Exception:
+            continue
+        actual = _checkin_time_from_record(day_records[0])
+        if not actual:
+            continue
+        rec = by_day.get(day_num)
+        if not rec:
+            continue
+        if actual:
+            rec["checkIn"] = actual
+        day_rows = login_activity_by_date.get(date_str, [])
+        checkin_for_late = _primary_checkin_for_late(date_str, actual or rec.get("checkIn"), day_rows, normalized_emp_id)
+        if checkin_for_late:
+            rec["checkIn"] = checkin_for_late
+        rec["isLate"] = _is_late_login_for_shift(checkin_for_late, shift_start, grace)
+
+def _build_late_flags_map(normalized_emp_id, year, month, token=None):
+    """Late markers keyed by day number, sourced from login-activity + shift settings."""
+    _, last_day = monthrange(year, month)
+    start_date = f"{year}-{str(month).zfill(2)}-01"
+    end_date = f"{year}-{str(month).zfill(2)}-{str(last_day).zfill(2)}"
+    shift_info = _resolve_employee_shift(normalized_emp_id)
+    shift_start = shift_info.get("shift_start", "09:00")
+    grace = shift_info.get("grace_minutes", 15)
+
+    login_activity_by_date = {}
+    try:
+        token = token or get_access_token()
+        login_filter = (
+            f"?$filter={LA_FIELD_EMPLOYEE_ID} eq '{normalized_emp_id}' "
+            f"and {LA_FIELD_DATE} ge '{start_date}' and {LA_FIELD_DATE} le '{end_date}'"
+            f"&$orderby={LA_FIELD_DATE},{LA_FIELD_CHECKIN_TIME}"
+        )
+        login_url = f"{RESOURCE}/api/data/v9.2/{LOGIN_ACTIVITY_ENTITY}{login_filter}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+        }
+        login_resp = get_dataverse_session().get(login_url, headers=headers, timeout=15)
+        if login_resp.status_code == 200:
+            for record in login_resp.json().get("value", []):
+                dt = record.get(LA_FIELD_DATE)
+                if dt:
+                    dt_key = str(dt)[:10]
+                    login_activity_by_date.setdefault(dt_key, []).append(record)
+    except Exception as e:
+        print(f"[LATE-FLAGS] login activity fetch failed: {e}")
+
+    markers = {}
+    for date_str, day_records in login_activity_by_date.items():
+        if not day_records:
+            continue
+        try:
+            day_num = int(str(date_str).split("-")[2])
+        except Exception:
+            continue
+        first_ci = _checkin_time_from_record(day_records[0])
+        check_in = _primary_checkin_for_late(date_str, first_ci, day_records, normalized_emp_id)
+        if not check_in:
+            continue
+        markers[str(day_num)] = {
+            "checkIn": check_in,
+            "isLate": _is_late_login_for_shift(check_in, shift_start, grace),
+        }
+
+    return markers
+
+def _emit_team_attendance_update(employee_id, event_type="checkin"):
+    try:
+        resp = requests.post(
+            f"{SOCKET_SERVER_URL}/emit",
+            json={
+                "event": "attendance:team-update",
+                "data": {
+                    "employee_id": str(employee_id or "").strip().upper(),
+                    "event_type": event_type,
+                },
+            },
+            timeout=3,
+        )
+        if resp.status_code >= 400:
+            print(f"[ATTENDANCE-SOCKET] team-update emit failed: {resp.status_code}")
+    except Exception as e:
+        print(f"[ATTENDANCE-SOCKET] team-update emit error: {e}")
 
 def _load_document_index():
     try:
@@ -1867,6 +2288,11 @@ def _sync_login_activity_from_event(event: dict):
                 if tz_name and ZoneInfo:
                     try:
                         dt = dt.astimezone(ZoneInfo(tz_name))
+                    except Exception:
+                        pass
+                if ZoneInfo and dt.tzinfo == timezone.utc:
+                    try:
+                        dt = dt.astimezone(ZoneInfo("Asia/Kolkata"))
                     except Exception:
                         pass
                 time_only = dt.strftime("%H:%M:%S")
@@ -3249,6 +3675,7 @@ def checkin():
                         "checkinTimestamp": checkin_ts,
                         "baseSeconds": base_seconds,
                     })
+                    _emit_team_attendance_update(normalized_emp_id, "checkin")
             except Exception:
                 pass
 
@@ -3275,14 +3702,16 @@ def checkin():
             except Exception as e:
                 print(f"[WARN] Duplicate check-in login-activity upsert failed for {key}: {e}")
 
+            dup_checkin_time = session.get("checkin_time")
             return jsonify({
                 "success": True,
                 "employee_id": normalized_emp_id,
                 "record_id": session.get("record_id"),
                 "attendance_id": session.get("attendance_id"),
-                "checkin_time": session.get("checkin_time"),
+                "checkin_time": dup_checkin_time,
                 "checkin_timestamp": session.get("checkin_timestamp"),
                 "already_checked_in": True,
+                "isLate": _checkin_is_late_for_employee(normalized_emp_id, dup_checkin_time),
             })
 
         formatted_date = local_now.date().isoformat()
@@ -3376,9 +3805,8 @@ def checkin():
             # CRITICAL: Clear checkout fields in Dataverse when re-checking in (continuation)
             # This ensures get_status won't think user is checked out after a re-checkin
             try:
-                clear_payload = {FIELD_CHECKOUT: None}  # reopen active session
-                if not attendance_record.get(FIELD_CHECKIN):
-                    clear_payload[FIELD_CHECKIN] = formatted_time
+                # Always store current session start for late-entry + display (not first punch of day)
+                clear_payload = {FIELD_CHECKOUT: None, FIELD_CHECKIN: formatted_time}
                 update_record(ATTENDANCE_ENTITY, record_id, clear_payload)
                 print(f"[OK] Cleared checkout field for continuation check-in: {record_id}")
             except Exception as clear_err:
@@ -3407,6 +3835,7 @@ def checkin():
                 "checkinTimestamp": checkin_timestamp,
                 "baseSeconds": base_seconds,
             })
+            _emit_team_attendance_update(normalized_emp_id, "checkin")
 
             return jsonify(
                 {
@@ -3419,6 +3848,7 @@ def checkin():
                     "already_checked_in": False,
                     "continued_day": True,
                     "total_seconds_today": base_seconds,
+                    "isLate": _checkin_is_late_for_employee(normalized_emp_id, formatted_time),
                 }
             )
 
@@ -3472,6 +3902,7 @@ def checkin():
                 "checkinTimestamp": checkin_timestamp,
                 "baseSeconds": 0,
             })
+            _emit_team_attendance_update(normalized_emp_id, "checkin")
 
             # Persist durable session fields to login activity
             try:
@@ -3496,6 +3927,7 @@ def checkin():
                     "checkin_time": formatted_time,
                     "checkin_timestamp": checkin_timestamp,
                     "total_seconds_today": 0,
+                    "isLate": _checkin_is_late_for_employee(normalized_emp_id, formatted_time),
                 }
             )
         else:
@@ -5859,6 +6291,50 @@ def get_status(employee_id):
         return jsonify({"checked_in": False, "error": str(e)}), 500
 
 
+@app.route('/api/attendance-late-flags/<employee_id>/<int:year>/<int:month>', methods=['GET', 'OPTIONS'])
+def get_attendance_late_flags(employee_id, year, month):
+    """Late-entry markers from login-activity table (no websockets)."""
+    if request.method == 'OPTIONS':
+        return '', 204
+    try:
+        normalized_emp_id = str(employee_id or "").strip().upper()
+        if normalized_emp_id.isdigit():
+            normalized_emp_id = format_employee_id(int(normalized_emp_id))
+        markers = _build_late_flags_map(normalized_emp_id, year, month)
+        return jsonify({"success": True, "markers": markers}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+def _fetch_holidays_in_range(token, start_date=None, end_date=None):
+    holidays = set()
+    try:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0"
+        }
+        filter_query = "?$select=crc6f_date"
+        filters = []
+        if start_date:
+            filters.append(f"crc6f_date ge '{start_date}'")
+        if end_date:
+            filters.append(f"crc6f_date le '{end_date}'")
+        if filters:
+            filter_query += f"&$filter={' and '.join(filters)}"
+            
+        url = f"{RESOURCE}/api/data/v9.2/{HOLIDAY_ENTITY}{filter_query}"
+        resp = get_dataverse_session().get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            for h in resp.json().get("value", []):
+                h_date = h.get("crc6f_date")
+                if h_date:
+                    holidays.add(h_date[:10])
+    except Exception as e:
+        print(f"[WARN] Failed to fetch holidays: {e}")
+    return holidays
+
+
 @app.route('/api/attendance/<employee_id>/<int:year>/<int:month>', methods=['GET'])
 def get_monthly_attendance(employee_id, year, month):
     """Get attendance records for a specific month with status classification"""
@@ -5887,6 +6363,13 @@ def get_monthly_attendance(employee_id, year, month):
         
         print(f"   [USER] Normalized Employee ID: {normalized_emp_id}")
         print(f"   [DATE] Date Range: {start_date} to {end_date}")
+
+        try:
+            biz_today = datetime.now(_attendance_business_tz()).date().isoformat()
+            if start_date <= biz_today <= end_date:
+                _hydrate_active_session_from_dataverse(normalized_emp_id, biz_today)
+        except Exception:
+            pass
         
         filter_query = (f"?$filter={FIELD_EMPLOYEE_ID} eq '{normalized_emp_id}' "
                        f"and {FIELD_DATE} ge '{start_date}' "
@@ -5932,6 +6415,8 @@ def get_monthly_attendance(employee_id, year, month):
                 print(f"[WARN] Case-insensitive search failed: {str(e)}")
         
         formatted_records = []
+        
+        holidays_set = _fetch_holidays_in_range(token, start_date, end_date)
         
         # First, fetch all login activity records for the month in one query
         login_activity_by_date = {}
@@ -6032,6 +6517,9 @@ def get_monthly_attendance(employee_id, year, month):
                 else:
                     status = "A"  # Absent
             
+            if date_str in holidays_set and not actual_checkin:
+                status = "INL"
+            
             # Extract day number for frontend mapping
             day_num = None
             if date_str:
@@ -6044,8 +6532,15 @@ def get_monthly_attendance(employee_id, year, month):
             if (not is_manual_override) and live_augmented:
                 duration_text = _format_duration_text_from_hours(effective_hours)
             
+            day_login_rows = login_activity_by_date.get(date_str, []) if date_str else []
+            checkin_for_late = _primary_checkin_for_late(
+                date_str, actual_checkin, day_login_rows, normalized_emp_id, attendance_checkin=checkin
+            )
+            if checkin_for_late:
+                actual_checkin = checkin_for_late
+
             is_late = _is_late_login_for_shift(
-                actual_checkin,
+                checkin_for_late or actual_checkin,
                 shift_info.get("shift_start"),
                 shift_info.get("grace_minutes", 15),
             )
@@ -6165,6 +6660,21 @@ def get_monthly_attendance(employee_id, year, month):
                         cur = cur + timedelta(days=1)
         except Exception as leave_err:
             print(f"[WARN] Leave overlay failed: {leave_err}")
+
+        _apply_late_flags_from_login_activity(
+            formatted_records, login_activity_by_date, shift_info, normalized_emp_id
+        )
+
+        late_markers = {}
+        for fr in formatted_records:
+            day = fr.get("day")
+            if not day:
+                continue
+            if fr.get("checkIn") or fr.get("isLate"):
+                late_markers[str(day)] = {
+                    "checkIn": fr.get("checkIn"),
+                    "isLate": bool(fr.get("isLate")),
+                }
         
         print(f"[OK] Successfully formatted {len(formatted_records)} attendance records")
         print(f"{'='*70}\n")
@@ -6172,6 +6682,7 @@ def get_monthly_attendance(employee_id, year, month):
         return jsonify({
             "success": True,
             "records": formatted_records,
+            "late_markers": late_markers,
             "count": len(formatted_records)
         })
             
@@ -6343,6 +6854,8 @@ def get_all_attendance(employee_id):
             records = response.json().get("value", [])
             print(f"[OK] Found {len(records)} total attendance records")
             
+            holidays_set = _fetch_holidays_in_range(token)
+            
             # Format records for frontend
             formatted_records = []
             for r in records:
@@ -6363,6 +6876,9 @@ def get_all_attendance(employee_id):
                     status = "HL"
                 else:
                     status = "A"
+                    
+                if date_str in holidays_set and not checkin:
+                    status = "INL"
                 
                 formatted_records.append({
                     "date": date_str,
@@ -16343,51 +16859,178 @@ def update_shift_settings():
     try:
         data = request.get_json() or {}
         employee_id = str(data.get('employee_id') or '').strip().upper()
+        preset_id = str(data.get('preset_id') or '').strip()
+        use_custom = bool(data.get('use_custom'))
         shift_start = _normalize_shift_time(data.get('shift_start'), '')
         shift_end = _normalize_shift_time(data.get('shift_end'), '')
         grace_minutes = int(data.get('grace_minutes') or 15)
-        work_week = str(data.get('work_week') or 'mon-sat').strip().lower()
+        work_week = _normalize_work_week(data.get('work_week'))
 
         if not employee_id:
             return jsonify({"success": False, "error": "employee_id is required"}), 400
-        if not shift_start or not shift_end:
-            return jsonify({"success": False, "error": "shift_start and shift_end are required (HH:MM)"}), 400
         if grace_minutes != 15:
             return jsonify({"success": False, "error": "Grace minutes must be 15"}), 400
-        if work_week not in ('mon-fri', 'mon-sat'):
-            return jsonify({"success": False, "error": "work_week must be mon-fri or mon-sat"}), 400
-        if (_time_to_minutes(shift_end) - _time_to_minutes(shift_start)) < (9 * 60):
-            return jsonify({"success": False, "error": "Shift timing should be minimum 9 hours"}), 400
 
         sb = get_supabase()
         now_iso = datetime.now(timezone.utc).isoformat()
-        payload = {
-            "employee_id": employee_id,
-            "shift_start": shift_start,
-            "shift_end": shift_end,
-            "grace_minutes": 15,
-            "work_week": work_week,
-            "updated_by": str(data.get("updated_by") or employee_id),
-            "updated_at": now_iso,
-        }
-        try:
-            sb.table("employee_shift_settings").upsert(payload, on_conflict="employee_id").execute()
-        except Exception:
-            # Backward compatibility for DBs where work_week column is not added yet.
-            fallback_payload = dict(payload)
-            fallback_payload.pop("work_week", None)
-            sb.table("employee_shift_settings").upsert(fallback_payload, on_conflict="employee_id").execute()
+        presets_map = _presets_by_id(_read_shift_presets(sb))
 
-        return jsonify({
-            "success": True,
-            "employee_id": employee_id,
-            "shift": {
+        if preset_id and not use_custom:
+            preset = presets_map.get(preset_id)
+            if not preset:
+                return jsonify({"success": False, "error": "Invalid shift preset"}), 400
+            shift_start = preset["shift_start"]
+            shift_end = preset["shift_end"]
+            work_week = preset["work_week"]
+            payload = {
+                "employee_id": employee_id,
+                "preset_id": preset_id,
                 "shift_start": shift_start,
                 "shift_end": shift_end,
                 "grace_minutes": 15,
                 "work_week": work_week,
+                "updated_by": str(data.get("updated_by") or employee_id),
+                "updated_at": now_iso,
+            }
+        else:
+            ok, err = _validate_shift_window(shift_start, shift_end)
+            if not ok:
+                return jsonify({"success": False, "error": err}), 400
+            payload = {
+                "employee_id": employee_id,
+                "preset_id": None,
+                "shift_start": shift_start,
+                "shift_end": shift_end,
+                "grace_minutes": 15,
+                "work_week": work_week,
+                "updated_by": str(data.get("updated_by") or employee_id),
+                "updated_at": now_iso,
+            }
+
+        try:
+            sb.table("employee_shift_settings").upsert(payload, on_conflict="employee_id").execute()
+        except Exception as upsert_err:
+            fallback_payload = dict(payload)
+            if "preset_id" in str(upsert_err).lower() or "column" in str(upsert_err).lower():
+                fallback_payload.pop("preset_id", None)
+            try:
+                sb.table("employee_shift_settings").upsert(fallback_payload, on_conflict="employee_id").execute()
+            except Exception:
+                fallback_payload.pop("work_week", None)
+                sb.table("employee_shift_settings").upsert(fallback_payload, on_conflict="employee_id").execute()
+
+        effective = {
+            "shift_start": shift_start,
+            "shift_end": shift_end,
+            "grace_minutes": 15,
+            "work_week": work_week,
+            "preset_id": preset_id if preset_id and not use_custom else None,
+            "preset_name": presets_map.get(preset_id, {}).get("name") if preset_id and not use_custom else None,
+        }
+        return jsonify({
+            "success": True,
+            "employee_id": employee_id,
+            "shift": effective,
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/shift-presets', methods=['POST'])
+def create_shift_preset():
+    try:
+        data = request.get_json() or {}
+        name = str(data.get('name') or '').strip()
+        shift_start = _normalize_shift_time(data.get('shift_start'), '')
+        shift_end = _normalize_shift_time(data.get('shift_end'), '')
+        work_week = _normalize_work_week(data.get('work_week'))
+
+        if not name:
+            return jsonify({"success": False, "error": "Preset name is required"}), 400
+        ok, err = _validate_shift_window(shift_start, shift_end)
+        if not ok:
+            return jsonify({"success": False, "error": err}), 400
+
+        sb = get_supabase()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        record = {
+            "name": name,
+            "shift_start": shift_start,
+            "shift_end": shift_end,
+            "work_week": work_week,
+            "grace_minutes": 15,
+            "updated_at": now_iso,
+        }
+        resp = sb.table("shift_presets").insert(record).execute()
+        row = (resp.data or [{}])[0]
+        return jsonify({
+            "success": True,
+            "preset": {
+                "id": str(row.get("id")),
+                "name": name,
+                "shift_start": shift_start,
+                "shift_end": shift_end,
+                "work_week": work_week,
+                "grace_minutes": 15,
+            },
+        }), 201
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/shift-presets/<preset_id>', methods=['PUT'])
+def update_shift_preset(preset_id):
+    try:
+        data = request.get_json() or {}
+        name = str(data.get('name') or '').strip()
+        shift_start = _normalize_shift_time(data.get('shift_start'), '')
+        shift_end = _normalize_shift_time(data.get('shift_end'), '')
+        work_week = _normalize_work_week(data.get('work_week'))
+
+        ok, err = _validate_shift_window(shift_start, shift_end)
+        if not ok:
+            return jsonify({"success": False, "error": err}), 400
+
+        sb = get_supabase()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "shift_start": shift_start,
+            "shift_end": shift_end,
+            "work_week": work_week,
+            "grace_minutes": 15,
+            "updated_at": now_iso,
+        }
+        if name:
+            payload["name"] = name
+        sb.table("shift_presets").update(payload).eq("id", preset_id).execute()
+        return jsonify({
+            "success": True,
+            "preset": {
+                "id": preset_id,
+                "name": name or None,
+                "shift_start": shift_start,
+                "shift_end": shift_end,
+                "work_week": work_week,
+                "grace_minutes": 15,
             },
         }), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/shift-presets/<preset_id>', methods=['DELETE'])
+def delete_shift_preset(preset_id):
+    try:
+        sb = get_supabase()
+        existing = sb.table("shift_presets").select("id, name").eq("id", preset_id).limit(1).execute()
+        rows = existing.data or []
+        if not rows:
+            return jsonify({"success": False, "error": "Shift preset not found"}), 404
+        preset_name = str(rows[0].get("name") or "").strip()
+        if _is_protected_shift_preset(preset_name):
+            return jsonify({
+                "success": False,
+                "error": "Shift 1 and Shift 2 cannot be deleted",
+            }), 403
+        sb.table("shift_presets").delete().eq("id", preset_id).execute()
+        return jsonify({"success": True, "id": preset_id}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

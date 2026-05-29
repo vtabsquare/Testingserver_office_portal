@@ -28,10 +28,25 @@ module.exports = (io) => {
       const employeeId = data.employee_id;
 
       if (employeeId) {
+        const uid = String(employeeId).trim().toUpperCase();
         // Broadcast to specific employee's room
-        const room = `attendance:${employeeId.toUpperCase()}`;
+        const room = `attendance:${uid}`;
         io.to(room).emit(event, data);
         console.log(`[ATTENDANCE-EVENTS] Emitted ${event} to room ${room}`);
+
+        // Notify team attendance watchers (managers on Team Attendance page)
+        if (
+          event === 'attendance:checkin' ||
+          event === 'attendance:checkout' ||
+          event === 'attendance:team-update' ||
+          event === 'attendance:changed'
+        ) {
+          io.to('attendance:team-watchers').emit('attendance:team-update', {
+            employee_id: uid,
+            event_type: event,
+            serverNow: Date.now(),
+          });
+        }
       } else {
         // Broadcast to all connected clients
         io.emit(event, data);
@@ -70,6 +85,19 @@ module.exports = (io) => {
         room: room,
         message: 'Registered for attendance events. Call /api/v2/attendance/status for current state.'
       });
+    });
+
+    // Managers / team leads viewing Team Attendance join this room
+    socket.on('attendance:register-team-watcher', () => {
+      socket.join('attendance:team-watchers');
+      socket.data.team_watcher = true;
+      console.log(`[ATTENDANCE-EVENTS] ${socket.id} joined attendance:team-watchers`);
+      socket.emit('attendance:team-watcher-registered', { room: 'attendance:team-watchers' });
+    });
+
+    socket.on('attendance:unregister-team-watcher', () => {
+      socket.leave('attendance:team-watchers');
+      socket.data.team_watcher = false;
     });
 
     // ----------------------------------------
