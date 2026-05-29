@@ -1,7 +1,7 @@
 import { getPageContentHTML } from '../utils.js';
 import { API_BASE_URL } from '../config.js';
 import { timedFetch } from '../features/timedFetch.js';
-import { fetchOnLeaveToday } from '../features/leaveApi.js';
+import { fetchOnLeaveToday, fetchEmployeeLeaves } from '../features/leaveApi.js';
 import { listAllEmployees } from '../features/employeeApi.js';
 import { fetchLoginEvents } from '../features/loginSettingsApi.js';
 import { isAdminUser } from '../utils/accessControl.js';
@@ -135,88 +135,38 @@ const bindLiveRefreshHooks = () => {
 const buildStatusDonut = (checkedIn = 0, notCheckedIn = 0) => {
   const total = Math.max(checkedIn + notCheckedIn, 1);
   const checkedPct = (checkedIn / total) * 100;
-  const style = `background: conic-gradient(var(--success) 0% ${checkedPct}%, var(--danger) ${checkedPct}% 100%);`;
+  // Calculate dash offset for SVG circle (circumference = 2 * pi * r ≈ 440 for r=70)
+  const circumference = 2 * Math.PI * 70;
+  const offset = circumference - (checkedPct / 100) * circumference;
+  
   return `
-    <div class="admin-donut-wrap">
-      <div class="admin-donut" style="${style}">
-        <span>${checkedIn}/${total}</span>
+    <div class="hud-ring-container">
+      <svg class="hud-ring-svg" viewBox="0 0 160 160">
+        <circle class="hud-ring-bg" cx="80" cy="80" r="70"></circle>
+        <circle class="hud-ring-fg" cx="80" cy="80" r="70" 
+          stroke-dasharray="${circumference}" 
+          stroke-dashoffset="${offset}"
+        ></circle>
+      </svg>
+      <div class="hud-ring-center">
+        <div class="value">${checkedIn}<span style="font-size:1rem;color:#64748b;">/${total}</span></div>
+        <div class="label">Checked In</div>
       </div>
-      <div class="admin-donut-legend">
-        <span><i class="dot dot-present"></i> Checked In (${checkedIn})</span>
-        <span><i class="dot dot-absent"></i> Not Checked In (${notCheckedIn})</span>
-      </div>
+    </div>
+    <div class="hud-donut-legend">
+      <span><i class="dot dot-present"></i> Checked In</span>
+      <span><i class="dot dot-absent"></i> Offline</span>
     </div>
   `;
 };
 
-const buildProjectLoadBars = (items = []) => {
-  if (!items.length) {
-    return '<p class="placeholder-text">No active tasks right now.</p>';
-  }
 
-  const grouped = items.reduce((acc, row) => {
-    const key = row.project_name || row.project_id || 'Unmapped Project';
-    if (key !== 'Unmapped Project') {
-      acc[key] = (acc[key] || 0) + 1;
-    }
-    return acc;
-  }, {});
-
-  const rows = Object.entries(grouped)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8);
-
-  const max = Math.max(...rows.map(([, count]) => count), 1);
-  const chartHeight = 200;
-
-  return `
-    <div class="project-column-chart">
-      <div class="chart-container" style="height: ${chartHeight}px; position: relative; display: flex; align-items: flex-end; gap: 12px; padding: 10px;">
-        ${rows.map(([project, count]) => {
-          const height = Math.round((count / max) * (chartHeight - 30));
-          const pct = Math.round((count / max) * 100);
-          const intensity = pct > 66 ? 'high' : pct > 33 ? 'medium' : 'low';
-          return `
-            <div class="chart-column" style="flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0;">
-              <div class="column-bar task-load-bar-${intensity}" 
-                   style="width: 100%; height: ${height}px; background: var(--${intensity === 'high' ? 'danger' : intensity === 'medium' ? 'warning' : 'success'}); 
-                          border-radius: 4px 4px 0 0; position: relative; transition: all 0.3s ease;">
-                <div class="column-value" style="position: absolute; top: -25px; left: 50%; transform: translateX(-50%); 
-                            font-weight: 600; font-size: 0.8rem; color: var(--text-primary);">${count}</div>
-              </div>
-              <div class="column-label" style="margin-top: 8px; text-align: center; font-size: 0.75rem; 
-                            color: var(--text-secondary); font-weight: 500; line-height: 1.2; 
-                            max-width: 100%; overflow: hidden; text-overflow: ellipsis; 
-                            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
-                ${escapeHtml(project)}
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-      <div class="chart-legend" style="margin-top: 16px; display: flex; justify-content: center; gap: 20px; flex-wrap: wrap;">
-        <div class="legend-item" style="display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-secondary);">
-          <div class="legend-dot" style="width: 12px; height: 12px; background: var(--success); border-radius: 2px;"></div>
-          <span>Low (1-3)</span>
-        </div>
-        <div class="legend-item" style="display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-secondary);">
-          <div class="legend-dot" style="width: 12px; height: 12px; background: var(--warning); border-radius: 2px;"></div>
-          <span>Medium (4-6)</span>
-        </div>
-        <div class="legend-item" style="display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-secondary);">
-          <div class="legend-dot" style="width: 12px; height: 12px; background: var(--danger); border-radius: 2px;"></div>
-          <span>High (7+)</span>
-        </div>
-      </div>
-    </div>
-  `;
-};
 
 const buildSkeleton = () => `
-  <section class="admin-dashboard">
-    <div class="dashboard-grid admin-dashboard-grid">
+  <section class="admin-dashboard admin-dashboard-hightech">
+    <div class="admin-dashboard-grid-hightech">
       ${Array.from({ length: 4 }).map(() => `
-        <section class="card admin-card">
+        <section class="admin-card-hightech">
           <div class="skeleton skeleton-heading-md"></div>
           <div class="skeleton skeleton-text" style="margin-top:0.6rem;width:70%"></div>
           <div class="skeleton skeleton-list-line-lg" style="margin-top:1.1rem"></div>
@@ -273,7 +223,7 @@ const fetchTimesheetMonitor = async (month, year, employees) => {
 const buildTimesheetMonitorCard = (tsData) => {
   if (!tsData) {
     return `
-      <section class="card admin-card admin-card-span-full">
+      <section class="admin-card-hightech">
         <header class="card-heading">
           <div>
             <p class="eyebrow">Timesheet</p>
@@ -304,13 +254,19 @@ const buildTimesheetMonitorCard = (tsData) => {
   });
 
   const statusBadge = (status) => {
-    const s = (status || '').toLowerCase();
+    let s = (status || '').toLowerCase();
     let cls = 'ts-mon-badge-none';
     let label = status || 'Not Submitted';
-    if (s === 'accepted') cls = 'ts-mon-badge-accepted';
-    else if (s === 'rejected') cls = 'ts-mon-badge-rejected';
-    else if (s === 'pending') cls = 'ts-mon-badge-pending';
-    else if (s === 'not submitted') cls = 'ts-mon-badge-none';
+    if (s === 'pending') {
+      cls = 'ts-mon-badge-accepted';
+      label = 'Submitted';
+    } else if (s === 'accepted') {
+      cls = 'ts-mon-badge-accepted';
+    } else if (s === 'rejected') {
+      cls = 'ts-mon-badge-rejected';
+    } else if (s === 'not submitted') {
+      cls = 'ts-mon-badge-none';
+    }
     return `<span class="ts-mon-badge ${cls}">${escapeHtml(label)}</span>`;
   };
 
@@ -358,7 +314,7 @@ const buildTimesheetMonitorCard = (tsData) => {
   }).join('');
 
   return `
-    <section class="card admin-card admin-card-span-full" id="ts-monitor-card">
+    <section class="admin-card-hightech" id="ts-monitor-card">
       <header class="card-heading" style="flex-wrap:wrap;gap:12px;align-items:center;">
         <div>
           <p class="eyebrow">Timesheet</p>
@@ -466,7 +422,7 @@ const loadAndRenderTimesheetMonitor = async (forceFetch = true) => {
           tsMonitorYear--;
         }
         container.innerHTML = `
-          <section class="card admin-card admin-card-span-full">
+          <section class="admin-card-hightech">
             <div class="skeleton skeleton-heading-md" style="margin:20px;"></div>
             <div class="skeleton skeleton-chart-line" style="margin:14px 20px;"></div>
           </section>`;
@@ -482,7 +438,7 @@ const loadAndRenderTimesheetMonitor = async (forceFetch = true) => {
           tsMonitorYear++;
         }
         container.innerHTML = `
-          <section class="card admin-card admin-card-span-full">
+          <section class="admin-card-hightech">
             <div class="skeleton skeleton-heading-md" style="margin:20px;"></div>
             <div class="skeleton skeleton-chart-line" style="margin:14px 20px;"></div>
           </section>`;
@@ -492,7 +448,7 @@ const loadAndRenderTimesheetMonitor = async (forceFetch = true) => {
   } catch (err) {
     console.warn('Error loading timesheet monitor:', err);
     container.innerHTML = `
-      <section class="card admin-card admin-card-span-full">
+      <section class="admin-card-hightech">
         <header class="card-heading">
           <div>
             <p class="eyebrow">Timesheet</p>
@@ -638,7 +594,7 @@ const buildLiveWorkView = ({ activeTasks = [], idleEmployeeRows = [] } = {}) => 
         <td>${escapeHtml(task.employee_name || task.employee_id)}</td>
         <td>${escapeHtml(task.task_name || task.task_id || task.task_guid)}</td>
         <td>${escapeHtml(task.project_name || task.project_id || '--')}</td>
-        <td class="mono" data-elapsed data-started-at="${escapeHtml(task.started_at_utc || '')}">${formatDuration(task.elapsed_seconds)}</td>
+        <td class="mono" data-elapsed data-started-at="${escapeHtml(task.started_at_utc || '')}"><i class="led-indicator led-running"></i> ${formatDuration(task.elapsed_seconds)}</td>
       </tr>
     `
         )
@@ -651,7 +607,7 @@ const buildLiveWorkView = ({ activeTasks = [], idleEmployeeRows = [] } = {}) => 
           (row) => `
       <tr>
         <td>${escapeHtml(row.employee_name || row.employee_id)}</td>
-        <td colspan="2" style="color:var(--text-secondary);">Checked in — no task started</td>
+        <td colspan="2" style="color:var(--text-secondary);"><i class="led-indicator led-idle"></i> Checked in — no task started</td>
         <td>${escapeHtml(formatCheckInTime(row.check_in_time))}</td>
       </tr>
     `
@@ -660,7 +616,7 @@ const buildLiveWorkView = ({ activeTasks = [], idleEmployeeRows = [] } = {}) => 
     : '';
 
   const idleNoteHtml = (idleEmployeeRows || []).length
-    ? `<div style="padding:6px 16px 10px;font-size:0.75rem;color:var(--text-secondary);"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#f59e0b;margin-right:5px;"></span>${(idleEmployeeRows || []).length} employee${(idleEmployeeRows || []).length > 1 ? 's' : ''} checked in but no task started</div>`
+    ? `<div style="padding:6px 16px 10px;font-size:0.75rem;color:var(--text-secondary);"><i class="led-indicator led-idle" style="background:#f59e0b;box-shadow: 0 0 10px #f59e0b;"></i>${(idleEmployeeRows || []).length} employee${(idleEmployeeRows || []).length > 1 ? 's' : ''} checked in but no task started</div>`
     : '';
 
   return {
@@ -740,17 +696,6 @@ const buildDashboardLayout = (data) => {
       </tr>
     `;
       }
-      if (row.row_kind === 'upcoming') {
-        return `
-      <tr>
-        <td>${escapeHtml(row.employee_id)}</td>
-        <td>${escapeHtml(row.employee_name)}</td>
-        <td>${escapeHtml(row.leave_type)}</td>
-        <td>${escapeHtml(row.start_date)}</td>
-        <td>${escapeHtml(row.end_date)}</td>
-      </tr>
-    `;
-      }
       return `
       <tr>
         <td>${escapeHtml(row.employee_id)}</td>
@@ -761,7 +706,7 @@ const buildDashboardLayout = (data) => {
       </tr>
     `;
     }).join('')
-    : '<tr><td colspan="5" style="color: var(--text-secondary);">No employees are on leave today.</td></tr>';
+    : '<tr><td colspan="5" style="color: var(--text-secondary);">No employees are on leave today or upcoming.</td></tr>';
 
   const loginActivityRows = data.loginActivityRows.length
     ? data.loginActivityRows.map((row) => `
@@ -783,22 +728,22 @@ const buildDashboardLayout = (data) => {
   const liveWork = buildLiveWorkView(data);
 
   return `
-    <section class="admin-dashboard">
-      <div class="admin-kpis">
-        <div class="hero-stat"><strong>${data.attendance.total_employees || 0}</strong><span>Total Employees</span></div>
-        <div class="hero-stat"><strong>${data.attendance.checked_in_count || 0}</strong><span>Checked In</span></div>
-        <div class="hero-stat"><strong>${data.attendance.not_checked_in_count || 0}</strong><span>Not Checked In</span></div>
-        <div class="hero-stat"><strong id="admin-kpi-active-task-count">${liveWork.activeTaskCount}</strong><span>Active Tasks</span></div>
+    <section class="admin-dashboard admin-dashboard-hightech">
+      <div class="admin-kpis admin-kpis-hightech">
+        <div class="hero-stat-hightech"><strong>${data.attendance.total_employees || 0}</strong><span>Total Employees</span></div>
+        <div class="hero-stat-hightech"><strong>${data.attendance.checked_in_count || 0}</strong><span>Checked In</span></div>
+        <div class="hero-stat-hightech"><strong>${data.attendance.not_checked_in_count || 0}</strong><span>Not Checked In</span></div>
+        <div class="hero-stat-hightech"><strong id="admin-kpi-active-task-count">${liveWork.activeTaskCount}</strong><span>Active Tasks</span></div>
       </div>
 
-      <div class="dashboard-grid admin-dashboard-grid">
-        <section class="card admin-card admin-card-span-2">
+      <div class="admin-dashboard-grid-hightech">
+        <section class="admin-card-hightech col-span-3">
           <header class="card-heading">
             <div>
               <p class="eyebrow">Live Work</p>
               <h3>Active Tasks Across Organization</h3>
             </div>
-            <span class="badge">Auto refresh: 15s</span>
+            <span class="badge" style="background:rgba(56,189,248,0.2);color:#38bdf8;border:1px solid #38bdf8;">Auto refresh: 15s</span>
           </header>
           <div class="leave-table-scroll admin-table-scroll">
             <table class="table leave-table">
@@ -819,19 +764,48 @@ const buildDashboardLayout = (data) => {
           <div id="admin-live-work-idle-note">${liveWork.idleNoteHtml}</div>
         </section>
 
-        <section class="card admin-card">
+        <section class="admin-card-hightech col-span-2">
+          <header class="card-heading">
+            <div>
+              <p class="eyebrow">Attendance</p>
+              <h3>Today's Overview</h3>
+            </div>
+          </header>
+          <div style="display:flex;gap:2rem;align-items:center;flex-wrap:wrap;">
+            <div style="flex:1;min-width:200px;display:flex;flex-direction:column;align-items:center;">
+              ${buildStatusDonut(data.attendance.checked_in_count || 0, data.attendance.not_checked_in_count || 0)}
+            </div>
+            <div class="admin-monitoring-table-wrap admin-table-scroll" style="flex:2;min-width:300px;max-height:280px;overflow-y:auto;">
+              <table class="table leave-table admin-monitoring-table">
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    <th>Date</th>
+                    <th>Check-In</th>
+                    <th>Presence</th>
+                    <th>Check-Out</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${loginActivityRows}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="admin-card-hightech col-span-1" style="display:flex;flex-direction:column;">
           <header class="card-heading">
             <div>
               <p class="eyebrow">Leave</p>
-              <h3>On Leave Today</h3>
+              <h3>Leaves Snapshot</h3>
             </div>
-            <span class="badge">Filter: Today</span>
           </header>
-          <div class="leave-table-scroll admin-table-scroll">
+          <div class="leave-table-scroll admin-table-scroll" style="flex:1;max-height:280px;overflow-y:auto;">
             <table class="table leave-table">
               <thead>
                 <tr>
-                  <th>Employee ID</th>
+                  <th>ID</th>
                   <th>Name</th>
                   <th>Leave Type</th>
                   <th>Start</th>
@@ -839,91 +813,16 @@ const buildDashboardLayout = (data) => {
                 </tr>
               </thead>
               <tbody>
-                ${(data.leaveRows || []).map((row) => `
-                  <tr>
-                    <td>${escapeHtml(row.employee_id)}</td>
-                    <td>${escapeHtml(row.employee_name)}</td>
-                    <td>${escapeHtml(row.leave_type)}</td>
-                    <td>${escapeHtml(row.start_date)}</td>
-                    <td>${escapeHtml(row.end_date)}</td>
-                  </tr>
-                `).join('') || '<tr><td colspan="5" style="color: var(--text-secondary);">No employees are on leave today.</td></tr>'}
+                ${leaveTableRows}
               </tbody>
             </table>
           </div>
         </section>
 
-        <section class="card admin-card">
-          <header class="card-heading">
-            <div>
-              <p class="eyebrow">Leave</p>
-              <h3>Upcoming Leaves This Month</h3>
-            </div>
-            <span class="badge">This month</span>
-          </header>
-          <div class="leave-table-scroll admin-table-scroll">
-            <table class="table leave-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Days Left</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${(data.upcomingLeaveRows || []).map((row) => `
-                  <tr>
-                    <td>${escapeHtml(row.employee_name)}</td>
-                    <td>${escapeHtml(row.days_left || '--')}</td>
-                  </tr>
-                `).join('') || '<tr><td colspan="2" style="color: var(--text-secondary);">No upcoming approved leaves for this month.</td></tr>'}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="card admin-card">
-          <header class="card-heading">
-            <div>
-              <p class="eyebrow">Attendance</p>
-              <h3>Employee Monitoring</h3>
-            </div>
-            <span class="badge">Today</span>
-          </header>
-          ${buildStatusDonut(data.attendance.checked_in_count || 0, data.attendance.not_checked_in_count || 0)}
-          <div class="admin-monitoring-table-wrap admin-table-scroll">
-            <table class="table leave-table admin-monitoring-table">
-              <thead>
-                <tr>
-                  <th>Employee</th>
-                  <th>Date</th>
-                  <th>Check-In</th>
-                  <th>Presence</th>
-                  <th>Check-Out</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${loginActivityRows}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="card admin-card">
-          <header class="card-heading">
-            <div>
-              <p class="eyebrow">Task Load</p>
-              <h3>Active Tasks by Project</h3>
-            </div>
-          </header>
-          ${buildProjectLoadBars(data.activeTasks)}
-        </section>
       </div>
 
       <div id="ts-monitor-container">
-        <section class="card admin-card admin-card-span-full">
-          <div class="skeleton skeleton-heading-md" style="margin:20px;"></div>
-          <div class="skeleton skeleton-chart-line" style="margin:14px 20px;"></div>
-        </section>
+        <!-- Timesheet Monitor gets rendered here -->
       </div>
     </section>
   `;
@@ -952,16 +851,136 @@ const startElapsedTick = () => {
   }, 1000);
 };
 
+const exportWsrReport = async () => {
+  try {
+    const btn = document.getElementById('admin-export-wsr');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Exporting...';
+    }
+
+    const month = tsMonitorMonth;
+    const year = tsMonitorYear;
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const startDate = `${year}-${pad2(month)}-01`;
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const endDate = `${year}-${pad2(month)}-${pad2(daysInMonth)}`;
+
+    const BREAK_SECS = 3600;
+    const STD_WORK_SECS = 9 * 3600;
+
+    const logsRes = await fetch(`${BASE_URL}/api/time-tracker/logs?employee_id=ALL&start_date=${startDate}&end_date=${endDate}`);
+    let allLogs = [];
+    if (logsRes.ok) {
+        const data = await logsRes.json();
+        allLogs = data.logs || [];
+    }
+
+    const employeesList = _tsMonitorEmployees || [];
+    const results = [];
+    const monthDates = [];
+    for(let d=1; d<=daysInMonth; d++) {
+        monthDates.push(`${year}-${pad2(month)}-${pad2(d)}`);
+    }
+
+    for (const emp of employeesList) {
+        const upEmp = String(emp.employee_id || '').toUpperCase();
+        let empTotalSecs = 0;
+        let empProductiveSecs = 0;
+        let empOtSecs = 0;
+
+        for (const dateStr of monthDates) {
+            const parts = dateStr.split('-');
+            const dateObj = new Date(parts[0], parseInt(parts[1], 10) - 1, parts[2]);
+            const isSunday = dateObj.getDay() === 0;
+            if (isSunday) continue;
+
+            let rawSecs = 0;
+            allLogs.forEach(l => {
+                if (String(l.employee_id || '').toUpperCase() === upEmp && String(l.work_date || '').slice(0, 10) === dateStr) {
+                    rawSecs += Number(l.seconds || 0);
+                }
+            });
+
+            const netSecs = Math.max(0, rawSecs - BREAK_SECS);
+            const stdSecs = rawSecs > 0 ? Math.min(netSecs, STD_WORK_SECS) : 0;
+            const otSecs = rawSecs > 0 ? Math.max(0, netSecs - STD_WORK_SECS) : 0;
+
+            empProductiveSecs += stdSecs;
+            empOtSecs += otSecs;
+            empTotalSecs += (stdSecs + otSecs);
+        }
+
+        let holidaysAvailed = 0;
+        try {
+            const leaves = await fetchEmployeeLeaves(upEmp);
+            leaves.forEach(l => {
+                if (String(l.status).toLowerCase() === 'approved') {
+                    if (l.leave_type === 'INL') {
+                        const leaveStart = String(l.start_date || '');
+                        if (leaveStart.startsWith(`${year}-${pad2(month)}`)) {
+                            holidaysAvailed += Number(l.total_days || 1);
+                        }
+                    }
+                }
+            });
+        } catch(e) { }
+
+        if (empTotalSecs > 0 || holidaysAvailed > 0) {
+            results.push({
+                name: emp.name,
+                totalHours: (empTotalSecs / 3600).toFixed(2),
+                productiveHours: (empProductiveSecs / 3600).toFixed(2),
+                nonProductiveHours: (empOtSecs / 3600).toFixed(2),
+                holidaysAvailed: holidaysAvailed
+            });
+        }
+    }
+
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += "Name,Total Hours,Productive Hours,Non-Productive Hours,Holidays Availed\r\n";
+    results.forEach(row => {
+        csvContent += `"${row.name.replace(/"/g, '""')}",${row.totalHours},${row.productiveHours},${row.nonProductiveHours},${row.holidaysAvailed}\r\n`;
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `WSR_Report_${year}_${pad2(month)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-download"></i> Export WSR report';
+    }
+  } catch (error) {
+    console.error("Export failed", error);
+    alert("Failed to export WSR report.");
+    const btn = document.getElementById('admin-export-wsr');
+    if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-download"></i> Export WSR report';
+    }
+  }
+};
+
 const attachRefreshAction = () => {
   const refreshBtn = document.getElementById('admin-dashboard-refresh');
-  if (!refreshBtn) return;
-  refreshBtn.onclick = async () => {
-    refreshBtn.disabled = true;
-    refreshBtn.innerHTML = '<i class="fa-solid fa-rotate fa-spin"></i> Refreshing';
-    await refreshAndRender(false);
-    refreshBtn.disabled = false;
-    refreshBtn.innerHTML = '<i class="fa-solid fa-rotate"></i> Refresh';
-  };
+  const exportBtn = document.getElementById('admin-export-wsr');
+  if (refreshBtn) {
+    refreshBtn.onclick = async () => {
+      refreshBtn.disabled = true;
+      refreshBtn.innerHTML = '<i class="fa-solid fa-rotate fa-spin"></i> Refreshing';
+      await refreshAndRender(false);
+      refreshBtn.disabled = false;
+      refreshBtn.innerHTML = '<i class="fa-solid fa-rotate"></i> Refresh';
+    };
+  }
+  if (exportBtn) {
+    exportBtn.onclick = exportWsrReport;
+  }
 };
 
 const refreshAndRender = async (showSkeleton = true, scope = 'full') => {
@@ -982,14 +1001,14 @@ const refreshAndRender = async (showSkeleton = true, scope = 'full') => {
     }
 
     if (showSkeleton) {
-      appContent.innerHTML = getPageContentHTML('Admin Dashboard', buildSkeleton(), '<button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>');
+      appContent.innerHTML = getPageContentHTML('Admin Dashboard', buildSkeleton(), '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>');
     }
 
     const data = await loadAdminDashboardData();
     appContent.innerHTML = getPageContentHTML(
       'Admin Dashboard',
       buildDashboardLayout(data),
-      '<button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>'
+      '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>'
     );
 
     attachRefreshAction();
