@@ -387,6 +387,9 @@ export const renderLeaveTrackerPage = async (
           appliedBy: appliedBy,
           approvalStatus: l.status || "Pending",
           leaveCount: l.total_days,
+          dayDuration: l.day_duration || (
+            Number(l.total_days) > 0 && Number(l.total_days) < 1 ? "Half Day" : "Full Day"
+          ),
           appliedDate: l.start_date, // Use start_date as applied date if not stored
           compensationType: isCompOffLeaveType && String(l.paid_unpaid || "").trim().toLowerCase() === "paid"
             ? "Compensatory Off"
@@ -572,6 +575,7 @@ export const renderLeaveTrackerPage = async (
                 <td>${l.startDate}</td>
                 <td>${l.endDate}</td>
                 <td>${l.leaveCount}</td>
+                <td>${l.dayDuration || "Full Day"}</td>
                 <td>${l.compensationType || "-"}</td>
                 <td><span class="status-badge ${(
             l.approvalStatus || "pending"
@@ -602,6 +606,7 @@ export const renderLeaveTrackerPage = async (
     { key: "startDate", label: "Start Date", sorted: true, direction: "desc" },
     { key: "endDate", label: "End Date", sorted: false },
     { key: "leaveCount", label: "Days", sorted: false },
+    { key: "dayDuration", label: "Duration", sorted: false },
     { key: "compensationType", label: "Type", sorted: false },
     { key: "approvalStatus", label: "Status", sorted: false },
     { key: "action", label: "Action", sorted: false },
@@ -942,6 +947,16 @@ export const showApplyLeaveModal = (options = {}) => {
                         </div>
                     </div>
                     <div class="form-field with-icon">
+                        <label class="form-label" for="dayDuration">Day Duration</label>
+                        <div class="input-wrapper">
+                            <i class="fa-solid fa-clock"></i>
+                            <select class="input-control" id="dayDuration" name="dayDuration" required>
+                                <option value="full" selected>Full Day</option>
+                                <option value="half">Half Day (0.5 day)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-field with-icon">
                         <label class="form-label" for="startDate">Start Date</label>
                         <div class="input-wrapper">
                             <i class="fa-solid fa-calendar"></i>
@@ -965,6 +980,7 @@ export const showApplyLeaveModal = (options = {}) => {
                         <span class="field-hint">Share a concise context for reviewers</span>
                     </div>
                     <textarea class="input-control" id="reason" name="reason" rows="3" placeholder="Brief reason for your leave" required></textarea>
+                    <p class="helper-text" id="half-day-hint" style="display:none;">Half-day leave uses one date only; end date will match start date. Approved half-day shows as <strong>HL</strong> on attendance.</p>
                     <p class="helper-text">Tip: keep it professional and note split-day nuances if any.</p>
                 </div>
             </div>
@@ -1017,8 +1033,10 @@ export const showApplyLeaveModal = (options = {}) => {
       const selfEmpId = await resolveCurrentEmployeeId();
       const leaveSel = document.getElementById("leaveType");
       const compSel = document.getElementById("compensationType");
+      const dayDurationSel = document.getElementById("dayDuration");
       const startInput = document.getElementById("startDate");
       const endInput = document.getElementById("endDate");
+      const halfDayHint = document.getElementById("half-day-hint");
       const employeeSel = document.getElementById("leaveEmployeeId");
       const submitBtn = document.getElementById("submit-leave-btn");
 
@@ -1094,14 +1112,29 @@ export const showApplyLeaveModal = (options = {}) => {
         resetBalanceCard();
       }
 
+      const getDayDurationMode = () =>
+        String(dayDurationSel?.value || "full").trim().toLowerCase();
+
+      const syncHalfDayDateConstraints = () => {
+        const isHalf = getDayDurationMode() === "half";
+        if (halfDayHint) halfDayHint.style.display = isHalf ? "block" : "none";
+        if (isHalf && startInput?.value) {
+          endInput.value = startInput.value;
+          endInput.readOnly = true;
+        } else if (endInput) {
+          endInput.readOnly = false;
+        }
+      };
+
       const computeRequestedDays = () => {
         const s = startInput.value;
         const e = endInput.value;
-        if (!s || !e) return 1;
+        if (!s || !e) return getDayDurationMode() === "half" ? 0.5 : 1;
         try {
-          return Math.max(1, calculateLeaveDays(s, e));
+          const days = calculateLeaveDays(s, e, getDayDurationMode());
+          return days > 0 ? days : (getDayDurationMode() === "half" ? 0.5 : 1);
         } catch {
-          return 1;
+          return getDayDurationMode() === "half" ? 0.5 : 1;
         }
       };
 
@@ -1317,8 +1350,19 @@ export const showApplyLeaveModal = (options = {}) => {
       ["change", "input"].forEach((evt) => {
         if (leaveSel)
           leaveSel.addEventListener(evt, refreshCompensationOptions);
-        if (startInput)
-          startInput.addEventListener(evt, refreshCompensationOptions);
+        if (dayDurationSel) {
+          dayDurationSel.addEventListener(evt, () => {
+            syncHalfDayDateConstraints();
+            refreshCompensationOptions();
+            updateBalanceCardAndPreview();
+          });
+        }
+        if (startInput) {
+          startInput.addEventListener(evt, () => {
+            syncHalfDayDateConstraints();
+            refreshCompensationOptions();
+          });
+        }
         if (endInput)
           endInput.addEventListener(evt, refreshCompensationOptions);
         if (leaveSel)
@@ -1328,6 +1372,7 @@ export const showApplyLeaveModal = (options = {}) => {
         if (endInput)
           endInput.addEventListener(evt, updateBalanceCardAndPreview);
       });
+      syncHalfDayDateConstraints();
 
       if (employeeSel) {
         employeeSel.addEventListener("change", async () => {
@@ -1376,6 +1421,13 @@ export const handleApplyLeave = async (e) => {
 
   if (!startDate || !endDate)
     return alert("Please select both start and end dates");
+
+  const dayDuration = String(
+    document.getElementById("dayDuration")?.value || "full"
+  ).trim().toLowerCase();
+  if (dayDuration === "half" && startDate !== endDate) {
+    return alert("Half-day leave must be for a single date. End date will match start date.");
+  }
 
   const applyMode = String(
     document.getElementById("leave-apply-mode")?.value || "self"
@@ -1494,6 +1546,7 @@ export const handleApplyLeave = async (e) => {
     leave_type: payloadLeaveType,
     start_date: startDate,
     end_date: endDate,
+    day_duration: dayDuration,
     employee_id: appliedBy,
     applied_by: appliedBy,
     paid_unpaid: payloadCompensationType,
@@ -1507,7 +1560,7 @@ export const handleApplyLeave = async (e) => {
     // Client-side guard for paid-like compensation modes
     if (compTypeNorm === "paid" || isCompOffCompensation) {
       try {
-        const requestedDays = calculateLeaveDays(startDate, endDate);
+        const requestedDays = calculateLeaveDays(startDate, endDate, dayDuration);
 
         if (isCompOffCompensation) {
           const availableBalance = await fetchLeaveBalance(appliedBy, "Comp Off");
@@ -1594,7 +1647,7 @@ export const handleApplyLeave = async (e) => {
       }
 
       // Show success toast notification
-      const requestedDays = calculateLeaveDays(startDate, endDate);
+      const requestedDays = calculateLeaveDays(startDate, endDate, dayDuration);
       showLeaveApplicationToast(payloadLeaveType, requestedDays);
 
       // Now close modal

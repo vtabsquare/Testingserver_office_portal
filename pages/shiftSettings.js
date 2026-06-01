@@ -12,7 +12,9 @@ import {
 } from '../features/shiftSettingsApi.js';
 
 const DEFAULT_GRACE_MINUTES = 15;
-const MIN_SHIFT_HOURS = 9;
+const DEFAULT_TOLERANCE_MINUTES = 15;
+const TOLERANCE_OPTIONS = [0, 5, 10, 15, 20, 30, 45, 60];
+const MIN_SHIFT_HOURS = 2;
 const DEFAULT_WORK_WEEK = 'mon-sat';
 
 let cachedPresets = [];
@@ -38,6 +40,40 @@ const getShiftDurationHours = (start, end) => {
 const isValidShiftWindow = (start, end) => getShiftDurationHours(start, end) >= MIN_SHIFT_HOURS;
 
 const formatWorkWeek = (value) => (String(value || DEFAULT_WORK_WEEK).toLowerCase() === 'mon-fri' ? 'Mon-Fri' : 'Mon-Sat');
+
+const formatHoursMinutes = (totalHours) => {
+    const h = Math.floor(totalHours);
+    const m = Math.round((totalHours - h) * 60);
+    if (m === 0) return `${h}h`;
+    return `${h}h ${m}m`;
+};
+
+const presentHoursForTolerance = (start, end, toleranceMinutes = DEFAULT_TOLERANCE_MINUTES) => {
+    const durationH = getShiftDurationHours(start, end);
+    if (durationH <= 0) return 0;
+    return Math.max(0, durationH - (Number(toleranceMinutes) || 0) / 60);
+};
+
+const toleranceSelectHtml = (id, selected = DEFAULT_TOLERANCE_MINUTES) => {
+    const sel = Number(selected) || DEFAULT_TOLERANCE_MINUTES;
+    return `
+        <select id="${id}" class="input-control">
+            ${TOLERANCE_OPTIONS.map((m) => `
+                <option value="${m}" ${sel === m ? 'selected' : ''}>${m} minutes</option>
+            `).join('')}
+        </select>
+    `;
+};
+
+const updateTolerancePreview = (startId, endId, toleranceId, previewId) => {
+    const start = document.getElementById(startId)?.value;
+    const end = document.getElementById(endId)?.value;
+    const tol = Number(document.getElementById(toleranceId)?.value || DEFAULT_TOLERANCE_MINUTES);
+    const el = document.getElementById(previewId);
+    if (!el || !start || !end) return;
+    const presentH = presentHoursForTolerance(start, end, tol);
+    el.textContent = `Present at ${formatHoursMinutes(presentH)} worked (${formatHoursMinutes(getShiftDurationHours(start, end))} shift − ${tol} min tolerance). Half day remains 50% of shift.`;
+};
 
 const PROTECTED_PRESET_NAMES = new Set(['shift 1', 'shift 2']);
 
@@ -65,7 +101,8 @@ const buildPresetsSection = (presets = []) => `
                         <th>Shift Start</th>
                         <th>Shift End</th>
                         <th>Work Week</th>
-                        <th>Grace Time</th>
+                        <th>Late Grace</th>
+                        <th>Tolerance</th>
                         <th>Duration</th>
                         <th>Actions</th>
                     </tr>
@@ -78,6 +115,7 @@ const buildPresetsSection = (presets = []) => `
                             <td>${p.shift_end}</td>
                             <td>${formatWorkWeek(p.work_week)}</td>
                             <td>${p.grace_minutes || DEFAULT_GRACE_MINUTES} mins</td>
+                            <td>${p.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES} mins</td>
                             <td>${getShiftDurationHours(p.shift_start, p.shift_end).toFixed(2)}h</td>
                             <td style="display: flex; gap: 0.35rem; align-items: center;">
                                 <button
@@ -89,6 +127,7 @@ const buildPresetsSection = (presets = []) => `
                                     data-shift-start="${p.shift_start}"
                                     data-shift-end="${p.shift_end}"
                                     data-work-week="${p.work_week}"
+                                    data-tolerance-minutes="${p.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES}"
                                 >
                                     <i class="fa-solid fa-pen-to-square"></i>
                                 </button>
@@ -105,7 +144,7 @@ const buildPresetsSection = (presets = []) => `
                                 ` : ''}
                             </td>
                         </tr>
-                    `).join('') || '<tr><td colspan="7" class="placeholder-text">No presets yet. Add Shift 1, Shift 2, etc.</td></tr>'}
+                    `).join('') || '<tr><td colspan="8" class="placeholder-text">No presets yet. Add Shift 1, Shift 2, etc.</td></tr>'}
                 </tbody>
             </table>
         </div>
@@ -115,7 +154,7 @@ const buildPresetsSection = (presets = []) => `
 const buildShiftTable = (rows = []) => `
     <div class="card">
         <h3><i class="fa-solid fa-business-time"></i> Employee Shift Settings</h3>
-        <p class="allocation-description">Assign a shift preset or set custom timings per employee. Grace time is fixed at 15 minutes. Minimum shift length is 9 hours.</p>
+        <p class="allocation-description">Assign a shift preset or set custom timings per employee. Late grace is 15 minutes (fixed). Tolerance sets how early someone can be marked Present (shift duration − tolerance). Minimum shift length is 2 hours; half day is 50% of shift.</p>
         <div class="table-container">
             <table class="table">
                 <thead>
@@ -126,7 +165,8 @@ const buildShiftTable = (rows = []) => `
                         <th>Shift Start</th>
                         <th>Shift End</th>
                         <th>Work Week</th>
-                        <th>Grace Time</th>
+                        <th>Late Grace</th>
+                        <th>Tolerance</th>
                         <th>Shift Duration</th>
                         <th>Actions</th>
                     </tr>
@@ -141,6 +181,7 @@ const buildShiftTable = (rows = []) => `
                             <td>${row.shift_end}</td>
                             <td>${formatWorkWeek(row.work_week)}</td>
                             <td>${row.grace_minutes} mins</td>
+                            <td>${row.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES} mins</td>
                             <td>${row.duration_hours.toFixed(2)}h</td>
                             <td>
                                 <button
@@ -152,13 +193,14 @@ const buildShiftTable = (rows = []) => `
                                     data-shift-start="${row.shift_start}"
                                     data-shift-end="${row.shift_end}"
                                     data-work-week="${row.work_week}"
+                                    data-tolerance-minutes="${row.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES}"
                                     data-preset-id="${row.preset_id || ''}"
                                 >
                                     <i class="fa-solid fa-pen-to-square"></i>
                                 </button>
                             </td>
                         </tr>
-                    `).join('') || '<tr><td colspan="9" class="placeholder-text">No employees found.</td></tr>'}
+                    `).join('') || '<tr><td colspan="10" class="placeholder-text">No employees found.</td></tr>'}
                 </tbody>
             </table>
         </div>
@@ -199,7 +241,15 @@ const onPresetSelectChange = () => {
     }
 };
 
-const openEditShiftModal = (employeeId, employeeName, shiftStart, shiftEnd, workWeek, presetId = '') => {
+const openEditShiftModal = (
+    employeeId,
+    employeeName,
+    shiftStart,
+    shiftEnd,
+    workWeek,
+    presetId = '',
+    toleranceMinutes = DEFAULT_TOLERANCE_MINUTES
+) => {
     const body = `
         <div class="modal-form modern-form team-modal">
             <div class="form-section">
@@ -216,8 +266,13 @@ const openEditShiftModal = (employeeId, employeeName, shiftStart, shiftEnd, work
                         <input class="input-control" type="text" value="${employeeName} (${employeeId})" disabled />
                     </div>
                     <div class="form-field">
-                        <label class="form-label">Grace Time</label>
+                        <label class="form-label">Late Grace</label>
                         <input class="input-control" type="text" value="${DEFAULT_GRACE_MINUTES} minutes (fixed)" disabled />
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label" for="shift-tolerance">Tolerance (Present)</label>
+                        ${toleranceSelectHtml('shift-tolerance', toleranceMinutes)}
+                        <p class="helper-text">Worked time needed: shift length minus this value.</p>
                     </div>
                     <div class="form-field" style="grid-column: 1 / -1;">
                         <label class="form-label" for="shift-preset-select">Assign Shift Preset</label>
@@ -243,6 +298,7 @@ const openEditShiftModal = (employeeId, employeeName, shiftStart, shiftEnd, work
                     </div>
                 </div>
                 <p class="helper-text">Shift end time must be at least ${MIN_SHIFT_HOURS} hours after shift start.</p>
+                <p class="helper-text" id="shift-tolerance-preview"></p>
             </div>
         </div>
     `;
@@ -254,9 +310,24 @@ const openEditShiftModal = (employeeId, employeeName, shiftStart, shiftEnd, work
 
     const presetSelect = document.getElementById('shift-preset-select');
     if (presetSelect) {
-        presetSelect.onchange = onPresetSelectChange;
+        presetSelect.onchange = () => {
+            onPresetSelectChange();
+            const presetId = presetSelect.value;
+            const preset = cachedPresets.find((p) => String(p.id) === String(presetId));
+            const tolEl = document.getElementById('shift-tolerance');
+            if (preset && tolEl) {
+                tolEl.value = String(preset.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES);
+            }
+            updateTolerancePreview('shift-start', 'shift-end', 'shift-tolerance', 'shift-tolerance-preview');
+        };
         onPresetSelectChange();
     }
+    ['shift-start', 'shift-end', 'shift-tolerance'].forEach((id) => {
+        document.getElementById(id)?.addEventListener('change', () => {
+            updateTolerancePreview('shift-start', 'shift-end', 'shift-tolerance', 'shift-tolerance-preview');
+        });
+    });
+    updateTolerancePreview('shift-start', 'shift-end', 'shift-tolerance', 'shift-tolerance-preview');
 
     const cancelBtn = document.getElementById('cancel-shift-btn');
     if (cancelBtn) cancelBtn.onclick = () => closeModal?.();
@@ -285,10 +356,15 @@ const openEditShiftModal = (employeeId, employeeName, shiftStart, shiftEnd, work
             }
         }
 
+        const toleranceMinutes = Number(
+            document.getElementById('shift-tolerance')?.value || DEFAULT_TOLERANCE_MINUTES
+        );
+
         try {
             const payload = {
                 employee_id: employeeId,
                 grace_minutes: DEFAULT_GRACE_MINUTES,
+                tolerance_minutes: toleranceMinutes,
             };
             if (selectedPresetId) {
                 payload.preset_id = selectedPresetId;
@@ -321,8 +397,12 @@ const openPresetModal = (preset = null) => {
                         <input id="preset-name" class="input-control" type="text" value="${preset?.name || ''}" placeholder="e.g. Shift 1" required />
                     </div>
                     <div class="form-field">
-                        <label class="form-label">Grace Time</label>
+                        <label class="form-label">Late Grace</label>
                         <input class="input-control" type="text" value="${DEFAULT_GRACE_MINUTES} minutes (fixed)" disabled />
+                    </div>
+                    <div class="form-field">
+                        <label class="form-label" for="preset-tolerance">Tolerance (Present)</label>
+                        ${toleranceSelectHtml('preset-tolerance', preset?.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES)}
                     </div>
                     <div class="form-field">
                         <label class="form-label" for="preset-shift-start">Shift Start</label>
@@ -341,6 +421,7 @@ const openPresetModal = (preset = null) => {
                     </div>
                 </div>
                 <p class="helper-text">Minimum shift length is ${MIN_SHIFT_HOURS} hours. Employees assigned this preset will use these timings.</p>
+                <p class="helper-text" id="preset-tolerance-preview"></p>
             </div>
         </div>
     `;
@@ -349,6 +430,23 @@ const openPresetModal = (preset = null) => {
         { id: 'cancel-preset-btn', text: 'Cancel', className: 'btn btn-secondary', type: 'button' },
         { id: 'save-preset-btn', text: 'Save Preset', className: 'btn btn-primary', type: 'button' },
     ]);
+
+    ['preset-shift-start', 'preset-shift-end', 'preset-tolerance'].forEach((id) => {
+        document.getElementById(id)?.addEventListener('change', () => {
+            updateTolerancePreview(
+                'preset-shift-start',
+                'preset-shift-end',
+                'preset-tolerance',
+                'preset-tolerance-preview'
+            );
+        });
+    });
+    updateTolerancePreview(
+        'preset-shift-start',
+        'preset-shift-end',
+        'preset-tolerance',
+        'preset-tolerance-preview'
+    );
 
     document.getElementById('cancel-preset-btn')?.addEventListener('click', () => closeModal?.());
 
@@ -368,8 +466,18 @@ const openPresetModal = (preset = null) => {
             return;
         }
 
+        const toleranceMinutes = Number(
+            document.getElementById('preset-tolerance')?.value || DEFAULT_TOLERANCE_MINUTES
+        );
+
         try {
-            const payload = { name, shift_start: start, shift_end: end, work_week: workWeek };
+            const payload = {
+                name,
+                shift_start: start,
+                shift_end: end,
+                work_week: workWeek,
+                tolerance_minutes: toleranceMinutes,
+            };
             if (id) {
                 await updateShiftPreset(id, payload);
             } else {
@@ -392,7 +500,8 @@ const attachShiftHandlers = () => {
                 btn.getAttribute('data-shift-start'),
                 btn.getAttribute('data-shift-end'),
                 btn.getAttribute('data-work-week'),
-                btn.getAttribute('data-preset-id') || ''
+                btn.getAttribute('data-preset-id') || '',
+                btn.getAttribute('data-tolerance-minutes') || DEFAULT_TOLERANCE_MINUTES
             );
         });
     });
@@ -407,6 +516,7 @@ const attachShiftHandlers = () => {
                 shift_start: btn.getAttribute('data-shift-start'),
                 shift_end: btn.getAttribute('data-shift-end'),
                 work_week: btn.getAttribute('data-work-week'),
+                tolerance_minutes: btn.getAttribute('data-tolerance-minutes') || DEFAULT_TOLERANCE_MINUTES,
             });
         });
     });
@@ -484,6 +594,9 @@ export const renderShiftSettingsPage = async () => {
                     shift_end: shiftEnd,
                     work_week: workWeek,
                     grace_minutes: Number(entry.grace_minutes || defaults.grace_minutes || DEFAULT_GRACE_MINUTES),
+                    tolerance_minutes: Number(
+                        entry.tolerance_minutes ?? defaults.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES
+                    ),
                     duration_hours: getShiftDurationHours(shiftStart, shiftEnd),
                     preset_id: entry.preset_id || null,
                     preset_name: entry.preset_name || null,

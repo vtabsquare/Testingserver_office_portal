@@ -15,7 +15,9 @@ export const getSidebarHTML = () => {
     return `
     <div class="sidebar-header">
         <a href="#/" class="sidebar-brand nav-link" data-page="home">
-            <div class="sidebar-logo">VS</div>
+            <div class="sidebar-logo">
+                <img src="/vtab-logo.jpeg" alt="VTAB SQUARE" width="48" height="48" />
+            </div>
             <span class="sidebar-title">VTAB SQUARE</span>
         </a>
     </div>

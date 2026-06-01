@@ -57,8 +57,9 @@ def handle_options(path=None):
     return response
 
 # ================== CONFIGURATION ==================
-HALF_DAY_SECONDS = 4 * 3600      # 4 hours = Half Day (HL)
-FULL_DAY_SECONDS = 9 * 3600      # 9 hours = Present (P)
+# Legacy display constants (thresholds are per-employee via attendance_shift_status)
+HALF_DAY_SECONDS = 4 * 3600
+FULL_DAY_SECONDS = 9 * 3600
 HALF_DAY_HOURS = 4.0
 FULL_DAY_HOURS = 9.0
 
@@ -109,19 +110,29 @@ def get_server_now_utc():
     return datetime.now(timezone.utc)
 
 
-def derive_status(total_seconds):
-    """Derive attendance status from total seconds worked"""
+def derive_status(total_seconds, employee_id=None):
+    """Derive P/HL/A from worked seconds and employee shift settings (50% HL, 95% P)."""
+    if employee_id:
+        try:
+            from attendance_shift_status import classify_seconds_for_employee
+            return classify_seconds_for_employee(employee_id, int(total_seconds or 0))
+        except Exception as err:
+            print(f"[ATTENDANCE-V2] shift-based status fallback: {err}")
     if total_seconds >= FULL_DAY_SECONDS:
         return "P"
-    elif total_seconds >= HALF_DAY_SECONDS:
+    if total_seconds >= HALF_DAY_SECONDS:
         return "HL"
     return "A"
 
 
 def derive_status_label(status_code):
     """Get full label for status code"""
-    labels = {"P": "Present", "HL": "Half Day", "A": "Absent"}
-    return labels.get(status_code, "Absent")
+    try:
+        from attendance_shift_status import status_label
+        return status_label(status_code)
+    except Exception:
+        labels = {"P": "Present", "HL": "Half Day", "A": "Absent"}
+        return labels.get(status_code, "Absent")
 
 
 def format_duration_text(seconds):
@@ -404,7 +415,7 @@ def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
 
                 session_seconds = max(0, cutoff_ts - checkin_ts)
                 total_seconds = base_seconds + session_seconds
-                status = derive_status(total_seconds)
+                status = derive_status(total_seconds, emp)
                 hours = format_duration_hours(total_seconds)
                 duration_text = format_duration_text(total_seconds)
 
@@ -531,7 +542,7 @@ def checkin_v2():
                     "elapsed_seconds": max(0, elapsed),
                     "total_seconds_today": total_seconds,
                     "is_active_session": True,
-                    "status_code": derive_status(total_seconds),
+                    "status_code": derive_status(total_seconds, employee_id),
                     "display": {
                         "checkin_local": localize_time(datetime.fromtimestamp(checkin_ts_val, tz=timezone.utc), tz_name),
                         "elapsed_text": format_duration_text(total_seconds),
@@ -607,7 +618,7 @@ def checkin_v2():
             "total_seconds_today": base_seconds,
             "is_active_session": True,
             "session_count": 1,
-            "status_code": derive_status(base_seconds),
+            "status_code": derive_status(base_seconds, employee_id),
             "display": {
                 "checkin_local": localize_time(now_utc, tz_name),
                 "date_local": today_date,
@@ -668,7 +679,7 @@ def checkout_v2():
         total_seconds = base_seconds + session_seconds
         
         # Derive status
-        status = derive_status(total_seconds)
+        status = derive_status(total_seconds, employee_id)
         hours = format_duration_hours(total_seconds)
         duration_text = format_duration_text(total_seconds)
         
@@ -809,7 +820,21 @@ def get_status_v2(employee_id):
             elapsed_seconds = max(0, int(now_utc.timestamp()) - int(checkin_ts_val))
             total_seconds = base_seconds + elapsed_seconds
         
-        status = derive_status(total_seconds)
+        status = derive_status(total_seconds, employee_id)
+        try:
+            from attendance_shift_status import get_shift_thresholds_for_employee
+            shift_thresholds = get_shift_thresholds_for_employee(employee_id)
+        except Exception:
+            shift_thresholds = {
+                "half_day_seconds": HALF_DAY_SECONDS,
+                "full_day_seconds": FULL_DAY_SECONDS,
+                "expected_seconds": FULL_DAY_SECONDS,
+                "expected_hours": FULL_DAY_HOURS,
+                "half_day_hours": HALF_DAY_HOURS,
+                "full_day_hours": FULL_DAY_HOURS,
+                "half_day_ratio": 0.5,
+                "present_ratio": 0.95,
+            }
         
         # Build response
         response = {
@@ -830,8 +855,18 @@ def get_status_v2(employee_id):
                 "code": status,
                 "label": derive_status_label(status),
                 "thresholds": {
-                    "half_day_seconds": HALF_DAY_SECONDS,
-                    "full_day_seconds": FULL_DAY_SECONDS
+                    "half_day_seconds": shift_thresholds["half_day_seconds"],
+                    "full_day_seconds": shift_thresholds["full_day_seconds"],
+                    "expected_seconds": shift_thresholds["expected_seconds"],
+                    "expected_hours": shift_thresholds["expected_hours"],
+                    "half_day_hours": shift_thresholds["half_day_hours"],
+                    "full_day_hours": shift_thresholds["full_day_hours"],
+                    "half_day_ratio": shift_thresholds["half_day_ratio"],
+                    "present_ratio": shift_thresholds["present_ratio"],
+                    "tolerance_minutes": shift_thresholds.get("tolerance_minutes"),
+                    "present_mode": shift_thresholds.get("present_mode"),
+                    "shift_start": shift_thresholds.get("shift_start"),
+                    "shift_end": shift_thresholds.get("shift_end"),
                 }
             },
             "display": {
@@ -903,7 +938,7 @@ def get_monthly_attendance_v2(employee_id, year, month):
                     pass
                 
                 total_seconds = int(duration_hours * 3600)
-                status = rec.get(FIELD_STATUS) or derive_status(total_seconds)
+                status = rec.get(FIELD_STATUS) or derive_status(total_seconds, employee_id)
                 
                 record_data = {
                     "day": day,

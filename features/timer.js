@@ -1,13 +1,14 @@
 import { state } from '../state.js';
 import { checkIn, checkOut, invalidateAttendanceCache } from './attendanceApi.js';
 import { fetchShiftSettings } from './shiftSettingsApi.js';
-import { computeIsLateForShift } from './shiftLate.js';
+import {
+    computeIsLateForShift,
+    deriveStatusFromWorkedSeconds,
+    computeThresholdsFromShiftTimes,
+} from './shiftLate.js';
 import { API_BASE_URL } from '../config.js';
 import { renderAttendanceTrackerPage } from '../pages/attendance.js';
 import { recordUserAction, markBackendStateLoaded } from './attendanceSocket.js';
-
-const HALF_DAY_SECONDS = 4 * 3600;
-const FULL_DAY_SECONDS = 9 * 3600;
 
 /**
  * Get today's date string in YYYY-MM-DD format
@@ -20,10 +21,27 @@ const getTodayDateStr = () => {
 // Track the date when timer was active for midnight reset detection
 let timerDateStr = null;
 
-const deriveAttendanceStatusFromSeconds = (seconds = 0) => {
-    if (seconds >= FULL_DAY_SECONDS) return 'P';
-    if (seconds >= HALF_DAY_SECONDS) return 'HL';
-    return 'A';
+const deriveAttendanceStatusFromSeconds = (seconds = 0) =>
+    deriveStatusFromWorkedSeconds(seconds, state.attendanceShiftThresholds);
+
+const cacheShiftThresholdsFromSettings = async (employeeId) => {
+    const uid = String(employeeId || state.user?.id || '').toUpperCase();
+    if (!uid) return;
+    try {
+        const settings = await fetchShiftSettings();
+        const row = (settings?.employees || []).find(
+            (e) => String(e.employee_id || '').toUpperCase() === uid
+        );
+        if (!row?.shift_start || !row?.shift_end) return;
+        const thresholds = computeThresholdsFromShiftTimes(
+            row.shift_start,
+            row.shift_end,
+            row.tolerance_minutes ?? 15
+        );
+        if (thresholds) state.attendanceShiftThresholds = thresholds;
+    } catch (err) {
+        console.warn('[TIMER] Could not load shift thresholds:', err);
+    }
 };
 
 const ensureTodayAttendanceRecord = () => {
@@ -529,6 +547,7 @@ export const loadTimerState = async () => {
 
     // Always prefer authoritative backend state if available
     const uid = String(state.user.id || '').toUpperCase();
+    if (uid) await cacheShiftThresholdsFromSettings(uid);
     const primaryKey = uid ? `timerState_${uid}` : 'timerState';
     const fallbackKey = 'timerState';
     const baseUrl = API_BASE_URL.replace(/\/$/, '');

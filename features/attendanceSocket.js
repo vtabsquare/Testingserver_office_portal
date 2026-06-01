@@ -5,6 +5,7 @@ import { io } from 'socket.io-client';
 import { state } from '../state.js';
 import { updateTimerDisplay, updateTimerButton } from './timer.js';
 import { renderMyAttendancePage } from '../pages/attendance.js';
+import { deriveStatusFromWorkedSeconds } from './shiftLate.js';
 
 let socket = null;
 let isConnected = false;
@@ -17,9 +18,6 @@ let backendStateLoaded = false;
 
 // Timestamp of last user action (checkin/checkout) - socket sync older than this is ignored
 let lastUserActionTimestamp = 0;
-
-const HALF_DAY_SECONDS = 4 * 3600;
-const FULL_DAY_SECONDS = 9 * 3600;
 
 // Helper to get today's date string in YYYY-MM-DD format (client local time)
 function getTodayDateStr() {
@@ -46,9 +44,7 @@ function resolveSocketUrl() {
 const SOCKET_URL = resolveSocketUrl();
 
 function deriveStatus(totalSeconds) {
-    if (totalSeconds >= FULL_DAY_SECONDS) return 'P';
-    if (totalSeconds >= HALF_DAY_SECONDS) return 'HL';
-    return 'A';
+    return deriveStatusFromWorkedSeconds(totalSeconds, state.attendanceShiftThresholds);
 }
 
 /**

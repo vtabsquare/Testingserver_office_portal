@@ -893,8 +893,8 @@ export const renderLoginPage = () => {
 
   <div class="login-bg">
     <div class="login-shell">
-      <div class="avatar-circle">
-        <i class="fa-regular fa-user"></i>
+      <div class="avatar-circle login-brand-logo">
+        <img src="/vtab-logo.jpeg" alt="VTAB SQUARE" width="64" height="64" />
       </div>
       <h2 class="login-title">Welcome back</h2>
       <p class="login-subtitle">Please sign in to continue</p>
@@ -1028,17 +1028,24 @@ export const renderLoginPage = () => {
       text-align: center;
     }
 
-    .avatar-circle {
-      width: 72px;
-      height: 72px;
-      border-radius: 50%;
+    .avatar-circle.login-brand-logo {
+      width: 88px;
+      height: 88px;
+      border-radius: 16px;
       margin: 0 auto 16px;
       display: grid;
       place-items: center;
-      background: linear-gradient(145deg, #f3f6ff, #dfe5f5);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.8), 0 10px 30px rgba(43, 56, 87, 0.15);
-      color: #7a87a6;
-      font-size: 24px;
+      background: #ffffff;
+      box-shadow: 0 10px 30px rgba(43, 56, 87, 0.12);
+      overflow: hidden;
+      padding: 6px;
+    }
+
+    .avatar-circle.login-brand-logo img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
     }
 
     .login-title {

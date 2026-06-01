@@ -78,15 +78,20 @@ export const validateLeaveBalance = async (empId, leaveType, leaveDays) => {
 /**
  * Calculate number of leave days between two dates (excluding weekends)
  */
-export const calculateLeaveDays = (startDate, endDate) => {
+export const calculateLeaveDays = (startDate, endDate, dayDuration = 'full') => {
   const start = new Date(startDate);
   const end = new Date(endDate);
   let count = 0;
   const cur = new Date(start);
   while (cur <= end) {
     const dow = cur.getDay();
-    if (dow !== 0 && dow !== 6) count++;
+    // Match backend: Sunday excluded; Saturday counted (Mon-Sat work week).
+    if (dow !== 0) count++;
     cur.setDate(cur.getDate() + 1);
+  }
+  const mode = String(dayDuration || 'full').trim().toLowerCase().replace(/_/g, ' ');
+  if (mode === 'half' || mode === 'half day') {
+    return count * 0.5;
   }
   return count;
 };

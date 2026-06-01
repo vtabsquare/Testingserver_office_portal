@@ -1009,31 +1009,77 @@ def _is_protected_shift_preset(name):
     return str(name or "").strip().lower() in PROTECTED_SHIFT_PRESET_NAMES
 
 def _validate_shift_window(shift_start, shift_end):
-    if not shift_start or not shift_end:
-        return False, "shift_start and shift_end are required (HH:MM)"
-    if (_time_to_minutes(shift_end) - _time_to_minutes(shift_start)) < (9 * 60):
-        return False, "Shift timing should be minimum 9 hours"
-    return True, None
+    from attendance_shift_status import validate_shift_window
+    return validate_shift_window(shift_start, shift_end)
+
+
+DEFAULT_TOLERANCE_MINUTES = 15
+
+
+def _normalize_tolerance_minutes(value, shift_duration_minutes=None):
+    try:
+        from attendance_shift_status import normalize_tolerance_minutes
+        return normalize_tolerance_minutes(value, shift_duration_minutes)
+    except Exception:
+        try:
+            minutes = int(value)
+        except (TypeError, ValueError):
+            minutes = DEFAULT_TOLERANCE_MINUTES
+        minutes = max(0, min(120, minutes))
+        if shift_duration_minutes is not None:
+            minutes = min(minutes, max(0, int(shift_duration_minutes) - 1))
+        return minutes
+
+
+def _shift_duration_minutes_from_times(shift_start, shift_end):
+    try:
+        return _time_to_minutes(shift_end) - _time_to_minutes(shift_start)
+    except Exception:
+        return None
+
+
+def _friendly_shift_db_error(err):
+    """Map Supabase/Postgres constraint errors to actionable messages."""
+    text = str(err or "")
+    if "employee_shift_settings_min_9h_chk" in text or "shift_presets_min_9h_chk" in text:
+        return (
+            "Database still requires a 9-hour minimum shift. "
+            "Run backend/shift_presets_allow_short_shifts.sql in Supabase SQL Editor, then try again."
+        )
+    if "23514" in text and ("min_2h" in text or "min_9h" in text):
+        return "Shift end must be at least 2 hours after shift start."
+    return text or "Failed to save shift settings"
 
 def _read_shift_presets(sb=None):
     sb = sb or get_supabase()
     try:
-        resp = sb.table("shift_presets").select(
-            "id, name, shift_start, shift_end, work_week, grace_minutes, updated_at"
-        ).order("name").limit(100).execute()
+        try:
+            resp = sb.table("shift_presets").select(
+                "id, name, shift_start, shift_end, work_week, grace_minutes, tolerance_minutes, updated_at"
+            ).order("name").limit(100).execute()
+        except Exception:
+            resp = sb.table("shift_presets").select(
+                "id, name, shift_start, shift_end, work_week, grace_minutes, updated_at"
+            ).order("name").limit(100).execute()
         presets = []
         for row in resp.data or []:
             pid = row.get("id")
             if not pid:
                 continue
             preset_name = str(row.get("name") or "").strip()
+            start = _normalize_shift_time(row.get("shift_start"), "09:00")
+            end = _normalize_shift_time(row.get("shift_end"), "18:00")
+            dur_m = _shift_duration_minutes_from_times(start, end)
             presets.append({
                 "id": str(pid),
                 "name": preset_name,
-                "shift_start": _normalize_shift_time(row.get("shift_start"), "09:00"),
-                "shift_end": _normalize_shift_time(row.get("shift_end"), "18:00"),
+                "shift_start": start,
+                "shift_end": end,
                 "work_week": _normalize_work_week(row.get("work_week")),
-                "grace_minutes": 15,
+                "grace_minutes": int(row.get("grace_minutes") or 15),
+                "tolerance_minutes": _normalize_tolerance_minutes(
+                    row.get("tolerance_minutes", DEFAULT_TOLERANCE_MINUTES), dur_m
+                ),
                 "can_delete": not _is_protected_shift_preset(preset_name),
             })
         return presets
@@ -1054,15 +1100,25 @@ def _effective_shift_from_employee_row(row, presets_map, defaults):
                 "shift_start": preset["shift_start"],
                 "shift_end": preset["shift_end"],
                 "work_week": preset["work_week"],
-                "grace_minutes": 15,
+                "grace_minutes": int(preset.get("grace_minutes") or 15),
+                "tolerance_minutes": int(
+                    preset.get("tolerance_minutes", DEFAULT_TOLERANCE_MINUTES)
+                ),
                 "preset_id": preset_key,
                 "preset_name": preset.get("name"),
             }
+    start = _normalize_shift_time(row.get("shift_start"), defaults.get("shift_start", "09:00"))
+    end = _normalize_shift_time(row.get("shift_end"), defaults.get("shift_end", "18:00"))
+    dur_m = _shift_duration_minutes_from_times(start, end)
+    tol_raw = row.get("tolerance_minutes")
+    if tol_raw is None:
+        tol_raw = defaults.get("tolerance_minutes", DEFAULT_TOLERANCE_MINUTES)
     return {
-        "shift_start": _normalize_shift_time(row.get("shift_start"), defaults.get("shift_start", "09:00")),
-        "shift_end": _normalize_shift_time(row.get("shift_end"), defaults.get("shift_end", "18:00")),
+        "shift_start": start,
+        "shift_end": end,
         "work_week": _normalize_work_week(row.get("work_week"), defaults.get("work_week", "mon-sat")),
-        "grace_minutes": 15,
+        "grace_minutes": int(row.get("grace_minutes") or defaults.get("grace_minutes") or 15),
+        "tolerance_minutes": _normalize_tolerance_minutes(tol_raw, dur_m),
         "preset_id": str(preset_id) if preset_id else None,
         "preset_name": None,
     }
@@ -1073,6 +1129,7 @@ def _default_shift_settings():
             "shift_start": "09:00",
             "shift_end": "18:00",
             "grace_minutes": 15,
+            "tolerance_minutes": DEFAULT_TOLERANCE_MINUTES,
             "minimum_shift_hours": 9,
             "work_week": "mon-sat",
         },
@@ -1087,6 +1144,7 @@ def _read_shift_settings():
         "shift_start": _normalize_shift_time(defaults.get("shift_start"), "09:00"),
         "shift_end": _normalize_shift_time(defaults.get("shift_end"), "18:00"),
         "grace_minutes": 15,
+        "tolerance_minutes": DEFAULT_TOLERANCE_MINUTES,
         "minimum_shift_hours": 9,
         "work_week": "mon-fri" if str(defaults.get("work_week") or "").strip().lower() == "mon-fri" else "mon-sat",
     }
@@ -1102,18 +1160,26 @@ def _read_shift_settings():
         presets = _read_shift_presets(sb)
         presets_map = _presets_by_id(presets)
         result["presets"] = presets
-        select_cols = "employee_id, shift_start, shift_end, grace_minutes, work_week, preset_id, updated_at, updated_by"
+        select_cols = (
+            "employee_id, shift_start, shift_end, grace_minutes, tolerance_minutes, "
+            "work_week, preset_id, updated_at, updated_by"
+        )
         try:
             rows_resp = sb.table("employee_shift_settings").select(select_cols).limit(5000).execute()
         except Exception:
             try:
                 rows_resp = sb.table("employee_shift_settings").select(
-                    "employee_id, shift_start, shift_end, grace_minutes, work_week, updated_at, updated_by"
+                    "employee_id, shift_start, shift_end, grace_minutes, work_week, preset_id, updated_at, updated_by"
                 ).limit(5000).execute()
             except Exception:
-                rows_resp = sb.table("employee_shift_settings").select(
-                    "employee_id, shift_start, shift_end, grace_minutes, updated_at, updated_by"
-                ).limit(5000).execute()
+                try:
+                    rows_resp = sb.table("employee_shift_settings").select(
+                        "employee_id, shift_start, shift_end, grace_minutes, work_week, updated_at, updated_by"
+                    ).limit(5000).execute()
+                except Exception:
+                    rows_resp = sb.table("employee_shift_settings").select(
+                        "employee_id, shift_start, shift_end, grace_minutes, updated_at, updated_by"
+                    ).limit(5000).execute()
         rows = rows_resp.data or []
         latest_updated_at = None
         latest_updated_by = None
@@ -1148,7 +1214,8 @@ def _save_shift_settings(settings):
             row_obj = row if isinstance(row, dict) else {}
             start = _normalize_shift_time(row_obj.get("shift_start"), "09:00")
             end = _normalize_shift_time(row_obj.get("shift_end"), "18:00")
-            if (_time_to_minutes(end) - _time_to_minutes(start)) < (9 * 60):
+            ok_shift, _shift_err = _validate_shift_window(start, end)
+            if not ok_shift:
                 continue
             record = {
                 "employee_id": key,
@@ -1171,16 +1238,30 @@ def _resolve_employee_shift(employee_id):
     emp_key = str(employee_id or "").strip().upper()
     row = settings.get("by_employee", {}).get(emp_key, {})
     if row:
+        start = row.get("shift_start", defaults.get("shift_start", "09:00"))
+        end = row.get("shift_end", defaults.get("shift_end", "18:00"))
+        dur_m = _shift_duration_minutes_from_times(start, end)
+        tol = row.get("tolerance_minutes")
+        if tol is None:
+            tol = defaults.get("tolerance_minutes", DEFAULT_TOLERANCE_MINUTES)
         return {
-            "shift_start": row.get("shift_start", defaults.get("shift_start", "09:00")),
-            "shift_end": row.get("shift_end", defaults.get("shift_end", "18:00")),
-            "grace_minutes": 15,
+            "shift_start": start,
+            "shift_end": end,
+            "grace_minutes": int(row.get("grace_minutes") or defaults.get("grace_minutes") or 15),
+            "tolerance_minutes": _normalize_tolerance_minutes(tol, dur_m),
             "work_week": _normalize_work_week(row.get("work_week"), defaults.get("work_week", "mon-sat")),
         }
     return {
         "shift_start": defaults.get("shift_start", "09:00"),
         "shift_end": defaults.get("shift_end", "18:00"),
-        "grace_minutes": 15,
+        "grace_minutes": int(defaults.get("grace_minutes") or 15),
+        "tolerance_minutes": _normalize_tolerance_minutes(
+            defaults.get("tolerance_minutes", DEFAULT_TOLERANCE_MINUTES),
+            _shift_duration_minutes_from_times(
+                defaults.get("shift_start", "09:00"),
+                defaults.get("shift_end", "18:00"),
+            ),
+        ),
         "work_week": _normalize_work_week(defaults.get("work_week"), "mon-sat"),
     }
 
@@ -1760,14 +1841,26 @@ def _format_duration_text_from_hours(hours: float) -> str:
     minutes_int = (total_seconds % 3600) // 60
     return f"{hours_int} hour(s) {minutes_int} minute(s)"
 
-def _classify_hours(hours_val: float) -> str:
+def _classify_hours(hours_val: float, employee_id=None) -> str:
+    if employee_id:
+        try:
+            from attendance_shift_status import classify_hours_for_employee
+            return classify_hours_for_employee(employee_id, hours_val)
+        except Exception:
+            pass
     if hours_val >= FULL_DAY_HOURS:
         return "P"
     if hours_val >= HALF_DAY_HOURS:
         return "HL"
     return "A"
 
-def _build_threshold_payload(total_seconds: int) -> dict:
+def _build_threshold_payload(total_seconds: int, employee_id=None) -> dict:
+    if employee_id:
+        try:
+            from attendance_shift_status import build_threshold_payload_for_employee
+            return build_threshold_payload_for_employee(employee_id, total_seconds)
+        except Exception:
+            pass
     safe_seconds = max(0, int(total_seconds or 0))
     payload = {
         "half_day_seconds": HALF_DAY_SECONDS,
@@ -1782,8 +1875,18 @@ def _build_threshold_payload(total_seconds: int) -> dict:
         payload["next_threshold_seconds"] = FULL_DAY_SECONDS - safe_seconds
     return payload
 
-def _init_threshold_flags(existing_hours: float = 0.0) -> dict:
+def _init_threshold_flags(existing_hours: float = 0.0, employee_id=None) -> dict:
     existing_seconds = max(0, int(round((existing_hours or 0.0) * 3600)))
+    if employee_id:
+        try:
+            from attendance_shift_status import get_shift_thresholds_for_employee
+            t = get_shift_thresholds_for_employee(employee_id)
+            return {
+                "half": existing_seconds >= t["half_day_seconds"],
+                "full": existing_seconds >= t["full_day_seconds"],
+            }
+        except Exception:
+            pass
     return {
         "half": existing_seconds >= HALF_DAY_SECONDS,
         "full": existing_seconds >= FULL_DAY_SECONDS,
@@ -1795,18 +1898,26 @@ def _maybe_mark_thresholds(emp_key: str, record_id: str, total_seconds_today: in
     session = active_sessions.get(emp_key)
     if not session:
         return
+    try:
+        from attendance_shift_status import get_shift_thresholds_for_employee
+        thresholds = get_shift_thresholds_for_employee(emp_key)
+        half_s = thresholds["half_day_seconds"]
+        full_s = thresholds["full_day_seconds"]
+    except Exception:
+        half_s = HALF_DAY_SECONDS
+        full_s = FULL_DAY_SECONDS
     flags = session.setdefault("threshold_flags", {"half": False, "full": False})
     updated = False
-    if total_seconds_today >= HALF_DAY_SECONDS and not flags.get("half"):
+    if total_seconds_today >= half_s and not flags.get("half"):
         flags["half"] = True
         updated = True
-    if total_seconds_today >= FULL_DAY_SECONDS and not flags.get("full"):
+    if total_seconds_today >= full_s and not flags.get("full"):
         flags["full"] = True
         updated = True
     if not updated:
         return
     hours_val = round(max(0, total_seconds_today) / 3600.0, 2)
-    status = _classify_hours(hours_val)
+    status = _classify_hours(hours_val, emp_key)
     update_payload = {
         FIELD_DURATION: round(hours_val, 2),
         FIELD_DURATION_INTEXT: _format_duration_text_from_hours(hours_val),
@@ -2211,7 +2322,7 @@ def _auto_close_stale_login_sessions(employee_id: str):
                 session_seconds = max(0, cutoff_ts - checkin_ts)
                 total_seconds = base_seconds + session_seconds
                 hours_val = round(max(0, total_seconds) / 3600.0, 2)
-                status = _classify_hours(hours_val)
+                status = _classify_hours(hours_val, emp)
 
                 la_patch = {
                     LA_FIELD_CHECKOUT_TIME: next_midnight_local.strftime("%H:%M:%S"),
@@ -2717,8 +2828,40 @@ def _resolve_employee_identifier(raw_identifier: str, token: str = None) -> str:
     return upper
 
 
-def calculate_leave_days(start_date, end_date):
-    """Calculate leave days excluding Sundays."""
+def normalize_day_duration(value):
+    """Return 'half' or 'full' from API/UI values."""
+    raw = str(value or "").strip().lower().replace("_", " ").replace("-", " ")
+    if raw in ("half", "half day", "halfday", "h"):
+        return "half"
+    return "full"
+
+
+def day_duration_label(mode):
+    return "Half Day" if normalize_day_duration(mode) == "half" else "Full Day"
+
+
+def is_half_day_leave_record(leave_row):
+    """Detect half-day leave from explicit column or fractional total days."""
+    if not leave_row:
+        return False
+    duration = str(leave_row.get("crc6f_dayduration") or "").strip().lower()
+    if duration in ("half day", "half", "half-day", "halfday"):
+        return True
+    try:
+        total = float(leave_row.get("crc6f_totaldays") or 0)
+        if 0 < total < 1:
+            return True
+    except (TypeError, ValueError):
+        pass
+    # Legacy rows: half-day marker stored in reason when dayduration column was missing
+    reason = str(leave_row.get("crc6f_rejectionreason") or "").lower()
+    if "[half_day]" in reason or "[half day]" in reason:
+        return True
+    return False
+
+
+def calculate_leave_days(start_date, end_date, day_duration="full"):
+    """Calculate leave days excluding Sundays; half-day = 0.5 per chargeable day."""
     start = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
     if end < start:
@@ -2732,8 +2875,35 @@ def calculate_leave_days(start_date, end_date):
             days += 1
         cursor += timedelta(days=1)
 
-    print(f"   [DATE] Calculated Leave Days (excluding Sundays): {days} (from {start_date} to {end_date})")
-    return days
+    if normalize_day_duration(day_duration) == "half":
+        days = days * 0.5
+
+    print(
+        f"   [DATE] Calculated Leave Days (excluding Sundays): {days} "
+        f"({day_duration_label(day_duration)}, {start_date} to {end_date})"
+    )
+    return float(days)
+
+
+def _leave_reason_with_duration_tag(reason, day_duration):
+    """Persist user reason; tag half-day for legacy detection if dayduration column absent."""
+    text = str(reason or "").strip()
+    if normalize_day_duration(day_duration) == "half":
+        if "[half_day]" not in text.lower():
+            text = f"{text} [HALF_DAY]".strip() if text else "[HALF_DAY]"
+    return text or None
+
+
+def _create_leave_row(record_data):
+    """Create leave row; omit dayduration column if DB migration not applied yet."""
+    try:
+        return create_record(LEAVE_ENTITY, record_data)
+    except Exception as err:
+        err_text = str(err).lower()
+        if "crc6f_dayduration" in err_text or "dayduration" in err_text:
+            fallback = {k: v for k, v in record_data.items() if k != "crc6f_dayduration"}
+            return create_record(LEAVE_ENTITY, fallback)
+        raise
 
 
 def _date_for_nth_chargeable_leave_day(start_dt, chargeable_days):
@@ -5669,13 +5839,7 @@ def checkout():
         minutes_int = int((total_seconds_today % 3600) / 60)
         readable_duration = f"{hours_int} hour(s) {minutes_int} minute(s)"
 
-        # Classification based on total hours today (using constants)
-        if total_hours_today >= FULL_DAY_HOURS:
-            status = "P"
-        elif total_hours_today >= HALF_DAY_HOURS:
-            status = "HL"
-        else:
-            status = "A"
+        status = _classify_hours(total_hours_today, key)
 
         # Update Dataverse attendance record with checkout time, duration, and status
         if record_id:
@@ -6241,14 +6405,8 @@ def get_status(employee_id):
             # total_seconds_today already includes base_seconds; ensure we at least include current elapsed
             total_seconds_today = max(total_seconds_today, (active_sessions.get(key, {}).get("base_seconds") or 0) + max(0, elapsed))
 
-        # Classification from total seconds today
         total_hours_today = total_seconds_today / 3600.0
-        if total_hours_today >= FULL_DAY_HOURS:
-            status = "P"
-        elif total_hours_today >= HALF_DAY_HOURS:
-            status = "HL"
-        else:
-            status = "A"
+        status = _classify_hours(total_hours_today, normalized_emp_id)
 
         # Best-effort: persist duration mid-day at threshold crossings (so monthly view reflects HL/P)
         try:
@@ -6510,12 +6668,8 @@ def get_monthly_attendance(employee_id, year, month):
             if persisted_status in ("P", "HL", "H", "A"):
                 status = persisted_status
             else:
-                if effective_hours >= FULL_DAY_HOURS:
-                    status = "P"  # Present
-                elif effective_hours >= HALF_DAY_HOURS:
-                    status = "HL"  # Half Day
-                else:
-                    status = "A"  # Absent
+                effective_seconds = max(0, int(round(effective_hours * 3600)))
+                status = _classify_hours(effective_hours, normalized_emp_id)
             
             if date_str in holidays_set and not actual_checkin:
                 status = "INL"
@@ -6562,9 +6716,14 @@ def get_monthly_attendance(employee_id, year, month):
         
         # Overlay employee-specific leaves into the same month range (CL/SL/CO)
         try:
+            leave_select = (
+                "crc6f_leaveid,crc6f_leavetype,crc6f_startdate,crc6f_enddate,"
+                "crc6f_totaldays,crc6f_dayduration,crc6f_paidunpaid,crc6f_status,"
+                "crc6f_rejectionreason"
+            )
             leaves_url = (
                 f"{RESOURCE}/api/data/v9.2/{LEAVE_ENTITY}"
-                f"?$filter=crc6f_employeeid eq '{normalized_emp_id}'"
+                f"?$select={leave_select}&$filter=crc6f_employeeid eq '{normalized_emp_id}'"
             )
             leaves_resp = get_dataverse_session().get(leaves_url, headers=headers, timeout=15)
             if leaves_resp.status_code == 200:
@@ -6642,7 +6801,16 @@ def get_monthly_attendance(employee_id, year, month):
                             rec["leaveStart"] = sd
                             rec["leaveEnd"] = ed
                             rec["leaveStatus"] = lv.get("crc6f_status")
-                            rec["status"] = lt_code
+                            rec["dayDuration"] = (
+                                lv.get("crc6f_dayduration")
+                                or ("Half Day" if is_half_day_leave_record(lv) else "Full Day")
+                            )
+                            if is_half_day_leave_record(lv):
+                                # Half-day approved leave → HL on attendance (leave type in tooltip/half line)
+                                rec["status"] = "HL"
+                                rec["half"] = lt_code
+                            else:
+                                rec["status"] = lt_code
                         else:
                             # Pending leaves only attach metadata for UI overlay
                             pending_entry = {
@@ -6955,6 +7123,9 @@ def apply_leave():
         paid_unpaid = data.get("paid_unpaid", "Paid")
         status = data.get("status", "Pending")
         reason = data.get("reason", "")
+        day_duration = normalize_day_duration(
+            data.get("day_duration") or data.get("dayDuration") or "full"
+        )
 
         # Format employee ID
         if applied_by_raw:
@@ -6974,12 +7145,20 @@ def apply_leave():
             return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
 
         leave_id = generate_leave_id()
-        leave_days = calculate_leave_days(start_date, end_date)
+
+        if day_duration == "half" and start_date != end_date:
+            return jsonify({
+                "error": "Half-day leave must be for a single date (start and end date must match).",
+            }), 400
+
+        leave_days = calculate_leave_days(start_date, end_date, day_duration)
         if leave_days <= 0:
             return jsonify({
                 "error": "Selected date range contains only weekly day-off (Sunday). No leave will be deducted.",
                 "leave_days": leave_days
             }), 400
+
+        duration_label = day_duration_label(day_duration)
 
         token = get_access_token()
         balance_row = None
@@ -6991,7 +7170,7 @@ def apply_leave():
         paid_flag = (paid_unpaid or "").lower() == "paid"
         lt_norm = (leave_type or "").strip().lower()
 
-        if paid_flag and lt_norm in ("casual leave", "sick leave"):
+        if paid_flag and lt_norm in ("casual leave", "sick leave") and leave_days >= 1:
             if not balance_row:
                 balance_row = _ensure_leave_balance_row(token, applied_by)
             available = _get_available_days(balance_row, leave_type)
@@ -7015,13 +7194,14 @@ def apply_leave():
                     "crc6f_enddate": paid_end_dt.date().isoformat(),
                     "crc6f_paidunpaid": "Paid",
                     "crc6f_status": status,
-                    "crc6f_totaldays": int(paid_days),
+                    "crc6f_totaldays": float(paid_days),
+                    "crc6f_dayduration": duration_label,
                     "crc6f_employeeid": applied_by,
                     "crc6f_approvedby": None,
-                    "crc6f_rejectionreason": reason or None,
+                    "crc6f_rejectionreason": _leave_reason_with_duration_tag(reason, day_duration),
                 }
                 print(f"📦 Dataverse Record Data (Paid): {record_data_paid}")
-                created_paid = create_record(LEAVE_ENTITY, record_data_paid)
+                created_paid = _create_leave_row(record_data_paid)
                 created_records.append(created_paid)
                 primary_leave_id = paid_leave_id
                 try:
@@ -7040,13 +7220,14 @@ def apply_leave():
                     "crc6f_enddate": end_dt.date().isoformat(),
                     "crc6f_paidunpaid": "Unpaid",
                     "crc6f_status": status,
-                    "crc6f_totaldays": int(unpaid_days),
+                    "crc6f_totaldays": float(unpaid_days),
+                    "crc6f_dayduration": duration_label,
                     "crc6f_employeeid": applied_by,
                     "crc6f_approvedby": None,
-                    "crc6f_rejectionreason": reason or None,
+                    "crc6f_rejectionreason": _leave_reason_with_duration_tag(reason, day_duration),
                 }
                 print(f"📦 Dataverse Record Data (Unpaid): {record_data_unpaid}")
-                created_unpaid = create_record(LEAVE_ENTITY, record_data_unpaid)
+                created_unpaid = _create_leave_row(record_data_unpaid)
                 created_records.append(created_unpaid)
                 if primary_leave_id is None:
                     primary_leave_id = unpaid_leave_id
@@ -7128,16 +7309,17 @@ def apply_leave():
             "crc6f_enddate": end_date,
             "crc6f_paidunpaid": paid_unpaid,
             "crc6f_status": status,
-            "crc6f_totaldays": int(leave_days),
+            "crc6f_totaldays": float(leave_days),
+            "crc6f_dayduration": duration_label,
             "crc6f_employeeid": applied_by,
             # crc6f_approvedby is a FK to crc6f_table12s; leave NULL when no approver yet.
             # Do NOT send empty string ("") - it triggers an FK violation in Postgres.
             "crc6f_approvedby": None,
-            "crc6f_rejectionreason": reason or None,
+            "crc6f_rejectionreason": _leave_reason_with_duration_tag(reason, day_duration),
         }
 
         print(f"📦 Dataverse Record Data: {record_data}")
-        created_record = create_record(LEAVE_ENTITY, record_data)
+        created_record = _create_leave_row(record_data)
 
         try:
             if paid_flag and leave_days > 0:
@@ -7162,6 +7344,7 @@ def apply_leave():
             "message": f"Leave applied successfully for {applied_by}",
             "leave_id": leave_id,
             "leave_days": leave_days,
+            "day_duration": duration_label,
             "leave_details": created_record,
             "balances": balances,
         }
@@ -7242,7 +7425,7 @@ def get_employee_leaves(employee_id):
         leave_select = (
             "$select="
             "crc6f_leaveid,crc6f_leavetype,crc6f_startdate,crc6f_enddate,"
-            "crc6f_totaldays,crc6f_paidunpaid,crc6f_status,crc6f_approvedby,"
+            "crc6f_totaldays,crc6f_dayduration,crc6f_paidunpaid,crc6f_status,crc6f_approvedby,"
             "crc6f_rejectionreason,crc6f_approvalcomments,crc6f_employeeid"
         )
         filter_query = f"?{leave_select}&$filter=crc6f_employeeid eq '{normalized_emp_id}'"
@@ -7323,6 +7506,9 @@ def get_employee_leaves(employee_id):
                 "start_date": r.get("crc6f_startdate"),
                 "end_date": r.get("crc6f_enddate"),
                 "total_days": r.get("crc6f_totaldays"),
+                "day_duration": r.get("crc6f_dayduration") or (
+                    "Half Day" if is_half_day_leave_record(r) else "Full Day"
+                ),
                 "paid_unpaid": r.get("crc6f_paidunpaid"),
                 "status": r.get("crc6f_status"),
                 "approved_by": r.get("crc6f_approvedby"),
@@ -16864,6 +17050,9 @@ def update_shift_settings():
         shift_start = _normalize_shift_time(data.get('shift_start'), '')
         shift_end = _normalize_shift_time(data.get('shift_end'), '')
         grace_minutes = int(data.get('grace_minutes') or 15)
+        tolerance_minutes = _normalize_tolerance_minutes(
+            data.get('tolerance_minutes'), None
+        )
         work_week = _normalize_work_week(data.get('work_week'))
 
         if not employee_id:
@@ -16882,12 +17071,17 @@ def update_shift_settings():
             shift_start = preset["shift_start"]
             shift_end = preset["shift_end"]
             work_week = preset["work_week"]
+            tolerance_minutes = _normalize_tolerance_minutes(
+                preset.get("tolerance_minutes", DEFAULT_TOLERANCE_MINUTES),
+                _shift_duration_minutes_from_times(shift_start, shift_end),
+            )
             payload = {
                 "employee_id": employee_id,
                 "preset_id": preset_id,
                 "shift_start": shift_start,
                 "shift_end": shift_end,
-                "grace_minutes": 15,
+                "grace_minutes": grace_minutes,
+                "tolerance_minutes": tolerance_minutes,
                 "work_week": work_week,
                 "updated_by": str(data.get("updated_by") or employee_id),
                 "updated_at": now_iso,
@@ -16896,12 +17090,17 @@ def update_shift_settings():
             ok, err = _validate_shift_window(shift_start, shift_end)
             if not ok:
                 return jsonify({"success": False, "error": err}), 400
+            tolerance_minutes = _normalize_tolerance_minutes(
+                tolerance_minutes,
+                _shift_duration_minutes_from_times(shift_start, shift_end),
+            )
             payload = {
                 "employee_id": employee_id,
                 "preset_id": None,
                 "shift_start": shift_start,
                 "shift_end": shift_end,
-                "grace_minutes": 15,
+                "grace_minutes": grace_minutes,
+                "tolerance_minutes": tolerance_minutes,
                 "work_week": work_week,
                 "updated_by": str(data.get("updated_by") or employee_id),
                 "updated_at": now_iso,
@@ -16910,19 +17109,34 @@ def update_shift_settings():
         try:
             sb.table("employee_shift_settings").upsert(payload, on_conflict="employee_id").execute()
         except Exception as upsert_err:
+            err_text = str(upsert_err)
+            if "min_9h_chk" in err_text or (
+                "23514" in err_text and "employee_shift_settings" in err_text
+            ):
+                return jsonify({"success": False, "error": _friendly_shift_db_error(upsert_err)}), 400
             fallback_payload = dict(payload)
-            if "preset_id" in str(upsert_err).lower() or "column" in str(upsert_err).lower():
+            if "tolerance_minutes" in err_text.lower():
+                fallback_payload.pop("tolerance_minutes", None)
+            if "preset_id" in err_text.lower() or "column" in err_text.lower():
                 fallback_payload.pop("preset_id", None)
             try:
                 sb.table("employee_shift_settings").upsert(fallback_payload, on_conflict="employee_id").execute()
-            except Exception:
-                fallback_payload.pop("work_week", None)
-                sb.table("employee_shift_settings").upsert(fallback_payload, on_conflict="employee_id").execute()
+            except Exception as retry_err:
+                if "min_9h_chk" in str(retry_err):
+                    return jsonify({"success": False, "error": _friendly_shift_db_error(retry_err)}), 400
+                retry_payload = dict(fallback_payload)
+                retry_payload.pop("tolerance_minutes", None)
+                retry_payload.pop("work_week", None)
+                try:
+                    sb.table("employee_shift_settings").upsert(retry_payload, on_conflict="employee_id").execute()
+                except Exception as final_err:
+                    return jsonify({"success": False, "error": _friendly_shift_db_error(final_err)}), 400
 
         effective = {
             "shift_start": shift_start,
             "shift_end": shift_end,
-            "grace_minutes": 15,
+            "grace_minutes": grace_minutes,
+            "tolerance_minutes": tolerance_minutes,
             "work_week": work_week,
             "preset_id": preset_id if preset_id and not use_custom else None,
             "preset_name": presets_map.get(preset_id, {}).get("name") if preset_id and not use_custom else None,
@@ -16933,7 +17147,7 @@ def update_shift_settings():
             "shift": effective,
         }), 200
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": _friendly_shift_db_error(e)}), 500
 
 @app.route('/api/shift-presets', methods=['POST'])
 def create_shift_preset():
@@ -16943,6 +17157,10 @@ def create_shift_preset():
         shift_start = _normalize_shift_time(data.get('shift_start'), '')
         shift_end = _normalize_shift_time(data.get('shift_end'), '')
         work_week = _normalize_work_week(data.get('work_week'))
+        tolerance_minutes = _normalize_tolerance_minutes(
+            data.get('tolerance_minutes', DEFAULT_TOLERANCE_MINUTES),
+            _shift_duration_minutes_from_times(shift_start, shift_end),
+        )
 
         if not name:
             return jsonify({"success": False, "error": "Preset name is required"}), 400
@@ -16958,9 +17176,17 @@ def create_shift_preset():
             "shift_end": shift_end,
             "work_week": work_week,
             "grace_minutes": 15,
+            "tolerance_minutes": tolerance_minutes,
             "updated_at": now_iso,
         }
-        resp = sb.table("shift_presets").insert(record).execute()
+        try:
+            resp = sb.table("shift_presets").insert(record).execute()
+        except Exception as ins_err:
+            if "tolerance_minutes" in str(ins_err).lower():
+                record.pop("tolerance_minutes", None)
+                resp = sb.table("shift_presets").insert(record).execute()
+            else:
+                raise
         row = (resp.data or [{}])[0]
         return jsonify({
             "success": True,
@@ -16971,10 +17197,11 @@ def create_shift_preset():
                 "shift_end": shift_end,
                 "work_week": work_week,
                 "grace_minutes": 15,
+                "tolerance_minutes": tolerance_minutes,
             },
         }), 201
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": _friendly_shift_db_error(e)}), 500
 
 @app.route('/api/shift-presets/<preset_id>', methods=['PUT'])
 def update_shift_preset(preset_id):
@@ -16984,6 +17211,10 @@ def update_shift_preset(preset_id):
         shift_start = _normalize_shift_time(data.get('shift_start'), '')
         shift_end = _normalize_shift_time(data.get('shift_end'), '')
         work_week = _normalize_work_week(data.get('work_week'))
+        tolerance_minutes = _normalize_tolerance_minutes(
+            data.get('tolerance_minutes', DEFAULT_TOLERANCE_MINUTES),
+            _shift_duration_minutes_from_times(shift_start, shift_end),
+        )
 
         ok, err = _validate_shift_window(shift_start, shift_end)
         if not ok:
@@ -16996,11 +17227,19 @@ def update_shift_preset(preset_id):
             "shift_end": shift_end,
             "work_week": work_week,
             "grace_minutes": 15,
+            "tolerance_minutes": tolerance_minutes,
             "updated_at": now_iso,
         }
         if name:
             payload["name"] = name
-        sb.table("shift_presets").update(payload).eq("id", preset_id).execute()
+        try:
+            sb.table("shift_presets").update(payload).eq("id", preset_id).execute()
+        except Exception as upd_err:
+            if "tolerance_minutes" in str(upd_err).lower():
+                payload.pop("tolerance_minutes", None)
+                sb.table("shift_presets").update(payload).eq("id", preset_id).execute()
+            else:
+                raise
         return jsonify({
             "success": True,
             "preset": {
@@ -17010,10 +17249,11 @@ def update_shift_preset(preset_id):
                 "shift_end": shift_end,
                 "work_week": work_week,
                 "grace_minutes": 15,
+                "tolerance_minutes": tolerance_minutes,
             },
         }), 200
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": _friendly_shift_db_error(e)}), 500
 
 @app.route('/api/shift-presets/<preset_id>', methods=['DELETE'])
 def delete_shift_preset(preset_id):

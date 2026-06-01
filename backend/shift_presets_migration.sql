@@ -7,11 +7,12 @@ create table if not exists public.shift_presets (
   shift_end time not null default time '18:00',
   work_week text not null default 'mon-sat',
   grace_minutes smallint not null default 15,
+  tolerance_minutes smallint not null default 15,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint shift_presets_grace_chk check (grace_minutes = 15),
   constraint shift_presets_order_chk check (shift_end > shift_start),
-  constraint shift_presets_min_9h_chk check ((shift_end - shift_start) >= interval '9 hours'),
+  constraint shift_presets_min_2h_chk check ((shift_end - shift_start) >= interval '2 hours'),
   constraint shift_presets_work_week_chk check (work_week in ('mon-fri', 'mon-sat'))
 );
 

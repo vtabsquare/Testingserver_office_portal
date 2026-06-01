@@ -248,6 +248,19 @@ BOARD_RPT_MAP = {
     F_NO_MEMBERS: "crc6f_RPT_noofmembers",
 }
 
+
+def _is_missing_column_error(response_obj, column_name):
+    """Detect PostgREST missing-column errors for graceful fallback."""
+    try:
+        if not response_obj:
+            return False
+        body = response_obj.json() if hasattr(response_obj, "json") else {}
+        code = str(body.get("code") or "")
+        message = str(body.get("message") or "")
+        return code == "PGRST204" and column_name in message
+    except Exception:
+        return False
+
 def dv_url(path):
     return f"{DATAVERSE_BASE}{DATAVERSE_API}{path}"
 
@@ -331,12 +344,22 @@ def get_boards(project_code):
         hdr = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
         # First, fetch all boards for the project
+        select_fields = f"{F_GUID},{F_BOARD_ID},{F_BOARD_NAME},{F_DESC},{F_PROJECT_ID},{F_STATUS}"
         url = (
             f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_BOARDS}"
             f"?$filter={F_PROJECT_ID} eq '{project_code}'"
-            f"&$select={F_GUID},{F_BOARD_ID},{F_BOARD_NAME},{F_DESC},{F_PROJECT_ID},{F_STATUS}"
+            f"&$select={select_fields}"
         )
         res = get_dataverse_session().get(url, headers=hdr, timeout=15)
+        if (not res.ok) and _is_missing_column_error(res, F_STATUS):
+            current_app.logger.warning("[project_boards] %s missing in schema cache; retrying board list without status", F_STATUS)
+            fallback_fields = f"{F_GUID},{F_BOARD_ID},{F_BOARD_NAME},{F_DESC},{F_PROJECT_ID}"
+            fallback_url = (
+                f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_BOARDS}"
+                f"?$filter={F_PROJECT_ID} eq '{project_code}'"
+                f"&$select={fallback_fields}"
+            )
+            res = get_dataverse_session().get(fallback_url, headers=hdr, timeout=15)
         if not res.ok:
             return jsonify({"success": False, "error": res.text}), 500
 
@@ -445,6 +468,10 @@ def add_board(project_code):
 
         url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_BOARDS}"
         res = get_dataverse_session().post(url, headers=hdr, json=payload, timeout=15)
+        if (res.status_code not in (200, 201, 204)) and _is_missing_column_error(res, F_STATUS):
+            current_app.logger.warning("[project_boards] %s missing in schema cache; retrying board create without status", F_STATUS)
+            payload.pop(F_STATUS, None)
+            res = get_dataverse_session().post(url, headers=hdr, json=payload, timeout=15)
 
         if res.status_code in (200, 201, 204):
             return jsonify({"success": True, "message": "Board added"}), 201
@@ -484,6 +511,10 @@ def update_board(guid):
 
         url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_BOARDS}({guid})"
         res = get_dataverse_session().patch(url, headers=hdr, json=data, timeout=15)
+        if (res.status_code not in (200, 204)) and (F_STATUS in data) and _is_missing_column_error(res, F_STATUS):
+            current_app.logger.warning("[project_boards] %s missing in schema cache; retrying board update without status", F_STATUS)
+            data.pop(F_STATUS, None)
+            res = get_dataverse_session().patch(url, headers=hdr, json=data, timeout=15)
 
         if res.status_code in (200, 204):
             return jsonify({"success": True, "message": "Board updated"}), 200

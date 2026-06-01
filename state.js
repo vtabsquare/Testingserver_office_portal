@@ -9,6 +9,8 @@ export const state = {
     lastDuration: 0,
     lastAutoStatus: null,
   },
+  /** Per-employee P/HL thresholds from status API or shift settings (seconds). */
+  attendanceShiftThresholds: null,
   employees: [],
   interns: [],
   selectedIntern: null,

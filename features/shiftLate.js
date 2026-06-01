@@ -46,6 +46,54 @@ export function maxCheckInTime(a, b) {
   return toMin(a) >= toMin(b) ? a : b;
 }
 
+const parseTimeToMinutes = (timeValue) => {
+  const parts = String(timeValue || '').split(':');
+  if (parts.length < 2) return null;
+  const hh = Number(parts[0]);
+  const mm = Number(parts[1]);
+  if (!Number.isInteger(hh) || !Number.isInteger(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return (hh * 60) + mm;
+};
+
+const MIN_SHIFT_MINUTES = 2 * 60;
+
+/** Mirror backend: Present = shift duration − tolerance; HL = 50%. */
+export function computeThresholdsFromShiftTimes(shiftStart, shiftEnd, toleranceMinutes = 15) {
+  const startM = parseTimeToMinutes(shiftStart);
+  const endM = parseTimeToMinutes(shiftEnd);
+  if (startM === null || endM === null || endM <= startM) return null;
+  const minutes = endM - startM;
+  if (minutes < MIN_SHIFT_MINUTES) return null;
+  const expectedSeconds = minutes * 60;
+  const halfDaySeconds = Math.max(1, Math.floor(expectedSeconds * 0.5));
+  let tol = Number(toleranceMinutes);
+  if (!Number.isFinite(tol) || tol < 0) tol = 15;
+  tol = Math.min(tol, minutes - 1);
+  const fullDaySeconds = Math.max(
+    halfDaySeconds + 1,
+    expectedSeconds - Math.floor(tol) * 60
+  );
+  return {
+    shift_start: shiftStart,
+    shift_end: shiftEnd,
+    expected_seconds: expectedSeconds,
+    half_day_seconds: halfDaySeconds,
+    full_day_seconds: fullDaySeconds,
+    tolerance_minutes: tol,
+  };
+}
+
+/** Match backend attendance_shift_status: 50% HL; P uses tolerance or API thresholds. */
+export function deriveStatusFromWorkedSeconds(totalSeconds, thresholds = null) {
+  const worked = Math.max(0, Number(totalSeconds) || 0);
+  const half = thresholds?.half_day_seconds ?? 4 * 3600;
+  const full = thresholds?.full_day_seconds ?? 9 * 3600;
+  if (worked >= full) return 'P';
+  if (worked >= half) return 'HL';
+  return 'A';
+}
+
 export function computeIsLateForShift(checkInValue, shiftStart, graceMinutes = 15) {
   if (!checkInValue || !shiftStart) return false;
   const grace = Number(graceMinutes) || 15;

@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS crc6f_table14s (
     crc6f_startdate DATE NOT NULL,
     crc6f_enddate DATE NOT NULL,
     crc6f_totaldays DECIMAL(5,1),
+    crc6f_dayduration VARCHAR(20) DEFAULT 'Full Day',
     crc6f_paidunpaid VARCHAR(20),
     crc6f_status VARCHAR(50) DEFAULT 'pending',
     crc6f_approvedby VARCHAR(50),

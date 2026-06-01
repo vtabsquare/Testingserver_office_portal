@@ -78,7 +78,13 @@ def get_server_now_utc():
     return datetime.now(timezone.utc)
 
 
-def derive_status(total_seconds):
+def derive_status(total_seconds, employee_id=None):
+    if employee_id:
+        try:
+            from attendance_shift_status import classify_seconds_for_employee
+            return classify_seconds_for_employee(employee_id, int(total_seconds or 0))
+        except Exception:
+            pass
     if total_seconds >= FULL_DAY_SECONDS:
         return "P"
     elif total_seconds >= HALF_DAY_SECONDS:
@@ -209,7 +215,7 @@ def midnight_auto_checkout():
                 # Calculate duration (capped at midnight)
                 session_seconds = max(0, cutoff_ts - checkin_ts)
                 total_seconds = base_seconds + session_seconds
-                status = derive_status(total_seconds)
+                status = derive_status(total_seconds, employee_id)
                 hours = format_duration_hours(total_seconds)
                 duration_text = format_duration_text(total_seconds)
 

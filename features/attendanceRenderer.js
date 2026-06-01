@@ -19,6 +19,12 @@ let isInitialized = false;
 let _trackingLocalDate = null; // tracks the local date while session is active for midnight detection
 let _midnightResetInProgress = false;
 
+function syncThresholdsFromStatusData(data) {
+    if (data?.status?.thresholds) {
+        state.attendanceShiftThresholds = data.status.thresholds;
+    }
+}
+
 /**
  * Get today's local date string (YYYY-MM-DD) in the user's timezone.
  */
@@ -120,6 +126,7 @@ export async function fetchAttendanceStatus(employeeId) {
                 fetchedAt: Date.now(),
                 serverNowAtFetch: data.server_now_utc ? new Date(data.server_now_utc).getTime() : Date.now()
             };
+            syncThresholdsFromStatusData(data);
             // Track local date for midnight detection when session is active
             if (data.is_active_session) {
                 _trackingLocalDate = _trackingLocalDate || _getLocalDateStr();

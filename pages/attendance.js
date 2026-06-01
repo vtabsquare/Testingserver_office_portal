@@ -123,12 +123,15 @@ export const renderAttendanceTrackerPage = async (mode) => {
             }
             return '';
         }
-        const { status, isLate, isManual, isPending, half, EOP, leaveType, compensationType, leaveStart, leaveEnd, pendingLeaves = [] } = dayData;
+        const { status, isLate, isManual, isPending, half, EOP, leaveType, compensationType, leaveStart, leaveEnd, pendingLeaves = [], dayDuration } = dayData;
 
         const normalizedStatus = status === 'H' ? 'HL' : status;
+        const isHalfDayLeaveFromLeave = String(dayDuration || '').toLowerCase().includes('half');
+        const isHalfDayLeave = isHalfDayLeaveFromLeave
+            || (leaveType && (normalizedStatus === 'HL' || status === 'HL'));
         let content = normalizedStatus;
-        // Overlay leave markers with short codes and colored letters (no filled boxes)
-        if (leaveType) {
+        // Full-day approved leave → CL/SL/CO (+ LOP if unpaid). Half-day → HL block below.
+        if (leaveType && !isHalfDayLeave) {
             const lt = String(leaveType).toLowerCase();
             let code = '';
 
@@ -154,15 +157,26 @@ export const renderAttendanceTrackerPage = async (mode) => {
                     ${lopLine}
                 </div>`;
         }
-        if (status === 'HL' || status === 'H') {
-            const halfText = half ? String(half) : '';
+        if (isHalfDayLeave || status === 'HL' || status === 'H') {
+            let halfText = half ? String(half) : '';
+            if (!halfText && leaveType) {
+                const lt = String(leaveType).toLowerCase();
+                if (lt.includes('casual')) halfText = 'CL';
+                else if (lt.includes('sick')) halfText = 'SL';
+                else if (lt.includes('comp')) halfText = 'CO';
+            }
             const extraParts = [];
             if (halfText) extraParts.push(halfText);
+            const isPaidLeave = String(compensationType || '').toLowerCase() === 'paid';
+            if (leaveType && !isPaidLeave) extraParts.push('(LOP)');
             if (EOP) extraParts.push('(EOP)');
+            const leaveTooltip = leaveType
+                ? `${leaveType} – Half Day (${isPaidLeave ? 'Paid' : 'Unpaid'})${leaveStart ? ` | ${leaveStart}` : ''}`
+                : 'Half day';
             const extraLine = extraParts.length
                 ? `<div class="status-hl-half">${extraParts.join(' ')}</div>`
                 : '';
-            content = `<div class="status-hl-text">HL</div>${extraLine}`;
+            content = `<div class="status-hl-text" title="${leaveTooltip}">HL</div>${extraLine}`;
         } else if (EOP) {
             content = `${status} (EOP)`;
         }
@@ -1151,6 +1165,8 @@ export const renderMyAttendancePage = async () => {
                     leaveStart: rec.leaveStart,
                     leaveEnd: rec.leaveEnd,
                     leaveStatus: rec.leaveStatus,
+                    dayDuration: rec.dayDuration,
+                    half: rec.half,
                     pendingLeaves: rec.pendingLeaves || prev.pendingLeaves || [],
                 };
             }
@@ -1304,6 +1320,8 @@ export const renderTeamAttendancePage = async () => {
                         leaveStart: rec.leaveStart,
                         leaveEnd: rec.leaveEnd,
                         leaveStatus: rec.leaveStatus,
+                        dayDuration: rec.dayDuration,
+                        half: rec.half,
                         pendingLeaves: rec.pendingLeaves || [],
                     };
                 }
