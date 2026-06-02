@@ -95,6 +95,64 @@ LA_FIELD_TOTAL_SECONDS = "crc6f_total_seconds"
 # Environment
 RESOURCE = os.getenv("RESOURCE", "")
 SOCKET_SERVER_URL = os.getenv("SOCKET_SERVER_URL", "http://localhost:4001")
+def _auth_policy_path():
+    return os.getenv(
+        "AUTH_SESSION_POLICY_FILE",
+        os.path.join(os.path.dirname(__file__), "storage", "auth_session_policy.json"),
+    )
+
+
+def _supabase_client():
+    from supabase_helper import get_supabase
+    return get_supabase()
+
+
+def supabase_fetch_open_login_rows(employee_id, prefer_date=None):
+    """List open login-activity rows via native Supabase (reliable on Postgres)."""
+    emp = (employee_id or "").strip().upper()
+    if not emp:
+        return []
+    try:
+        sb = _supabase_client()
+        q = (
+            sb.table(LOGIN_ACTIVITY_ENTITY)
+            .select("*")
+            .eq(LA_FIELD_EMPLOYEE_ID, emp)
+            .is_(LA_FIELD_CHECKOUT_TS, "null")
+        )
+        try:
+            q = q.not_.is_(LA_FIELD_CHECKIN_TS, "null")
+        except Exception:
+            pass
+        resp = q.order(LA_FIELD_DATE, desc=True).limit(15).execute()
+        rows = resp.data or []
+        if prefer_date:
+            today_rows = []
+            for row in rows:
+                row_date = str(row.get(LA_FIELD_DATE) or "")[:10]
+                if row_date == prefer_date:
+                    today_rows.append(row)
+            if today_rows:
+                return today_rows
+        return rows
+    except Exception as e:
+        print(f"[ATTENDANCE-V2] supabase_fetch_open_login_rows error: {e}")
+        return []
+
+
+def supabase_patch_login_activity(la_id, payload):
+    if not la_id:
+        return False
+    try:
+        sb = _supabase_client()
+        clean = {k: v for k, v in (payload or {}).items() if v is not None or k in (
+            LA_FIELD_CHECKOUT_TS, LA_FIELD_CHECKOUT_TIME, LA_FIELD_CHECKOUT_LOCATION,
+        )}
+        resp = sb.table(LOGIN_ACTIVITY_ENTITY).update(clean).eq(LA_PRIMARY_FIELD, la_id).execute()
+        return bool(resp.data)
+    except Exception as e:
+        print(f"[ATTENDANCE-V2] supabase_patch_login_activity error: {e}")
+        return False
 
 
 # ================== UTILITY FUNCTIONS ==================
@@ -311,6 +369,165 @@ def upsert_login_activity(employee_id, date_str, payload):
     except Exception as e:
         print(f"[ATTENDANCE-V2] upsert_login_activity error: {e}")
         return False
+
+
+def _patch_login_activity_row(la_id, payload):
+    """PATCH login activity by primary key (reliable for force-logout checkout)."""
+    if not la_id:
+        return False
+    try:
+        token = get_access_token()
+        headers = _get_headers(token)
+        s = get_dataverse_session()
+        url = f"{_get_base_url()}/{LOGIN_ACTIVITY_ENTITY}({la_id})"
+        resp = s.patch(url, headers=headers, json=payload, timeout=15)
+        if resp.status_code >= 400:
+            print(f"[ATTENDANCE-V2] PATCH login activity {la_id} failed: {resp.status_code} {resp.text[:200]}")
+            return False
+        return True
+    except Exception as e:
+        print(f"[ATTENDANCE-V2] _patch_login_activity_row error: {e}")
+        return False
+
+
+def _parse_policy_iso(s):
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _get_admin_force_logout_timestamp(employee_id, username=None):
+    """Latest admin force-logout time for this user (from auth_session_policy.json)."""
+    try:
+        policy_path = _auth_policy_path()
+        if not os.path.exists(policy_path):
+            return None
+        with open(policy_path, "r", encoding="utf-8") as f:
+            policy = json.load(f)
+        if not isinstance(policy, dict):
+            return None
+
+        candidates = []
+        global_ts = policy.get("global_force_logout_at")
+        if global_ts:
+            candidates.append(global_ts)
+
+        emp = (employee_id or "").strip().upper()
+        user = (username or "").strip().lower()
+        by_id = policy.get("target_force_logout_at") or {}
+        by_email = policy.get("target_force_logout_by_email") or {}
+        if emp and isinstance(by_id, dict) and by_id.get(emp):
+            candidates.append(by_id.get(emp))
+        if user and isinstance(by_email, dict) and by_email.get(user):
+            candidates.append(by_email.get(user))
+
+        best = None
+        best_dt = None
+        for raw in candidates:
+            dt = _parse_policy_iso(raw)
+            if dt and (best_dt is None or dt > best_dt):
+                best_dt = dt
+                best = raw
+        return best
+    except Exception as e:
+        print(f"[ATTENDANCE-V2] _get_admin_force_logout_timestamp error: {e}")
+        return None
+
+
+def _apply_force_logout_checkout_if_needed(employee_id, tz_name, username=None):
+    """
+    If user was admin force-logged out after their current check-in, close the open session.
+    Runs on /status so re-login does not resurrect a running timer.
+    """
+    emp = (employee_id or "").strip().upper()
+    if not emp:
+        return False
+
+    fl_ts = _get_admin_force_logout_timestamp(emp, username)
+    if not fl_ts:
+        return False
+
+    fl_dt = _parse_policy_iso(fl_ts)
+    if not fl_dt:
+        return False
+
+    existing_la, session_date = fetch_open_login_activity_for_checkout(emp, None)
+    if not existing_la or not session_date:
+        return False
+
+    checkin_ts_val = existing_la.get(LA_FIELD_CHECKIN_TS)
+    has_checkout = existing_la.get(LA_FIELD_CHECKOUT_TS) or existing_la.get(LA_FIELD_CHECKOUT_TIME)
+    if not checkin_ts_val or has_checkout:
+        return False
+
+    if int(fl_dt.timestamp()) <= int(checkin_ts_val):
+        return False
+
+    print(f"[ATTENDANCE-V2] Force-logout checkout safety net for {emp} (checkin={checkin_ts_val}, forced={fl_ts})")
+    result = perform_checkout_v2(emp, tz_name=tz_name)
+    return bool(result.get("success"))
+
+
+def fetch_open_login_activity_for_checkout(employee_id, today_date=None):
+    """
+    Find an open login-activity row for checkout. Prefer today's local date, then any open row.
+    """
+    emp = (employee_id or "").strip().upper()
+    if not emp:
+        return None, None
+
+    sb_rows = supabase_fetch_open_login_rows(emp, prefer_date=today_date)
+    if sb_rows:
+        row = sb_rows[0]
+        row_date = str(row.get(LA_FIELD_DATE) or "")[:10]
+        checkin_ts_val = row.get(LA_FIELD_CHECKIN_TS)
+        has_checkout = row.get(LA_FIELD_CHECKOUT_TS) or row.get(LA_FIELD_CHECKOUT_TIME)
+        if checkin_ts_val and not has_checkout:
+            return row, row_date or today_date
+
+    if today_date:
+        la = fetch_login_activity(emp, today_date)
+        if la:
+            checkin_ts_val = la.get(LA_FIELD_CHECKIN_TS)
+            has_checkout = la.get(LA_FIELD_CHECKOUT_TS) or la.get(LA_FIELD_CHECKOUT_TIME)
+            if checkin_ts_val and not has_checkout:
+                return la, today_date
+
+    try:
+        token = get_access_token()
+        headers = _get_headers(token)
+        s = get_dataverse_session()
+        safe_emp = emp.replace("'", "''")
+        filter_q = (
+            f"$filter={LA_FIELD_EMPLOYEE_ID} eq '{safe_emp}' "
+            f"and {LA_FIELD_CHECKIN_TS} ne null "
+            f"and {LA_FIELD_CHECKOUT_TS} eq null"
+        )
+        url = f"{_get_base_url()}/{LOGIN_ACTIVITY_ENTITY}?{filter_q}&$orderby={LA_FIELD_DATE} desc&$top=20"
+        resp = s.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return None, None
+
+        preferred = None
+        preferred_date = None
+        fallback = None
+        fallback_date = None
+        for row in resp.json().get("value", []):
+            row_date = str(row.get(LA_FIELD_DATE) or "")[:10]
+            checkin_ts_val = row.get(LA_FIELD_CHECKIN_TS)
+            has_checkout = row.get(LA_FIELD_CHECKOUT_TS) or row.get(LA_FIELD_CHECKOUT_TIME)
+            if not checkin_ts_val or has_checkout:
+                continue
+            if today_date and row_date == today_date:
+                return row, row_date
+            if not fallback:
+                fallback = row
+                fallback_date = row_date
+        return fallback, fallback_date
+    except Exception as e:
+        print(f"[ATTENDANCE-V2] fetch_open_login_activity_for_checkout error: {e}")
+        return None, None
 
 
 def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
@@ -633,6 +850,201 @@ def checkin_v2():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+def perform_checkout_v2(employee_id, tz_name="Asia/Calcutta", location=None):
+    """
+    Server-side checkout (same logic as POST /checkout). Callable from admin flows
+    such as force-logout without a Flask request context.
+    """
+    employee_id = (employee_id or "").strip().upper()
+    if not employee_id:
+        return {"success": False, "error": "MISSING_EMPLOYEE_ID"}
+
+    now_utc = get_server_now_utc()
+    checkout_time = now_utc.strftime("%H:%M:%S")
+    checkout_ts = int(now_utc.timestamp())
+
+    try:
+        client_tz = ZoneInfo(tz_name or "Asia/Calcutta")
+        client_now = now_utc.astimezone(client_tz)
+        today_date = client_now.strftime("%Y-%m-%d")
+    except Exception:
+        today_date = now_utc.strftime("%Y-%m-%d")
+
+    existing_la, session_date = fetch_open_login_activity_for_checkout(employee_id, today_date)
+    if not existing_la or not session_date:
+        return {"success": False, "error": "NO_ACTIVE_SESSION", "employee_id": employee_id}
+
+    checkin_ts_val = existing_la.get(LA_FIELD_CHECKIN_TS)
+    has_checkout = existing_la.get(LA_FIELD_CHECKOUT_TS) or existing_la.get(LA_FIELD_CHECKOUT_TIME)
+    if not checkin_ts_val or has_checkout:
+        return {"success": False, "error": "NO_ACTIVE_SESSION", "employee_id": employee_id}
+
+    today_date = session_date
+
+    base_seconds = int(existing_la.get(LA_FIELD_BASE_SECONDS) or 0)
+    session_seconds = max(0, checkout_ts - int(checkin_ts_val))
+    total_seconds = base_seconds + session_seconds
+    status = derive_status(total_seconds, employee_id)
+    hours = format_duration_hours(total_seconds)
+    duration_text = format_duration_text(total_seconds)
+
+    la_payload = {
+        LA_FIELD_CHECKOUT_TIME: checkout_time,
+        LA_FIELD_CHECKOUT_TS: checkout_ts,
+        LA_FIELD_TOTAL_SECONDS: total_seconds,
+        LA_FIELD_CHECKOUT_LOCATION: location_to_string(location),
+    }
+    la_id = existing_la.get(LA_PRIMARY_FIELD)
+    patched = supabase_patch_login_activity(la_id, la_payload) if la_id else False
+    if not patched and la_id:
+        patched = _patch_login_activity_row(la_id, la_payload)
+    if not patched and not upsert_login_activity(employee_id, today_date, la_payload):
+        return {"success": False, "error": "LOGIN_ACTIVITY_UPDATE_FAILED", "employee_id": employee_id}
+    print(f"[ATTENDANCE-V2] Checkout closed login activity {la_id} for {employee_id} on {today_date}")
+
+    try:
+        stop_active_task_entries_for_user(employee_id, now_utc.isoformat())
+    except Exception as task_timer_err:
+        print(f"[ATTENDANCE-V2] Failed to force-stop task timers on checkout: {task_timer_err}")
+
+    existing_att = fetch_attendance_record(employee_id, today_date)
+    if existing_att:
+        record_id = existing_att.get(FIELD_RECORD_ID) or existing_att.get("crc6f_table13id")
+        if record_id:
+            update_payload = {
+                FIELD_CHECKOUT: checkout_time,
+                FIELD_DURATION: str(hours),
+                FIELD_DURATION_INTEXT: duration_text,
+            }
+            if FIELD_STATUS:
+                update_payload[FIELD_STATUS] = status
+            try:
+                update_record(ATTENDANCE_ENTITY, record_id, update_payload)
+            except Exception as e:
+                print(f"[ATTENDANCE-V2] Update attendance checkout error: {e}")
+
+    emit_attendance_changed(employee_id, "checkout")
+
+    return {
+        "success": True,
+        "employee_id": employee_id,
+        "attendance_id": existing_att.get(FIELD_ATTENDANCE_ID) if existing_att else None,
+        "checkout_utc": now_utc.isoformat(),
+        "session_seconds": session_seconds,
+        "total_seconds_today": total_seconds,
+        "status_code": status,
+        "duration_text": duration_text,
+    }
+
+
+def list_employee_ids_with_open_session_today(tz_name="Asia/Calcutta"):
+    """Return unique employee IDs with an open check-in for the given local calendar day."""
+    try:
+        now_utc = get_server_now_utc()
+        try:
+            tz = ZoneInfo(tz_name or "Asia/Calcutta")
+        except Exception:
+            tz = IST_TZ
+        local_today = now_utc.astimezone(tz).date().isoformat()
+
+        employee_ids = []
+        seen = set()
+        try:
+            sb = _supabase_client()
+            resp = (
+                sb.table(LOGIN_ACTIVITY_ENTITY)
+                .select(f"{LA_FIELD_EMPLOYEE_ID},{LA_FIELD_DATE}")
+                .is_(LA_FIELD_CHECKOUT_TS, "null")
+                .not_.is_(LA_FIELD_CHECKIN_TS, "null")
+                .limit(5000)
+                .execute()
+            )
+            for row in resp.data or []:
+                row_date = str(row.get(LA_FIELD_DATE) or "")[:10]
+                if row_date != local_today:
+                    continue
+                emp = (row.get(LA_FIELD_EMPLOYEE_ID) or "").strip().upper()
+                if emp and emp not in seen:
+                    seen.add(emp)
+                    employee_ids.append(emp)
+            if employee_ids:
+                return employee_ids
+        except Exception as sb_err:
+            print(f"[ATTENDANCE-V2] Supabase list open sessions fallback: {sb_err}")
+
+        token = get_access_token()
+        headers = _get_headers(token)
+        s = get_dataverse_session()
+        filter_q = (
+            f"$filter={LA_FIELD_CHECKIN_TS} ne null "
+            f"and {LA_FIELD_CHECKOUT_TS} eq null"
+        )
+        url = f"{_get_base_url()}/{LOGIN_ACTIVITY_ENTITY}?{filter_q}&$top=5000"
+        resp = s.get(url, headers=headers, timeout=20)
+        if resp.status_code != 200:
+            print(f"[ATTENDANCE-V2] list open sessions failed: {resp.status_code}")
+            return []
+
+        for row in resp.json().get("value", []):
+            row_date = str(row.get(LA_FIELD_DATE) or "")[:10]
+            if row_date != local_today:
+                continue
+            emp = (row.get(LA_FIELD_EMPLOYEE_ID) or "").strip().upper()
+            if emp and emp not in seen:
+                seen.add(emp)
+                employee_ids.append(emp)
+        return employee_ids
+    except Exception as e:
+        print(f"[ATTENDANCE-V2] list_employee_ids_with_open_session_today error: {e}")
+        return []
+
+
+def force_attendance_checkout_for_logout(employee_ids=None, tz_name="Asia/Calcutta"):
+    """
+    Check out today's open attendance timer(s). Used when admin force-logs out users.
+    employee_ids: list of IDs, single string, or None to check out everyone with an open session today.
+    """
+    if employee_ids is None:
+        targets = list_employee_ids_with_open_session_today(tz_name)
+    elif isinstance(employee_ids, str):
+        targets = [employee_ids.strip().upper()] if employee_ids.strip() else []
+    else:
+        targets = []
+        seen = set()
+        for raw in employee_ids:
+            emp = (raw or "").strip().upper()
+            if emp and emp not in seen:
+                seen.add(emp)
+                targets.append(emp)
+
+    checked_out = []
+    no_session = []
+    failed = []
+
+    for emp in targets:
+        result = perform_checkout_v2(emp, tz_name=tz_name)
+        if result.get("success"):
+            checked_out.append(emp)
+            continue
+        if result.get("error") == "NO_ACTIVE_SESSION":
+            open_la, open_date = fetch_open_login_activity_for_checkout(emp, None)
+            if open_la and open_date:
+                retry = perform_checkout_v2(emp, tz_name=tz_name)
+                if retry.get("success"):
+                    checked_out.append(emp)
+                    continue
+            no_session.append(emp)
+        else:
+            failed.append({"employee_id": emp, "error": result.get("error") or "UNKNOWN"})
+
+    return {
+        "checked_out": checked_out,
+        "no_active_session": no_session,
+        "failed": failed,
+        "total_targets": len(targets),
+    }
+
+
 @attendance_v2_bp.route('/checkout', methods=['POST'])
 def checkout_v2():
     """
@@ -644,84 +1056,26 @@ def checkout_v2():
         employee_id = (data.get('employee_id') or '').strip().upper()
         tz_name = data.get('timezone', 'UTC')
         location = data.get('location')
-        
+
         if not employee_id:
             return jsonify({"success": False, "error": "MISSING_EMPLOYEE_ID"}), 400
-        
-        # SERVER TIME IS TRUTH
-        now_utc = get_server_now_utc()
-        checkout_time = now_utc.strftime("%H:%M:%S")
-        checkout_ts = int(now_utc.timestamp())
-        
-        # Use client's timezone to determine "today" (handles midnight correctly)
-        try:
-            client_tz = ZoneInfo(tz_name)
-            client_now = now_utc.astimezone(client_tz)
-            today_date = client_now.strftime("%Y-%m-%d")
-        except Exception:
-            today_date = now_utc.strftime("%Y-%m-%d")
-        
-        # Get login activity to find active session
-        existing_la = fetch_login_activity(employee_id, today_date)
-        
-        if not existing_la:
-            return jsonify({"success": False, "error": "NO_ACTIVE_SESSION"}), 400
-        
-        checkin_ts_val = existing_la.get(LA_FIELD_CHECKIN_TS)
-        has_checkout = existing_la.get(LA_FIELD_CHECKOUT_TS) or existing_la.get(LA_FIELD_CHECKOUT_TIME)
-        
-        if not checkin_ts_val or has_checkout:
-            return jsonify({"success": False, "error": "NO_ACTIVE_SESSION"}), 400
-        
-        # Calculate session duration
-        base_seconds = int(existing_la.get(LA_FIELD_BASE_SECONDS) or 0)
-        session_seconds = max(0, checkout_ts - int(checkin_ts_val))
-        total_seconds = base_seconds + session_seconds
-        
-        # Derive status
-        status = derive_status(total_seconds, employee_id)
-        hours = format_duration_hours(total_seconds)
-        duration_text = format_duration_text(total_seconds)
-        
-        # Update login activity
-        la_payload = {
-            LA_FIELD_CHECKOUT_TIME: checkout_time,
-            LA_FIELD_CHECKOUT_TS: checkout_ts,
-            LA_FIELD_TOTAL_SECONDS: total_seconds,
-            LA_FIELD_CHECKOUT_LOCATION: location_to_string(location)
-        }
-        upsert_login_activity(employee_id, today_date, la_payload)
 
-        # Force-stop any active task timers for this user to avoid overnight carry-over.
-        try:
-            stop_active_task_entries_for_user(employee_id, now_utc.isoformat())
-        except Exception as task_timer_err:
-            print(f"[ATTENDANCE-V2] Failed to force-stop task timers on checkout: {task_timer_err}")
-        
-        # Update attendance record
-        existing_att = fetch_attendance_record(employee_id, today_date)
-        if existing_att:
-            record_id = existing_att.get(FIELD_RECORD_ID) or existing_att.get("crc6f_table13id")
-            if record_id:
-                update_payload = {
-                    FIELD_CHECKOUT: checkout_time,
-                    FIELD_DURATION: str(hours),
-                    FIELD_DURATION_INTEXT: duration_text
-                }
-                if FIELD_STATUS:
-                    update_payload[FIELD_STATUS] = status
-                try:
-                    update_record(ATTENDANCE_ENTITY, record_id, update_payload)
-                except Exception as e:
-                    print(f"[ATTENDANCE-V2] Update attendance checkout error: {e}")
-        
-        # Emit socket event
-        emit_attendance_changed(employee_id, "checkout")
-        
+        result = perform_checkout_v2(employee_id, tz_name=tz_name, location=location)
+        if not result.get("success"):
+            err = result.get("error") or "CHECKOUT_FAILED"
+            status = 400 if err in ("MISSING_EMPLOYEE_ID", "NO_ACTIVE_SESSION") else 500
+            return jsonify({"success": False, "error": err}), status
+
+        now_utc = get_server_now_utc()
+        session_seconds = int(result.get("session_seconds") or 0)
+        total_seconds = int(result.get("total_seconds_today") or 0)
+        status = result.get("status_code")
+        duration_text = result.get("duration_text") or format_duration_text(total_seconds)
+
         return jsonify({
             "success": True,
-            "attendance_id": existing_att.get(FIELD_ATTENDANCE_ID) if existing_att else None,
-            "checkout_utc": now_utc.isoformat(),
+            "attendance_id": result.get("attendance_id"),
+            "checkout_utc": result.get("checkout_utc"),
             "server_now_utc": now_utc.isoformat(),
             "session_seconds": session_seconds,
             "total_seconds_today": total_seconds,
@@ -732,10 +1086,10 @@ def checkout_v2():
                 "session_text": format_duration_text(session_seconds),
                 "duration_text": duration_text,
                 "status_label": derive_status_label(status),
-                "timezone": tz_name
-            }
+                "timezone": tz_name,
+            },
         })
-        
+
     except Exception as e:
         print(f"[ATTENDANCE-V2] Check-out error: {e}")
         import traceback
@@ -768,10 +1122,18 @@ def get_status_v2(employee_id):
 
         # Ensure forgotten checkouts from prior days are auto-closed at midnight.
         _auto_close_stale_sessions(employee_id, tz_name)
+
+        username = (request.args.get("username") or "").strip().lower()
+        if _apply_force_logout_checkout_if_needed(employee_id, tz_name, username):
+            print(f"[ATTENDANCE-V2] Closed session after admin force-logout for {employee_id}")
         
         # Get both records
         existing_att = fetch_attendance_record(employee_id, today_date)
         existing_la = fetch_login_activity(employee_id, today_date)
+        if not existing_la:
+            open_la, open_date = fetch_open_login_activity_for_checkout(employee_id, today_date)
+            if open_la and open_date == today_date:
+                existing_la = open_la
         
         # Guard: verify returned records actually belong to today (prevent cross-day data)
         if existing_att:

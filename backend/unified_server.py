@@ -40,7 +40,7 @@ from project_tasks import tasks_bp
 from project_column import columns_bp
 from chats import chat_bp
 from time_tracking import bp_time, stop_active_task_entries_for_user
-from attendance_service_v2 import attendance_v2_bp
+from attendance_service_v2 import attendance_v2_bp, force_attendance_checkout_for_logout
 from attendance_scheduler import setup_scheduler as _setup_attendance_scheduler
 from overdue_tasks_notifier import bp_overdue
 from overdue_scheduler import setup_overdue_scheduler
@@ -911,6 +911,7 @@ GOOGLE_TOKEN_FILE = os.path.join(STORAGE_DIR, "google_tokens.json")
 AUTH_SESSION_EVENTS_FILE = os.path.join(STORAGE_DIR, "auth_session_events.json")
 AUTH_SESSION_POLICY_FILE = os.path.join(STORAGE_DIR, "auth_session_policy.json")
 SHIFT_SETTINGS_FILE = os.path.join(STORAGE_DIR, "shift_settings.json")
+os.environ.setdefault("AUTH_SESSION_POLICY_FILE", AUTH_SESSION_POLICY_FILE)
 
 def _load_json_file(path, default_value):
     try:
@@ -3762,6 +3763,54 @@ def _fetch_login_by_username(username: str, token: str, headers: dict):
     resp.raise_for_status()
     records = resp.json().get("value", [])
     return records[0] if records else None
+
+
+def _resolve_canonical_employee_id(username=None, fallback_id=None):
+    """
+    Resolve the same employee_id used at login/check-in (employee master id field),
+    not necessarily crc6f_userid on the login account row.
+    """
+    resolved = (fallback_id or "").strip().upper()
+    username = (username or "").strip()
+    if not username and not resolved:
+        return ""
+
+    try:
+        token = get_access_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+        }
+        if username:
+            entity_set = get_employee_entity_set(token)
+            field_map = get_field_map(entity_set)
+            email_field = field_map.get("email")
+            id_field = field_map.get("id")
+            if email_field and id_field:
+                safe_email = username.replace("'", "''")
+                url_emp = (
+                    f"{BASE_URL}/{entity_set}"
+                    f"?$top=1&$select={id_field}&$filter={email_field} eq '{safe_email}'"
+                )
+                resp = get_dataverse_session().get(url_emp, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    vals = resp.json().get("value", [])
+                    if vals and vals[0].get(id_field):
+                        master_id = str(vals[0].get(id_field)).strip().upper()
+                        if master_id:
+                            return master_id
+
+            login_rec = _fetch_login_by_username(username, token, headers)
+            if login_rec:
+                login_uid = (login_rec.get("crc6f_userid") or "").strip().upper()
+                if login_uid:
+                    return login_uid
+    except Exception as err:
+        print(f"[FORCE-LOGOUT] _resolve_canonical_employee_id error: {err}")
+
+    return resolved
 
 def _update_login_record(record_id: str, payload: dict, headers: dict, token: str):
     login_table = get_login_table(token)
@@ -16962,12 +17011,18 @@ def list_auth_events():
 def get_auth_session_policy():
     try:
         employee_id = (request.args.get("employee_id") or "").strip().upper()
+        username = (request.args.get("username") or "").strip().lower()
         policy = _get_auth_session_policy()
+        target_by_id = policy.get("target_force_logout_at") or {}
+        target_by_email = policy.get("target_force_logout_by_email") or {}
+        target_by_emp = target_by_id.get(employee_id) if employee_id else None
+        target_by_user = target_by_email.get(username) if username else None
         return jsonify({
             "success": True,
             "policy": {
                 "global_force_logout_at": policy.get("global_force_logout_at"),
-                "target_force_logout_at": policy.get("target_force_logout_at", {}).get(employee_id) if employee_id else None,
+                "target_force_logout_at": target_by_emp,
+                "target_force_logout_by_email": target_by_user,
                 "updated_at": policy.get("updated_at"),
                 "updated_by": policy.get("updated_by"),
             },
@@ -16984,6 +17039,27 @@ def trigger_force_logout():
         username = (data.get("username") or "").strip().lower()
         reason = (data.get("reason") or "").strip() or "Admin force logout"
         actor = (data.get("requested_by") or "").strip() or "admin"
+        tz_name = (data.get("timezone") or "").strip() or "Asia/Calcutta"
+        is_global = not employee_id and not username
+        login_account_id = employee_id
+
+        canonical_id = _resolve_canonical_employee_id(username=username, fallback_id=employee_id)
+        if canonical_id:
+            employee_id = canonical_id
+        elif username:
+            try:
+                token = get_access_token()
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                    "OData-MaxVersion": "4.0",
+                    "OData-Version": "4.0",
+                }
+                login_rec = _fetch_login_by_username(username, token, headers)
+                if login_rec:
+                    employee_id = (login_rec.get("crc6f_userid") or "").strip().upper()
+            except Exception as resolve_err:
+                print(f"[FORCE-LOGOUT] Could not resolve employee_id for {username}: {resolve_err}")
 
         now_iso = datetime.now(timezone.utc).isoformat()
         policy = _get_auth_session_policy()
@@ -16993,9 +17069,11 @@ def trigger_force_logout():
         if employee_id or username:
             if employee_id:
                 target_by_id[employee_id] = now_iso
+            if login_account_id and login_account_id != employee_id:
+                target_by_id[login_account_id] = now_iso
             if username:
                 target_by_email[username] = now_iso
-            print(f"[FORCE-LOGOUT] Target: emp_id={employee_id}, username={username}")
+            print(f"[FORCE-LOGOUT] Target: canonical_emp={employee_id}, login_uid={login_account_id}, username={username}")
         else:
             policy["global_force_logout_at"] = now_iso
             print(f"[FORCE-LOGOUT] Global force-logout triggered")
@@ -17007,6 +17085,50 @@ def trigger_force_logout():
 
         if not _save_auth_session_policy(policy):
             return jsonify({"success": False, "error": "Failed to persist force-logout policy"}), 500
+
+        attendance_checkout = {"checked_out": [], "no_active_session": [], "failed": [], "total_targets": 0}
+        try:
+            if is_global:
+                attendance_checkout = force_attendance_checkout_for_logout(employee_ids=None, tz_name=tz_name)
+            elif employee_id:
+                attendance_checkout = force_attendance_checkout_for_logout(
+                    employee_ids=[employee_id], tz_name=tz_name
+                )
+                if (
+                    not attendance_checkout.get("checked_out")
+                    and login_account_id
+                    and login_account_id != employee_id
+                ):
+                    extra = force_attendance_checkout_for_logout(
+                        employee_ids=[login_account_id], tz_name=tz_name
+                    )
+                    attendance_checkout["checked_out"] = list(
+                        dict.fromkeys(
+                            (attendance_checkout.get("checked_out") or [])
+                            + (extra.get("checked_out") or [])
+                        )
+                    )
+                    attendance_checkout["no_active_session"] = list(
+                        dict.fromkeys(
+                            (attendance_checkout.get("no_active_session") or [])
+                            + (extra.get("no_active_session") or [])
+                        )
+                    )
+                    attendance_checkout["failed"] = (attendance_checkout.get("failed") or []) + (
+                        extra.get("failed") or []
+                    )
+            for emp in attendance_checkout.get("checked_out") or []:
+                emp_key = str(emp).strip().upper()
+                if emp_key in active_sessions:
+                    del active_sessions[emp_key]
+        except Exception as checkout_err:
+            print(f"[FORCE-LOGOUT] Attendance checkout error: {checkout_err}")
+            attendance_checkout = {
+                "checked_out": [],
+                "no_active_session": [],
+                "failed": [{"error": str(checkout_err)}],
+                "total_targets": 0,
+            }
 
         try:
             _append_auth_session_event(
@@ -17023,9 +17145,10 @@ def trigger_force_logout():
 
         return jsonify({
             "success": True,
-            "forced": "all" if (not employee_id and not username) else (username or employee_id),
+            "forced": "all" if is_global else (username or employee_id),
             "forced_at": now_iso,
             "reason": reason,
+            "attendance_checkout": attendance_checkout,
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

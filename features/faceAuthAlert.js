@@ -30,6 +30,20 @@ const CHECK_INTERVAL_MS = 60 * 1000;             // Check every 1 minute
 // FaceAuth URL (should match backend config)
 const FACEAUTH_VERIFY_URL = 'https://biometrics.vtabsquare.com/external-verify';
 
+// Feature flag: allow enabling/disabling alerts without code edits.
+// Defaults to enabled in production builds.
+function _isFaceAuthAlertsEnabled() {
+    try {
+        const v = (typeof import.meta !== 'undefined' && import.meta.env)
+            ? (import.meta.env.VITE_FACEAUTH_ALERTS_ENABLED || import.meta.env.VITE_FACEAUTH_REVERIFY_ALERTS_ENABLED)
+            : null;
+        if (v === undefined || v === null || v === '') return true;
+        return String(v).trim().toLowerCase() !== 'false' && String(v).trim() !== '0';
+    } catch {
+        return true;
+    }
+}
+
 // Module state
 let checkIntervalId = null;
 let titleFlashIntervalId = null;
@@ -860,27 +874,11 @@ function checkAndUpdate() {
  * Initialize the FaceAuth alert system
  */
 export function initFaceAuthAlerts() {
-    // ===== FACE VERIFICATION BYPASS =====
-    // Face verification re-check is temporarily disabled for all users.
-    // Remove this block to re-enable the 2-hour re-verification alert flow.
-    console.log('[FACEAUTH-ALERT] BYPASSED: Face verification alerts disabled for all users');
-
-    // Clear any existing alert UI / overlays from a previous session
-    try {
-        const existingBanner = document.getElementById('faceauth-alert-banner');
-        if (existingBanner) existingBanner.remove();
-        const existingOverlay = document.getElementById('faceauth-blocking-overlay');
-        if (existingOverlay) existingOverlay.remove();
-    } catch (_) {}
-    alertElement = null;
-    overlayElement = null;
-    isBlockingEnabled = false;
-
-    // Stop any running timers/title flash
-    if (checkIntervalId) { clearInterval(checkIntervalId); checkIntervalId = null; }
-    stopTitleFlash();
-    return;
-    // ===== END BYPASS =====
+    if (!_isFaceAuthAlertsEnabled()) {
+        console.log('[FACEAUTH-ALERT] Alerts disabled by config');
+        cleanupFaceAuthAlerts();
+        return;
+    }
 
     console.log('[FACEAUTH-ALERT] Initializing face auth alert system');
     
@@ -950,12 +948,7 @@ export function cleanupFaceAuthAlerts() {
  * Force refresh status (call after successful re-verification)
  */
 export function refreshFaceAuthStatus() {
-    // ===== FACE VERIFICATION BYPASS =====
-    // Face verification re-check is temporarily disabled for all users.
-    // Remove this early return to re-enable alert refresh.
-    console.log('[FACEAUTH-ALERT] BYPASSED: refreshFaceAuthStatus is a no-op');
-    return;
-    // ===== END BYPASS =====
+    if (!_isFaceAuthAlertsEnabled()) return;
     console.log('[FACEAUTH-ALERT] Forcing status refresh');
     checkAndUpdate();
 }

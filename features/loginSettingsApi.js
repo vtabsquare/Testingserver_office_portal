@@ -95,9 +95,10 @@ export async function createAuthSessionEvent(payload) {
   return data;
 }
 
-export async function fetchAuthSessionPolicy(employee_id = '') {
+export async function fetchAuthSessionPolicy(employee_id = '', username = '') {
   const params = new URLSearchParams();
   if (employee_id) params.set('employee_id', employee_id);
+  if (username) params.set('username', username);
   const url = `${BASE_URL}/api/auth/session-policy${params.toString() ? '?' + params.toString() : ''}`;
   const headers = {};
   try {

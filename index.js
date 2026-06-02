@@ -1,7 +1,7 @@
 import { getSidebarHTML, getHeaderHTML } from './components/layout.js';
 import { router } from './router.js';
 // V2: Backend-authoritative attendance - stateless frontend
-import { loadTimerState, updateTimerButton, handleTimerClick } from './features/attendanceRenderer.js';
+import { loadTimerState, updateTimerButton, handleTimerClick, cleanup as cleanupAttendanceTimer } from './features/attendanceRenderer.js';
 import { initializeAttendanceSocket, registerForAttendanceEvents } from './features/attendanceSocketV2.js';
 // Legacy aliases for backward compatibility
 const initAttendanceSocket = initializeAttendanceSocket;
@@ -1001,6 +1001,17 @@ const handleFaceAuthTokenFromUrl = () => {
 const forceLogoutNow = (reason, eventType = 'logout') => {
   console.warn(`[AUTH] Force logout: ${reason}`);
   reportAuthEvent(eventType, reason);
+  try {
+    const user = getCurrentAuthUser() || {};
+    const uid = String(user.employee_id || user.id || '').trim().toUpperCase();
+    cleanupAttendanceTimer();
+    if (uid) {
+      localStorage.removeItem(`timerState_${uid}`);
+      sessionStorage.removeItem(`timerState_${uid}`);
+    }
+    localStorage.removeItem('timerState');
+    sessionStorage.removeItem('timerState');
+  } catch {}
   try { localStorage.removeItem('auth'); } catch {}
   try { sessionStorage.removeItem('auth'); } catch {}
   try { localStorage.removeItem('role'); } catch {}
@@ -1040,10 +1051,11 @@ const checkForceLogoutPolicyOnce = async () => {
     if (!state.authenticated) return;
     const user = getCurrentAuthUser() || {};
     const employeeId = String(user.employee_id || user.id || '').trim().toUpperCase();
+    const username = String(user.email || user.username || '').trim().toLowerCase();
     const sessionStartedAt = ensureAuthSessionStartedAt();
-    const policy = await fetchAuthSessionPolicy(employeeId);
+    const policy = await fetchAuthSessionPolicy(employeeId, username);
     const globalTs = policy?.global_force_logout_at;
-    const targetTs = policy?.target_force_logout_at;
+    const targetTs = policy?.target_force_logout_at || policy?.target_force_logout_by_email;
     if (isPolicyNewerThanSession(globalTs, sessionStartedAt) || isPolicyNewerThanSession(targetTs, sessionStartedAt)) {
       forceLogoutNow('Admin force logout policy applied', 'force_logout');
     }
@@ -1053,9 +1065,10 @@ const checkForceLogoutPolicyOnce = async () => {
 
 const startAuthPolicyPolling = () => {
   stopAuthPolicyPolling();
+  checkForceLogoutPolicyOnce();
   authPolicyPollTimer = setInterval(() => {
     checkForceLogoutPolicyOnce();
-  }, 30000);
+  }, 10000);
 };
 
 const getTodayIST = () => {

@@ -1,6 +1,20 @@
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4001';
+function resolveSocketUrl() {
+  const fromEnv = import.meta.env.VITE_SOCKET_URL;
+  if (fromEnv && !String(fromEnv).includes('localhost')) {
+    return String(fromEnv).replace(/\/$/, '');
+  }
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    const host = window.location.hostname;
+    if (host && host !== 'localhost' && host !== '127.0.0.1') {
+      return window.location.origin;
+    }
+  }
+  return 'http://localhost:4001';
+}
+
+const SOCKET_URL = resolveSocketUrl();
 
 let socket = null;
 

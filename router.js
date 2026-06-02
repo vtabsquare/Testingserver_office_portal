@@ -50,9 +50,18 @@ const loaders = {
   "/role-settings": async () => (await import('./pages/roleSettings.js')).renderRoleSettingsPage,
 };
 
+// Navigation guard: prevent slow async renders from overwriting the UI
+// after the user has already navigated elsewhere.
+let __routeNavSeq = 0;
+export const getActiveRouteNavSeq = () => __routeNavSeq;
+
 export const router = async () => {
+  const navSeq = ++__routeNavSeq;
+  // Expose for page modules that want to guard long async work
+  try { window.__activeRouteNavSeq = navSeq; } catch {}
   const full = window.location.hash.slice(1) || '/';
   const path = full.split('?')[0] || '/';
+  try { window.__activeRoutePath = path; } catch {}
 
   // If we navigate away from Meet, ensure meet UI artifacts are cleaned up
   if (path !== '/meet') {
@@ -68,6 +77,9 @@ export const router = async () => {
       }
     } catch (e) {}
   }
+
+  // If another navigation started while we were still here, abort early.
+  if (navSeq !== __routeNavSeq) return;
 
   // Special-case intern detail
   if (path.startsWith('/interns/')) {
@@ -97,6 +109,8 @@ export const router = async () => {
     document.getElementById('app-content').innerHTML = `<div class="card" style="padding:40px;text-align:center;"><h3>Page failed to load</h3><p>Please refresh the page.</p></div>`;
     return;
   }
+
+  if (navSeq !== __routeNavSeq) return;
 
   // Access checks
   if (path.startsWith('/employees')) {
@@ -193,6 +207,7 @@ export const router = async () => {
     console.error('Page render error:', path, err);
     document.getElementById('app-content').innerHTML = `<div class="card" style="padding:40px;text-align:center;"><h3>Something went wrong</h3><p>${err.message || 'Unknown error'}</p><button class="btn btn-primary" onclick="location.reload()" style="margin-top:12px;">Reload</button></div>`;
   }
+  if (navSeq !== __routeNavSeq) return;
   updateActiveNav(path);
 };
 

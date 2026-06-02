@@ -41,7 +41,12 @@ self.addEventListener('notificationclick', (event) => {
             .then((windowClients) => {
                 // Check if there's already a window open
                 for (const client of windowClients) {
-                    if (client.url.includes('localhost:3000') || client.url.includes('officeportal.vtabsquare.com') || client.url.includes('index.html')) {
+                    if (
+                        client.url.includes('localhost:3000')
+                        || client.url.includes('officeportal.vtabsquare.com')
+                        || client.url.includes('officehub360.vtabsquare.com')
+                        || client.url.includes('index.html')
+                    ) {
                         client.focus();
                         return client;
                     }

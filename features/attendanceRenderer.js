@@ -50,7 +50,10 @@ export async function fetchAttendanceStatus(employeeId) {
     
     try {
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-        const url = `${BASE_URL}/api/v2/attendance/status/${employeeId}?timezone=${encodeURIComponent(tz)}`;
+        const username = String(state.user?.email || state.user?.username || '').trim().toLowerCase();
+        const params = new URLSearchParams({ timezone: tz });
+        if (username) params.set('username', username);
+        const url = `${BASE_URL}/api/v2/attendance/status/${employeeId}?${params.toString()}`;
         
         console.log('[ATTENDANCE-RENDERER] Fetching status from:', url);
         

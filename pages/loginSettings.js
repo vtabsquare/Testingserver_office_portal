@@ -447,7 +447,7 @@ const buildAuthSessionsHTML = (events = [], accounts = []) => {
     return `
         <div class="card" style="margin-top: 24px;">
             <h3><i class="fa-solid fa-users"></i> Currently Logged-In Users</h3>
-            <p class="allocation-description">Users with active login accounts. Force logout will end their session on next check.</p>
+            <p class="allocation-description">Users with active login accounts. Force logout ends their app session and checks out any open attendance timer for today.</p>
             <div style="display:flex; gap:10px; margin-bottom:12px;">
                 <button id="force-logout-all-btn" class="btn btn-outline" style="border-color:#dc2626; color:#dc2626;">
                     <i class="fa-solid fa-power-off"></i> Force Logout All Users
@@ -621,13 +621,16 @@ const refreshLoginSettingsContent = () => {
     const forceAllBtn = document.getElementById('force-logout-all-btn');
     if (forceAllBtn) {
         forceAllBtn.onclick = async () => {
-            if (!confirm('Force logout all currently logged-in users?')) return;
+            if (!confirm('Force logout all users? This also checks out anyone with an open attendance timer today.')) return;
             try {
-                await triggerForceLogout({
+                const result = await triggerForceLogout({
                     requested_by: state.user?.email || state.user?.id || 'admin',
                     reason: 'Admin forced logout for all users',
+                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Calcutta',
                 });
-                alert('Force logout triggered for all users. Active sessions will be redirected to login.');
+                const ac = result.attendance_checkout || {};
+                const n = (ac.checked_out || []).length;
+                alert(`Force logout triggered for all users.${n ? ` Checked out ${n} attendance timer(s).` : ' No open attendance timers today.'}`);
                 const authData = await fetchAuthSessionEvents({ limit: 200 }).catch(() => ({ items: [] }));
                 cachedAuthSessionEvents = authData.items || [];
                 refreshLoginSettingsContent();
@@ -648,16 +651,21 @@ const refreshLoginSettingsContent = () => {
                     alert('Employee ID and username both missing for this user.');
                     return;
                 }
-                if (!confirm(`Force logout ${username || employeeName || employeeId}?`)) return;
+                if (!confirm(`Force logout ${username || employeeName || employeeId}? This also checks out their attendance timer if checked in today.`)) return;
                 try {
-                    await triggerForceLogout({
+                    const result = await triggerForceLogout({
                         employee_id: employeeId,
                         username: username,
                         employee_name: employeeName,
                         requested_by: state.user?.email || state.user?.id || 'admin',
                         reason: 'Admin forced logout',
+                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Calcutta',
                     });
-                    alert(`Force logout triggered for ${username || employeeName || employeeId}`);
+                    const ac = result.attendance_checkout || {};
+                    const checkedOut = (ac.checked_out || []).length > 0;
+                    alert(checkedOut
+                        ? `Force logout triggered for ${username || employeeName || employeeId}. Attendance timer checked out.`
+                        : `Force logout triggered for ${username || employeeName || employeeId}. No open attendance timer today.`);
                     const authData = await fetchAuthSessionEvents({ limit: 200 }).catch(() => ({ items: [] }));
                     cachedAuthSessionEvents = authData.items || [];
                     refreshLoginSettingsContent();
@@ -895,14 +903,19 @@ const attachRowHandlers = (accounts) => {
             }
             if (!confirm(`Force logout ${acc?.username || employeeId}?`)) return;
             try {
-                await triggerForceLogout({
+                const result = await triggerForceLogout({
                     employee_id: employeeId,
                     username: acc?.username || '',
                     employee_name: acc?.employeeName || '',
                     requested_by: state.user?.email || state.user?.id || 'admin',
                     reason: 'Admin forced logout',
+                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Calcutta',
                 });
-                alert(`Force logout triggered for ${acc?.username || employeeId}`);
+                const ac = result.attendance_checkout || {};
+                const checkedOut = (ac.checked_out || []).length > 0;
+                alert(checkedOut
+                    ? `Force logout triggered for ${acc?.username || employeeId}. Attendance timer checked out.`
+                    : `Force logout triggered for ${acc?.username || employeeId}. User will be signed out on their next request (within ~10s).`);
                 const authData = await fetchAuthSessionEvents({ limit: 200 }).catch(() => ({ items: [] }));
                 cachedAuthSessionEvents = authData.items || [];
             } catch (err) {

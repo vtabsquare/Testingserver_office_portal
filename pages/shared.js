@@ -2988,8 +2988,21 @@ export const renderTTProjectsPage = async () => {
 export const renderInboxPage = async () => {
     console.log('📥 Rendering Inbox Page...');
 
-    // Update notification badge
-    await updateNotificationBadge();
+    const navSeqAtStart = (() => {
+        try { return window.__activeRouteNavSeq; } catch { return null; }
+    })();
+    const isStillOnInboxRoute = () => {
+        try {
+            if (navSeqAtStart && window.__activeRouteNavSeq && navSeqAtStart !== window.__activeRouteNavSeq) return false;
+        } catch {}
+        try {
+            const full = window.location.hash.slice(1) || '/';
+            const path = full.split('?')[0] || '/';
+            return path === '/inbox';
+        } catch {
+            return false;
+        }
+    };
 
     const isAdmin = isAdminUser();
     const canViewTeamQueues = isManagerOrAdmin();
@@ -3026,6 +3039,14 @@ export const renderInboxPage = async () => {
     `;
     document.getElementById('app-content').innerHTML = getPageContentHTML('Inbox', content);
 
+    // Update notification badge (after initial paint). If this is slow, it should not block navigation.
+    try {
+        await updateNotificationBadge();
+    } catch (e) {
+        console.warn('[INBOX] updateNotificationBadge failed:', e);
+    }
+    if (!isStillOnInboxRoute()) return;
+
     // Set initial tab (force non-admins away from awaiting queue)
     if (!showAwaitingTab && currentInboxTab === 'awaiting') {
         currentInboxTab = 'requests';
@@ -3035,6 +3056,7 @@ export const renderInboxPage = async () => {
 
     // Add event listeners
     setTimeout(async () => {
+        if (!isStillOnInboxRoute()) return;
         // Category navigation
         document.querySelectorAll('.inbox-category').forEach(cat => {
             cat.addEventListener('click', (e) => {
