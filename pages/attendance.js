@@ -9,8 +9,9 @@ import { fetchLoginEvents } from '../features/loginSettingsApi.js';
 import { fetchShiftSettings } from '../features/shiftSettingsApi.js';
 import {
     computeIsLateForShift,
-    formatCheckInFromTimestamp,
-    maxCheckInTime,
+    formatAttendanceDisplayTime,
+    formatDurationHours,
+    minCheckInTime,
 } from '../features/shiftLate.js';
 import { runWithSubmissionLoading } from '../utils/submissionLoading.js';
 
@@ -30,17 +31,16 @@ const applyLateFlagsToAttendanceMap = (attendanceMap, employeeId, shiftRes) => {
     });
 };
 
-/** When timer is running today, use current session start for late icon (not first punch of day). */
+/** Recompute late flag for today from First In (do not replace checkIn with current session). */
 const mergeActiveTimerLateForToday = (attendanceMap, year, month, shiftStart, graceMin) => {
-    if (!state.timer?.isRunning || !state.timer?.startTime) return;
+    if (!state.timer?.isRunning) return;
     const now = new Date();
     if (now.getFullYear() !== year || now.getMonth() + 1 !== month) return;
     const day = now.getDate();
-    const sessionCheckIn = formatCheckInFromTimestamp(state.timer.startTime);
-    if (!sessionCheckIn) return;
     const row = attendanceMap[day] || { day, status: 'A' };
-    row.checkIn = maxCheckInTime(row.checkIn, sessionCheckIn) || sessionCheckIn;
-    row.isLate = computeIsLateForShift(row.checkIn, shiftStart, graceMin);
+    if (row.checkIn) {
+        row.isLate = computeIsLateForShift(row.checkIn, shiftStart, graceMin);
+    }
     row.shiftStart = shiftStart;
     row.graceMinutes = graceMin;
     attendanceMap[day] = row;
@@ -52,7 +52,9 @@ const mergeLateFlagsFromTable = (attendanceMap, lateMarkers = {}) => {
         const day = Number(dayKey);
         if (!day || !marker) return;
         const row = attendanceMap[day] || { day, status: 'A' };
-        if (marker.checkIn) row.checkIn = marker.checkIn;
+        if (marker.checkIn) {
+            row.checkIn = minCheckInTime(row.checkIn, marker.checkIn) || marker.checkIn;
+        }
         if (typeof marker.isLate === 'boolean') row.isLate = marker.isLate;
         attendanceMap[day] = row;
     });
@@ -393,54 +395,18 @@ export const renderAttendanceTrackerPage = async (mode) => {
         const isCurrentMonth = year === todayDate.getFullYear() && month === todayDate.getMonth();
         const todayDay = isCurrentMonth ? todayDate.getDate() : null;
 
-        // Fetch today's login activity for accurate check-in time
-        let todayLoginActivity = null;
-        if (isCurrentMonth && todayDay) {
-            try {
-                const today = new Date();
-                const todayStr = today.toISOString().split('T')[0];
-                const loginData = await fetchLoginEvents({
-                    employee_id: String(state.user.id || '').toUpperCase(),
-                    from: todayStr,
-                    to: todayStr
-                });
-                
-                if (loginData.success && loginData.daily_summary && loginData.daily_summary.length > 0) {
-                    todayLoginActivity = loginData.daily_summary[0];
-                    console.log('📋 Fetched today login activity:', todayLoginActivity);
-                }
-            } catch (err) {
-                console.warn('⚠️ Failed to fetch login activity:', err);
+        // NOTE:
+        // We intentionally do NOT use "login activity" for First In / Last Out here.
+        // Login-activity represents the *current session* and can be overwritten on re-checkin.
+        // Attendance table preserves the day's first check-in and last checkout.
+
+        const todayLogDays = [];
+        if (todayDay) {
+            const todayRow = myAttendance[todayDay] || { day: todayDay, status: 'A' };
+            if (todayRow.checkIn || todayRow.checkOut || state.timer?.isRunning) {
+                todayLogDays.push(todayRow);
             }
         }
-
-        const todayLogDays = todayDay && myAttendance[todayDay] ? [myAttendance[todayDay]] : [];
-
-        const formatLoginTime = (isoValue, fallback = '--:--:--') => {
-            if (!isoValue) return fallback;
-            let value = isoValue;
-            if (typeof value === 'string') {
-                const trimmed = value.trim();
-                // Bare time HH:MM[:SS] — backend stores it as UTC time-of-day; convert to local.
-                if (/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
-                    const todayUtc = new Date().toISOString().split('T')[0];
-                    const timePart = trimmed.length === 5 ? `${trimmed}:00` : trimmed;
-                    const parsedTime = new Date(`${todayUtc}T${timePart}Z`);
-                    if (!Number.isNaN(parsedTime.getTime())) {
-                        return parsedTime.toTimeString().split(' ')[0].substring(0, 8);
-                    }
-                    return timePart;
-                }
-                // If ISO string has no timezone marker, treat as UTC (backend returns UTC)
-                const hasTZ = /Z$|[+-]\d{2}:?\d{2}$/.test(trimmed);
-                if (!hasTZ && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(trimmed)) {
-                    value = trimmed.replace(' ', 'T') + 'Z';
-                }
-            }
-            const parsed = new Date(value);
-            if (Number.isNaN(parsed.getTime())) return fallback;
-            return parsed.toTimeString().split(' ')[0].substring(0, 8);
-        };
 
         const buildWeekMonthRows = async () => {
             const filter = state.attendanceFilter || 'week';
@@ -470,8 +436,11 @@ export const renderAttendanceTrackerPage = async (mode) => {
 
             if (viewingCurrentMonth && rangeEnd > today) rangeEnd = new Date(today);
 
-            const fromStr = rangeStart.toISOString().split('T')[0];
-            const toStr = rangeEnd.toISOString().split('T')[0];
+            const formatLocalDate = (dateObj) => {
+                return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+            };
+            const fromStr = formatLocalDate(rangeStart);
+            const toStr = formatLocalDate(rangeEnd);
 
             try {
                 const loginData = await fetchLoginEvents({
@@ -486,9 +455,6 @@ export const renderAttendanceTrackerPage = async (mode) => {
                 });
 
                 const rows = [];
-                const formatLocalDate = (dateObj) => {
-                    return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-                };
 
                 for (let cursor = new Date(rangeEnd); cursor >= rangeStart; cursor.setDate(cursor.getDate() - 1)) {
                     const dateStr = formatLocalDate(cursor);
@@ -496,40 +462,27 @@ export const renderAttendanceTrackerPage = async (mode) => {
                     const summary = summaryMap.get(dateStr) || {};
                     const attendanceFallback = myAttendance[dayNumber] || {};
 
-                    const checkInTime = summary.check_in_time
-                        ? formatLoginTime(summary.check_in_time)
-                        : attendanceFallback.checkIn || '--:--:--';
-
-                    const checkOutTime = summary.check_out_time
-                        ? formatLoginTime(summary.check_out_time)
-                        : attendanceFallback.checkOut || '--:--:--';
+                    // Prefer attendance table for First In / Last Out.
+                    // (login-activity is session-level and may reflect the latest re-checkin)
+                    const checkInTime = attendanceFallback.checkIn
+                        ? formatAttendanceDisplayTime(attendanceFallback.checkIn)
+                        : (summary.check_in_time ? formatAttendanceDisplayTime(summary.check_in_time) : '--:--:--');
+                    let checkOutTime = attendanceFallback.checkOut
+                        ? formatAttendanceDisplayTime(attendanceFallback.checkOut)
+                        : (summary.check_out_time ? formatAttendanceDisplayTime(summary.check_out_time) : '--:--:--');
+                    const checkInForCompare = attendanceFallback.checkIn
+                        ? formatAttendanceDisplayTime(attendanceFallback.checkIn)
+                        : (summary.check_in_time ? formatAttendanceDisplayTime(summary.check_in_time) : '');
+                    if (checkOutTime && checkInForCompare && checkOutTime < checkInForCompare && checkOutTime.startsWith('05:30')) {
+                        checkOutTime = '00:00:00';
+                    }
 
                     let totalTimeHTML = '--';
                     const { duration } = attendanceFallback;
                     if (typeof duration === 'number' && Number.isFinite(duration) && duration >= 0) {
-                        const totalMins = Math.round(duration * 60);
-                        const hrs = Math.floor(totalMins / 60);
-                        const mins = totalMins % 60;
-                        totalTimeHTML = `${String(hrs).padStart(2, '0')}h ${String(mins).padStart(2, '0')}m`;
-                    } else if (summary.check_in_time && summary.check_out_time) {
-                        const start = new Date(summary.check_in_time);
-                        const end = new Date(summary.check_out_time);
-                        const diffMs = end.getTime() - start.getTime();
-                        if (!Number.isNaN(diffMs) && diffMs > 0) {
-                            const hrs = Math.floor(diffMs / 3600000);
-                            const mins = Math.floor((diffMs % 3600000) / 60000);
-                            totalTimeHTML = `${String(hrs).padStart(2, '0')}h ${String(mins).padStart(2, '0')}m`;
-                        }
-                    } else if (attendanceFallback.checkIn && attendanceFallback.checkOut) {
-                        const dayStr = String(dayNumber).padStart(2, '0');
-                        const start = new Date(`${yearMonth}-${dayStr}T${attendanceFallback.checkIn}`);
-                        const end = new Date(`${yearMonth}-${dayStr}T${attendanceFallback.checkOut}`);
-                        const diffMs = end.getTime() - start.getTime();
-                        if (!Number.isNaN(diffMs) && diffMs > 0) {
-                            const hrs = Math.floor(diffMs / 3600000);
-                            const mins = Math.floor((diffMs % 3600000) / 60000);
-                            totalTimeHTML = `${String(hrs).padStart(2, '0')}h ${String(mins).padStart(2, '0')}m`;
-                        }
+                        totalTimeHTML = formatDurationHours(duration);
+                    } else if (summary.total_seconds != null && Number(summary.total_seconds) >= 0) {
+                        totalTimeHTML = formatDurationHours(Number(summary.total_seconds) / 3600);
                     } else if (attendanceFallback.leaveType) {
                         totalTimeHTML = 'Leave';
                     }
@@ -561,36 +514,28 @@ export const renderAttendanceTrackerPage = async (mode) => {
         const recentLogDays = todayLogDays;
 
         const firstLastOutRows = recentLogDays.map(d => {
-            // Use login activity data for today if available
-            let checkInTime = formatLoginTime(d.checkIn, '');
-            let checkOutTime = formatLoginTime(d.checkOut, '');
-            
-            if (isCurrentMonth && d.day === todayDay && todayLoginActivity) {
-                // Extract time from login activity check-in time
-                if (todayLoginActivity.check_in_time) {
-                    checkInTime = formatLoginTime(todayLoginActivity.check_in_time, checkInTime);
-                }
-                
-                // Extract time from login activity check-out time
-                if (todayLoginActivity.check_out_time) {
-                    checkOutTime = formatLoginTime(todayLoginActivity.check_out_time, checkOutTime);
-                }
+            let checkInTime = formatAttendanceDisplayTime(d.checkIn, '');
+            let checkOutTime = formatAttendanceDisplayTime(d.checkOut, '');
+
+            let totalTimeHTML = '--';
+            if (typeof d.duration === 'number' && Number.isFinite(d.duration) && d.duration >= 0) {
+                totalTimeHTML = formatDurationHours(d.duration);
+            } else if (
+                isCurrentMonth
+                && d.day === todayDay
+                && state.timer?.isRunning
+                && Number.isFinite(state.timer.startTime)
+            ) {
+                const elapsedSec = Math.max(0, Math.floor((Date.now() - state.timer.startTime) / 1000));
+                totalTimeHTML = formatDurationHours(elapsedSec / 3600);
             }
-            
-            const dayStr = String(d.day || 1).padStart(2, '0');
-            const start = new Date(`${yearMonth}-${dayStr}T${checkInTime}`);
-            const end = new Date(`${yearMonth}-${dayStr}T${checkOutTime}`);
-            const totalMs = end.getTime() - start.getTime();
-            const hasValidRange = !isNaN(totalMs) && totalMs >= 0 && checkInTime && checkOutTime;
-            const totalHours = hasValidRange ? String(Math.floor(totalMs / 3600000)).padStart(2, '0') : '00';
-            const totalMins = hasValidRange ? String(Math.floor((totalMs % 3600000) / 60000)).padStart(2, '0') : '00';
 
             return `
             <tr>
                 <td>${d.day} ${date.toLocaleString('default', { month: 'short' })} ${year}</td>
                 <td>${checkInTime || '--:--:--'}</td>
                 <td>${checkOutTime || '--:--:--'}</td>
-                <td>${totalHours}h ${totalMins}m</td>
+                <td>${totalTimeHTML}</td>
             </tr>`
         }).join('') || `<tr><td colspan="4" class="placeholder-text">No recent check-in data</td></tr>`;
 
