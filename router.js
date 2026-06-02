@@ -8,7 +8,6 @@ const renderAccessDenied = (redirectPath = '#/') => {
       <i class="fa-solid fa-lock" style="font-size: 48px; color: #e74c3c; margin-bottom: 16px;"></i>
       <h2>Access Denied</h2>
       <p>You don't have permission to access this page.</p>
-      <p>Only administrators (EMP001) can view team data.</p>
       <button class="btn btn-primary" onclick="window.location.hash='${redirectPath}'" style="margin-top: 16px;">
         <i class="fa-solid fa-arrow-left"></i> Go Back
       </button>
@@ -48,6 +47,17 @@ const loaders = {
   "/interns/detail": async () => (await import('./pages/internDetail.js')).renderInternDetailPage,
   "/faceauth-settings": async () => (await import('./pages/faceAuthSettings.js')).renderFaceAuthSettings,
   "/role-settings": async () => (await import('./pages/roleSettings.js')).renderRoleSettingsPage,
+  "/settings": async () => async () => {
+    const { renderSettingsLayout } = await import('./components/settingsLayout.js');
+    const { getPageContentHTML } = await import('./utils.js');
+    document.getElementById('app-content').innerHTML = getPageContentHTML('Settings', renderSettingsLayout('none', `
+        <div class="card" style="padding: 40px; text-align: center;">
+            <i class="fa-solid fa-gear" style="font-size: 48px; color: var(--text-secondary); margin-bottom: 16px;"></i>
+            <h2>Settings</h2>
+            <p style="color: var(--text-secondary);">Please select a setting category from the sidebar.</p>
+        </div>
+    `));
+  },
 };
 
 // Navigation guard: prevent slow async renders from overwriting the UI

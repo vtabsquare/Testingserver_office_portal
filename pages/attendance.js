@@ -1300,8 +1300,14 @@ export const renderTeamAttendancePage = async () => {
         // Fetch attendance for each employee
         await Promise.all(employeesToFetch.map(async (empId) => {
             console.log(`🔄 Fetching attendance for employee: ${empId}`);
-            const records = await fetchMonthlyAttendance(empId, year, month, true);
-            console.log(`📊 Fetched ${records.length} attendance records for ${empId}`);
+            let records = [];
+            try {
+                records = await fetchMonthlyAttendance(empId, year, month, true);
+                console.log(`📊 Fetched ${records.length} attendance records for ${empId}`);
+            } catch (err) {
+                console.warn(`⚠️ Failed to fetch attendance for ${empId}:`, err);
+                records = [];
+            }
 
             const attendanceMap = {};
             records.forEach(rec => {

@@ -1,6 +1,7 @@
 // shared.js - Shared Inbox page
 import { state } from '../state.js';
 import { isAdminUser, isManagerOrAdmin } from '../utils/accessControl.js';
+import { canUseFunction } from '../utils/roleSettings.js';
 import { getPageContentHTML } from '../utils.js';
 import { renderModal, closeModal } from '../components/modal.js';
 import { fetchEmployeeLeaves, approveLeave, rejectLeave } from '../features/leaveApi.js';
@@ -17,6 +18,7 @@ import { runWithSubmissionLoading } from '../utils/submissionLoading.js';
 
 let currentInboxTab = 'awaiting';
 let currentInboxCategory = 'leaves';
+let inboxActionMode = false;
 let _resolvedEmpIdCache = '';
 let _resolvedEmpIdPromise = null;
 
@@ -2985,6 +2987,62 @@ export const renderTTProjectsPage = async () => {
     document.getElementById('app-content').innerHTML = getPageContentHTML('Projects', content);
 };
 
+
+const showInboxModeModal = () => {
+    return new Promise((resolve) => {
+        const modalId = 'inbox-mode-modal-' + Date.now();
+        const modalHtml = `
+            <div id="${modalId}" class="inbox-mode-modal-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); z-index: 9999; display: flex; align-items: center; justify-content: center;">
+                <div class="inbox-mode-modal-content" style="background: var(--surface-color, #fff); padding: 30px; border-radius: 16px; max-width: 500px; width: 90%; box-shadow: 0 10px 25px rgba(0,0,0,0.2);">
+                    <h3 style="margin-top:0; font-size: 20px; font-weight: 600; color: var(--text-primary);">Inbox Access Mode</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 20px; font-size: 14px;">Please select how you want to access the inbox.</p>
+                    <div style="display:flex; gap: 16px;">
+                        <div class="inbox-mode-option" id="mode-view-only" style="flex:1; border: 2px solid var(--border-color, #e5e7eb); border-radius: 12px; padding: 20px; cursor: pointer; text-align: center; transition: all 0.2s; background: var(--bg-color, #fff);">
+                            <i class="fa-solid fa-eye" style="font-size: 32px; color: #3b82f6; margin-bottom: 12px;"></i>
+                            <h4 style="margin: 0 0 8px 0; font-size: 16px;">View Only</h4>
+                            <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">Browse all approvals without taking action.</p>
+                        </div>
+                        <div class="inbox-mode-option" id="mode-action" style="flex:1; border: 2px solid var(--border-color, #e5e7eb); border-radius: 12px; padding: 20px; cursor: pointer; text-align: center; transition: all 0.2s; background: var(--bg-color, #fff);">
+                            <i class="fa-solid fa-gavel" style="font-size: 32px; color: #10b981; margin-bottom: 12px;"></i>
+                            <h4 style="margin: 0 0 8px 0; font-size: 16px;">Action Mode</h4>
+                            <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">Approve or reject pending requests.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        
+        const overlay = document.getElementById(modalId);
+        
+        const cleanup = () => {
+            if (overlay) overlay.remove();
+        };
+
+        document.getElementById('mode-view-only').addEventListener('click', () => {
+            cleanup();
+            resolve('view_only');
+        });
+
+        document.getElementById('mode-action').addEventListener('click', () => {
+            cleanup();
+            resolve('action');
+        });
+
+        // Hover effects
+        document.querySelectorAll('.inbox-mode-option').forEach(el => {
+            el.addEventListener('mouseenter', e => {
+                e.currentTarget.style.borderColor = e.currentTarget.id === 'mode-action' ? '#10b981' : '#3b82f6';
+                e.currentTarget.style.transform = 'translateY(-2px)';
+            });
+            el.addEventListener('mouseleave', e => {
+                e.currentTarget.style.borderColor = 'var(--border-color, #e5e7eb)';
+                e.currentTarget.style.transform = 'translateY(0)';
+            });
+        });
+    });
+};
+
 export const renderInboxPage = async () => {
     console.log('📥 Rendering Inbox Page...');
 
@@ -3010,8 +3068,15 @@ export const renderInboxPage = async () => {
     console.log('👤 User is admin:', isAdmin, '| can view team queues:', canViewTeamQueues);
 
     // Initial static content
+    const modeBadgeHtml = inboxActionMode ? 
+        '<span style="padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #d1fae5; color: #065f46;"><i class="fa-solid fa-gavel"></i> Action Mode</span>' : 
+        '<span style="padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #dbeafe; color: #1e3a8a;"><i class="fa-solid fa-eye"></i> View Only</span>';
+
     const content = `
-    <div class="inbox-container">
+    <div class="inbox-container" style="position: relative;">
+        <div style="position:absolute; top: -35px; right: 20px; z-index: 10;">
+            ${modeBadgeHtml}
+        </div>
         <div class="inbox-sidebar">
             <div class="inbox-category active" data-category="leaves">Leaves</div>
             <div class="inbox-category" data-category="timesheet">Timesheet</div>
@@ -4560,7 +4625,7 @@ const loadInboxLeaves = async () => {
             const compPending = compAll.filter(r => (r.status || 'pending').toLowerCase() === 'pending').map(normalizeComp);
             leaves = (pendingLeaves || []);  // Backend now includes comp-off requests
             console.log(`📋 Loaded ${leaves.length} pending leave requests`);
-        } else if (currentInboxTab === 'completed' && isAdmin) {
+        } else if (currentInboxTab === 'completed' && canViewTeamQueues) {
             // For admin in completed tab, fetch all employees' completed leaves
             try {
                 const allEmployees = await listEmployees(1, 5000);
@@ -4607,11 +4672,10 @@ const loadInboxLeaves = async () => {
             console.log(`📋 Loaded ${leaves.length} ${currentInboxTab} leaves for user`);
         }
 
-        // Sort leaves by start_date descending (latest first)
+        // Sort leaves descending (latest first)
         leaves.sort((a, b) => {
-            const dateA = new Date(a.start_date || '1900-01-01');
-            const dateB = new Date(b.start_date || '1900-01-01');
-            return dateB - dateA; // Descending order (newest first)
+            const getSortDate = (item) => new Date(item.createdon || item.createdAt || item.created_at || item.submitted_on || item.start_date || '1900-01-01');
+            return getSortDate(b) - getSortDate(a); // Descending order
         });
         console.log(`✅ Sorted ${leaves.length} leaves by date (latest first)`);
 
@@ -4651,7 +4715,7 @@ const loadInboxLeaves = async () => {
             }
 
             const statusClass = status.toLowerCase();
-            const showActions = currentInboxTab === 'awaiting' && isAdmin;
+            const showActions = currentInboxTab === 'awaiting' && inboxActionMode;
             const isRejected = status.toLowerCase() === 'rejected';
             const isApproved = status.toLowerCase() === 'approved';
             const isCompOff = leave._source === 'compoff' || leave.request_type === 'compoff';
@@ -4700,7 +4764,7 @@ const loadInboxLeaves = async () => {
         listContainer.innerHTML = leaveCards;
 
         // Add event listeners for approve/reject buttons
-        if (currentInboxTab === 'awaiting' && isAdmin) {
+        if (currentInboxTab === 'awaiting' && inboxActionMode) {
             document.querySelectorAll('.inbox-approve-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
                     const src = e.currentTarget.getAttribute('data-source');
@@ -4820,7 +4884,7 @@ const loadInboxAttendance = async () => {
             const employeeName = employeeMap[employeeId] || employeeId;
             const status = String(item.status || 'pending');
             const statusClass = status.toLowerCase();
-            const showActions = isAdmin && currentInboxTab === 'awaiting';
+            const showActions = inboxActionMode && currentInboxTab === 'awaiting';
             const leaveTypes = Array.isArray(item.leave_types) ? item.leave_types : [];
             const leaveSummary = leaveTypes.length
                 ? leaveTypes.map(x => `${x.type}: ${x.days}`).join(', ')
@@ -4864,7 +4928,7 @@ const loadInboxAttendance = async () => {
 
         listContainer.innerHTML = cards;
 
-        if (isAdmin && currentInboxTab === 'awaiting') {
+        if (inboxActionMode && currentInboxTab === 'awaiting') {
             document.querySelectorAll('.attendance-approve-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
                     const markerId = e.currentTarget.getAttribute('data-marker-id');
@@ -5047,7 +5111,7 @@ const loadInboxTimesheets = async () => {
 
         if (groupedItems.length) {
             const cards = groupedItems.map(group => {
-                const showActions = isAdmin && currentInboxTab === 'awaiting';
+                const showActions = inboxActionMode && currentInboxTab === 'awaiting';
                 const isRejected = group.statusClass === 'rejected';
 
                 const mergedRowsMap = new Map();
@@ -5145,7 +5209,7 @@ const loadInboxTimesheets = async () => {
 
             listContainer.innerHTML = cards;
 
-            if (isAdmin && currentInboxTab === 'awaiting') {
+            if (inboxActionMode && currentInboxTab === 'awaiting') {
                 document.querySelectorAll('.ts-approve-btn').forEach(btn => {
                     btn.addEventListener('click', async (e) => {
                         const entryId = e.currentTarget.getAttribute('data-id');
@@ -5169,7 +5233,7 @@ const loadInboxTimesheets = async () => {
             const employeeName = employeeMap[employeeId?.toUpperCase()] || entry.employee_name || employeeId;
             const status = entry.status || 'Pending';
             const statusClass = String(status).toLowerCase();
-            const showActions = isAdmin && currentInboxTab === 'awaiting';
+            const showActions = inboxActionMode && currentInboxTab === 'awaiting';
             const isRejected = statusClass === 'rejected';
             const rejectionReason = entry.reject_comment || '';
             const projectName = entry.project_name || entry.project_id || '-';
@@ -5218,7 +5282,7 @@ const loadInboxTimesheets = async () => {
 
         listContainer.innerHTML = cards;
 
-        if (isAdmin && currentInboxTab === 'awaiting') {
+        if (inboxActionMode && currentInboxTab === 'awaiting') {
             document.querySelectorAll('.ts-approve-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
                     const entryId = e.currentTarget.getAttribute('data-id');
@@ -5292,7 +5356,7 @@ const loadInboxCompOff = async () => {
         const cards = uniqueItems.map(req => {
             const status = req.status || 'Pending';
             const statusClass = status.toLowerCase();
-            const showActions = isAdmin && currentInboxTab === 'awaiting';
+            const showActions = inboxActionMode && currentInboxTab === 'awaiting';
             return `
                 <div class="inbox-item">
                     <div class="inbox-item-header">
@@ -5323,7 +5387,7 @@ const loadInboxCompOff = async () => {
 
         listContainer.innerHTML = cards;
 
-        if (isAdmin && currentInboxTab === 'awaiting') {
+        if (inboxActionMode && currentInboxTab === 'awaiting') {
             document.querySelectorAll('.compoff-approve-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
                     const requestId = e.currentTarget.getAttribute('data-id');

@@ -11,7 +11,7 @@ const DEFAULT_PERMISSIONS = {
     // Admin (L3) gets everything by default
     'L3': {
         applications: ['home', 'admin_dashboard', 'employee', 'employees', 'interns', 'team_management', 'inbox', 'onboarding', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_clients', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'assets', 'settings', 'leave_settings', 'shift_settings', 'login_settings', 'faceauth_settings', 'role_settings', 'faceauth_admin'],
-        functions: ['view_admin_dashboard', 'view_employee_directory', 'view_interns', 'manage_onboarding', 'view_team_timesheet', 'manage_clients', 'view_team_attendance', 'view_team_leaves', 'manage_leave_settings', 'manage_shift_settings', 'manage_login_settings', 'manage_faceauth_settings', 'manage_role_settings', 'manage_team_hierarchy']
+        functions: ['view_admin_dashboard', 'view_employee_directory', 'view_interns', 'manage_onboarding', 'view_team_timesheet', 'manage_clients', 'view_team_attendance', 'view_team_leaves', 'manage_leave_settings', 'manage_shift_settings', 'manage_login_settings', 'manage_faceauth_settings', 'manage_role_settings', 'manage_team_hierarchy', 'inbox_action_mode']
     },
     // Manager (L2) gets team-oriented things
     'L2': {

@@ -1,5 +1,5 @@
 import { getPageContentHTML } from '../utils.js';
-import { canUseFunction } from '../utils/roleSettings.js';
+import { canUseFunction, canViewApplication } from '../utils/roleSettings.js';
 import { renderSettingsLayout } from '../components/settingsLayout.js';
 import { renderModal, closeModal } from '../components/modal.js';
 import { listEmployees } from '../features/employeeApi.js';
@@ -540,13 +540,13 @@ const attachShiftHandlers = () => {
 };
 
 export const renderShiftSettingsPage = async () => {
-    if (!canUseFunction('manage_shift_settings')) {
+    if (!canUseFunction('manage_shift_settings') && !canViewApplication('shift_settings')) {
         const denied = `
             <div class="card">
                 <div class="access-denied-content">
                     <i class="fa-solid fa-lock fa-3x error-icon"></i>
                     <h3 class="error-heading">Access Denied</h3>
-                    <p>Shift Settings is only accessible to administrators.</p>
+                    <p>You don't have permission to manage Shift Settings. Please ask your administrator to grant you access.</p>
                 </div>
             </div>
         `;

@@ -2,7 +2,7 @@
 
 import { getPageContentHTML } from '../utils.js';
 import { isAdminUser } from '../utils/accessControl.js';
-import { canUseFunction, getRolePermissions } from '../utils/roleSettings.js';
+import { canUseFunction, getRolePermissions, canViewApplication } from '../utils/roleSettings.js';
 import { fetchAllRolePermissions, updateRolePermission, seedDefaultPermissions, fetchCustomRoles, createCustomRole, deleteCustomRole } from '../features/roleSettingsApi.js';
 import { renderSettingsLayout } from '../components/settingsLayout.js';
 
@@ -108,7 +108,8 @@ const FUNCTIONS_GROUPS = [
         items: [
             { key: 'view_team_timesheet', name: 'View Team Timesheet', icon: 'fa-business-time', desc: 'Review team logged hours' },
             { key: 'view_team_attendance', name: 'View Team Attendance', icon: 'fa-users-viewfinder', desc: 'Review team attendance records' },
-            { key: 'view_team_leaves', name: 'View Team Leaves', icon: 'fa-users-slash', desc: 'Review team leave requests' }
+            { key: 'view_team_leaves', name: 'View Team Leaves', icon: 'fa-users-slash', desc: 'Review team leave requests' },
+            { key: 'inbox_action_mode', name: 'Inbox Action Mode', icon: 'fa-gavel', desc: 'Allow approve/reject actions in Inbox' }
         ]
     },
     {
@@ -322,12 +323,12 @@ export async function renderRoleSettingsPage() {
     const container = document.getElementById('app-content');
     if (!container) return;
     
-    if (!canUseFunction('manage_role_settings')) {
+    if (!canUseFunction('manage_role_settings') && !canViewApplication('role_settings')) {
         container.innerHTML = getPageContentHTML('Settings', renderSettingsLayout('role-settings', `
             <div class="card" style="padding: 40px; text-align: center;">
                 <i class="fa-solid fa-lock" style="font-size: 48px; color: #e74c3c; margin-bottom: 16px;"></i>
                 <h2>Access Denied</h2>
-                <p>Only administrators can access Role Settings.</p>
+                <p>You don't have permission to manage these settings. Please ask your administrator to grant you access.</p>
             </div>
         `));
         return;

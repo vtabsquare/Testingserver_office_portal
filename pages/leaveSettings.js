@@ -4,7 +4,7 @@ import { getPageContentHTML } from '../utils.js';
 import { listEmployees } from '../features/employeeApi.js';
 import { renderModal, closeModal } from '../components/modal.js';
 import { isAdminUser, isL2OrL3User } from '../utils/accessControl.js';
-import { canUseFunction } from '../utils/roleSettings.js';
+import { canUseFunction, canViewApplication } from '../utils/roleSettings.js';
 import { API_BASE_URL } from '../config.js';
 import { renderSettingsLayout } from '../components/settingsLayout.js';
 
@@ -922,14 +922,14 @@ export const renderLeaveSettingsPage = async () => {
     await loadAllocationTypes();
 
     // Check if user has permission
-    if (!canUseFunction('manage_leave_settings')) {
+    if (!canUseFunction('manage_leave_settings') && !canViewApplication('leave_settings')) {
         const content = `
             <div class="card">
                 <div class="access-denied-content">
                     <i class="fa-solid fa-lock fa-3x error-icon"></i>
                     <h3 class="error-heading">Access Denied</h3>
-                    <p>Leave Settings is only accessible to administrators.</p>
-                    <p class="access-denied-note">Please contact your administrator if you need access.</p>
+                    <p>You don't have permission to manage these settings. Please ask your administrator to grant you access.</p>
+                    
                 </div>
             </div>
         `;

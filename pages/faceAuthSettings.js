@@ -3,7 +3,7 @@
 import { state } from '../state.js';
 import { getPageContentHTML } from '../utils.js';
 import { isAdminUser } from '../utils/accessControl.js';
-import { canUseFunction } from '../utils/roleSettings.js';
+import { canUseFunction, canViewApplication } from '../utils/roleSettings.js';
 import { API_BASE_URL } from '../config.js';
 import { renderSettingsLayout } from '../components/settingsLayout.js';
 
@@ -191,12 +191,12 @@ export async function renderFaceAuthSettings() {
     if (!container) return;
     
     // Admin-only access
-    if (!canUseFunction('manage_faceauth_settings')) {
+    if (!canUseFunction('manage_faceauth_settings') && !canViewApplication('faceauth_settings')) {
         container.innerHTML = getPageContentHTML('Settings', renderSettingsLayout('faceauth-settings', `
             <div class="card" style="padding: 40px; text-align: center;">
                 <i class="fa-solid fa-lock" style="font-size: 48px; color: #e74c3c; margin-bottom: 16px;"></i>
                 <h2>Access Denied</h2>
-                <p>Only administrators can access FaceAuth settings.</p>
+                <p>You don't have permission to manage these settings. Please ask your administrator to grant you access.</p>
             </div>
         `));
         return;

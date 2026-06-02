@@ -7,7 +7,7 @@ import { listLoginAccounts, createLoginAccount, updateLoginAccount, deleteLoginA
 import { fetchCustomRoles } from '../features/roleSettingsApi.js';
 import { listAllEmployees } from '../features/employeeApi.js';
 import { getUserAccessContext } from '../utils/accessControl.js';
-import { canUseFunction } from '../utils/roleSettings.js';
+import { canUseFunction, canViewApplication } from '../utils/roleSettings.js';
 import { renderSettingsLayout } from '../components/settingsLayout.js';
 
 let currentLoginSettingsView = 'accounts';
@@ -929,14 +929,14 @@ export const renderLoginSettingsPage = async () => {
     console.log('⚙️ Rendering Login Settings Page...');
 
     // Check if user has permission
-    if (!canUseFunction('manage_login_settings')) {
+    if (!canUseFunction('manage_login_settings') && !canViewApplication('login_settings')) {
         const content = `
             <div class="card">
                 <div class="access-denied-content">
                     <i class="fa-solid fa-lock fa-3x error-icon"></i>
                     <h3 class="error-heading">Access Denied</h3>
-                    <p>Login Settings is only accessible to administrators, managers, and team leads.</p>
-                    <p class="access-denied-note">Please contact your administrator if you need access.</p>
+                    <p>You don't have permission to manage these settings. Please ask your administrator to grant you access.</p>
+                    
                 </div>
             </div>
         `;

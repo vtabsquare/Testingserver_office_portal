@@ -92,7 +92,14 @@ export const getSidebarHTML = () => {
         ${canViewApplication('assets') ? '<li><a href="#/assets" class="nav-link" data-page="assets"><i class="fa-solid fa-box"></i> Assets</a></li>' : ''}
         ${canViewSettings ? `
         <li>
-            <a href="${canViewApplication('leave_settings') && canUseFunction('manage_leave_settings') ? '#/leave-settings' : (canViewApplication('login_settings') && canUseFunction('manage_login_settings') ? '#/login-settings' : (canViewApplication('faceauth_settings') && canUseFunction('manage_faceauth_settings') ? '#/faceauth-settings' : '#/role-settings'))}" class="nav-link" data-page="settings">
+            <a href="${(() => {
+                if (canViewApplication('leave_settings')) return '#/leave-settings';
+                if (canViewApplication('shift_settings')) return '#/shift-settings';
+                if (canViewApplication('login_settings')) return '#/login-settings';
+                if (canViewApplication('faceauth_settings')) return '#/faceauth-settings';
+                if (canViewApplication('role_settings')) return '#/role-settings';
+                return '#/settings';
+            })()}" class="nav-link" data-page="settings">
                 <i class="fa-solid fa-gear" style="margin-right: 8px;"></i>Settings
             </a>
         </li>
