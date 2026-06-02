@@ -4910,12 +4910,35 @@ def get_faceauth_admin_sso_token():
         if not decoded:
             return jsonify({"error": "Invalid or expired token"}), 401
         
-        # Verify user has admin access
+        # Verify user has admin access or faceauth_admin permission
         is_admin = decoded.get("is_admin", False)
         role = decoded.get("role", "").lower()
         
-        if not (is_admin or role in ("l3", "admin")):
-            return jsonify({"error": "Access denied. Admin privileges required."}), 403
+        has_faceauth_access = False
+        debug_err = ""
+        found_apps = None
+        if is_admin or role in ("l3", "admin"):
+            has_faceauth_access = True
+        else:
+            try:
+                from supabase_helper import get_supabase
+                sb = get_supabase()
+                role_upper = role.upper()
+                resp = sb.table("role_permissions").select("applications").eq("role", role_upper).execute()
+                if resp.data and len(resp.data) > 0:
+                    apps = resp.data[0].get("applications", [])
+                    found_apps = apps
+                    if "faceauth_admin" in apps:
+                        has_faceauth_access = True
+            except Exception as e:
+                debug_err = str(e)
+                print(f"Error checking faceauth permission: {e}")
+                
+        if not has_faceauth_access:
+            err_msg = f"Access denied. Admin privileges required. Role: {role.upper()}, Apps: {found_apps}"
+            if debug_err:
+                err_msg += f" Debug: {debug_err}"
+            return jsonify({"error": err_msg}), 403
         
         # Generate admin SSO token with specific claims
         admin_sso_payload = {
