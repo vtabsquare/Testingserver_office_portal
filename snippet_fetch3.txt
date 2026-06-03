@@ -1,0 +1,80 @@
+        employeesToFetch = employeeIds;
+        console.log(`📊 Fetched ${employeesToFetch.length} employees from Dataverse`);
+
+        // Clear previous attendance data to avoid stale records
+        state.attendanceData = {};
+
+        // Fetch attendance for each employee
+        await Promise.all(employeesToFetch.map(async (empId) => {
+            console.log(`🔄 Fetching attendance for employee: ${empId}`);
+            const records = await fetchMonthlyAttendance(empId, year, month, true);
+            console.log(`📊 Fetched ${records.length} attendance records for ${empId}`);
+
+            const attendanceMap = {};
+            records.forEach(rec => {
+                if (rec.day) {
+                    attendanceMap[rec.day] = {
+                        day: rec.day, // Explicitly include the day property
+                        status: rec.status,
+                        isLate: !!rec.isLate,
+                        workWeek: normalizeWorkWeek(rec.workWeek),
+                        checkIn: rec.checkIn,
+                        checkOut: rec.checkOut,
+                        duration: rec.duration,
+                        isManual: !!(rec.isManual || rec.is_manual),
+                        leaveType: rec.leaveType,
+                        compensationType: rec.paid_unpaid,
+                        leaveStart: rec.leaveStart,
+                        leaveEnd: rec.leaveEnd,
+                        leaveStatus: rec.leaveStatus,
+                        dayDuration: rec.dayDuration,
+                        half: rec.half,
+                        pendingLeaves: rec.pendingLeaves || [],
+                    };
+                }
+            });
+
+            const meta = employeeMeta[empId] || {};
+            attendanceMap.employeeName = meta.name || empId;
+            attendanceMap.employeeFlag = meta.employeeFlag || 'Employee';
+            const empShiftWorkWeek = shiftRes?.by_employee?.[empId]?.work_week || shiftRes?.defaults?.work_week;
+            attendanceMap.workWeek = normalizeWorkWeek(empShiftWorkWeek || records[0]?.workWeek);
+            mergeLateFlagsFromTable(attendanceMap, records.lateMarkers || {});
+            applyLateFlagsToAttendanceMap(attendanceMap, empId, shiftRes);
+            const empShift = shiftRes?.by_employee?.[empId] || shiftRes?.defaults || {};
+            Object.keys(attendanceMap).forEach((key) => {
+                if (!/^\d+$/.test(key)) return;
+                attendanceMap[key].shiftStart = empShift.shift_start || '09:00';
+                attendanceMap[key].graceMinutes = empShift.grace_minutes || 15;
+            });
+
+            // Store both attendance data and employee info
+            state.attendanceData[empId] = attendanceMap;
+        }));
+
+        console.log(`✅ Team attendance loaded for ${Object.keys(state.attendanceData).length} employees`);
+    } catch (err) {
+        console.error('❌ Failed to fetch team attendance:', err);
+        // Initialize empty attendance data if fetch fails
+        state.attendanceData = {};
+    }
+
+    await renderAttendanceTrackerPage('team');
+};
+
+export const leaveTeamAttendancePage = () => {
+    /* no-op: late entry uses HTTP refresh only */
+};
+
+// Check if attendance has been submitted for the current month
+async function checkAttendanceSubmissionStatus(submitBtn, year, month) {
+    try {
+        const employeeId = String(state.user.id || '').toUpperCase();
+        const response = await fetch(`${API_BASE_URL}/api/attendance/submission-status/${employeeId}/${year}/${month}`);
+        const data = await response.json();
+
+        if (data.success && data.submitted) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fa-solid fa-check"></i> Submitted';
+            submitBtn.classList.remove('btn-success');
+            submitBtn.classList.add('btn-secondary');

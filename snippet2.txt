@@ -1,0 +1,40 @@
+                const allEmployees = await listEmployees(1, 5000);
+                const employeeIds = (allEmployees.items || []).map(emp => emp.employee_id).filter(Boolean);
+
+                console.log(`📋 Fetching completed leaves for ${employeeIds.length} employees...`);
+
+                const allLeavesPromises = employeeIds.map(empId =>
+                    fetchEmployeeLeaves(empId, true).catch(err => {
+                        console.warn(`Failed to fetch leaves for ${empId}:`, err);
+                        return [];
+                    })
+                );
+
+                const allLeavesArrays = await Promise.all(allLeavesPromises);
+                const allLeaves = allLeavesArrays.flat();
+                const compCompleted = compAll.filter(r => ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizeComp);
+
+                // Filter for approved/rejected only
+                leaves = allLeaves.filter(l =>
+                    (l.status?.toLowerCase() === 'approved' || l.status?.toLowerCase() === 'rejected')
+                ).concat(compCompleted);
+
+                console.log(`📋 Loaded ${leaves.length} completed leaves from all employees`);
+            } catch (err) {
+                console.error('Error fetching all employees completed leaves:', err);
+                leaves = [];
+            }
+        } else {
+            // Fetch current user's leaves
+            const empId = await resolveCurrentEmployeeId();
+            const allLeaves = await fetchEmployeeLeaves(empId, currentInboxTab === 'completed');
+
+            if (currentInboxTab === 'requests') {
+                const compMine = compAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && (r.status || 'pending').toLowerCase() === 'pending').map(normalizeComp);
+                leaves = (allLeaves || []).filter(l => l.status?.toLowerCase() === 'pending');  // Backend includes comp-off
+            } else if (currentInboxTab === 'completed') {
+                const compMineDone = compAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizeComp);
+                leaves = (allLeaves || []).filter(l =>
+                    (l.status?.toLowerCase() === 'approved' || l.status?.toLowerCase() === 'rejected')
+                ).concat(compMineDone);
+            }

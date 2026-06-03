@@ -1,0 +1,40 @@
+
+            console.log(`📋 Loaded ${leaves.length} ${currentInboxTab} leaves for user`);
+        }
+
+        // Sort leaves by start_date descending (latest first)
+        leaves.sort((a, b) => {
+            const dateA = new Date(a.start_date || '1900-01-01');
+            const dateB = new Date(b.start_date || '1900-01-01');
+            return dateB - dateA; // Descending order (newest first)
+        });
+        console.log(`✅ Sorted ${leaves.length} leaves by date (latest first)`);
+
+        if (leaves.length === 0) {
+            listContainer.innerHTML = `
+                <div class="placeholder-text">
+                    <i class="fa-solid fa-envelope-open fa-3x" style="color:#ddd; margin-bottom: 1rem;"></i>
+                    <p>No requests found.</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Render leave cards
+        const leaveCards = leaves.map(leave => {
+            const leaveId = leave.leave_id;
+            const employeeId = leave.employee_id;
+            const employeeName = employeeMap[employeeId?.toUpperCase()] || employeeId;
+            const leaveType = leave.leave_type;
+            const startDate = leave.start_date;
+            const endDate = leave.end_date;
+            const totalDays = leave.total_days;
+            const status = leave.status || 'Pending';
+            const paidUnpaid = leave.paid_unpaid || 'Paid';
+            const rejectionReason = leave.rejection_reason || leave.crc6f_rejectionreason || '';
+            const approvalComments = leave.approval_comments || leave.approvalComments || leave.crc6f_approvalcomments || '';
+            const approvalCommentsText = String(approvalComments || '').trim();
+            const leaveReason = leave.reason || leave.rejection_reason || leave.crc6f_rejectionreason || '';
+
+            // Debug logging for rejected leaves
+            if (status.toLowerCase() === 'rejected') {

@@ -1,0 +1,130 @@
+            }
+
+            const isPaid = String(compensationType || '').toLowerCase() === 'paid';
+            const tooltip = `${leaveType} (${isPaid ? 'Paid' : 'Unpaid'})${leaveStart ? ` | ${leaveStart}` : ''}${leaveEnd ? ` → ${leaveEnd}` : ''}`;
+
+            // Show LOP in red for unpaid leave
+            const lopLine = isPaid
+                ? ''
+                : '<div class="leave-lop-text">(LOP)</div>';
+
+            content = `
+                <div class="leave-code" title="${tooltip}">
+                    <div class="leave-code-symbol leave-${String(code).toLowerCase()}">${code}</div>
+                    ${lopLine}
+                </div>`;
+        }
+        if (isHalfDayLeave || status === 'HL' || status === 'H') {
+            let halfText = half ? String(half) : '';
+            if (!halfText && leaveType) {
+                const lt = String(leaveType).toLowerCase();
+                if (lt.includes('casual')) halfText = 'CL';
+                else if (lt.includes('sick')) halfText = 'SL';
+                else if (lt.includes('comp')) halfText = 'CO';
+            }
+            const extraParts = [];
+            if (halfText) extraParts.push(halfText);
+            const isPaidLeave = String(compensationType || '').toLowerCase() === 'paid';
+            if (leaveType && !isPaidLeave) extraParts.push('(LOP)');
+            if (EOP) extraParts.push('(EOP)');
+            const leaveTooltip = leaveType
+                ? `${leaveType} – Half Day (${isPaidLeave ? 'Paid' : 'Unpaid'})${leaveStart ? ` | ${leaveStart}` : ''}`
+                : 'Half day';
+            const extraLine = extraParts.length
+                ? `<div class="status-hl-half">${extraParts.join(' ')}</div>`
+                : '';
+            content = `<div class="status-hl-text" title="${leaveTooltip}">HL</div>${extraLine}`;
+        } else if (EOP) {
+            content = `${status} (EOP)`;
+        }
+
+        const pendingOverlay = pendingLeaves.length
+            ? `
+                <div class="pending-leave-overlay" title="${pendingLeaves.map(pl => `${pl.leaveType || 'Leave'} (${pl.status || 'Pending'}) ${pl.start || ''}${pl.end ? ` → ${pl.end}` : ''}`).join('\n')}">
+                    <span class="pending-label">Pending</span>
+                    <div class="pending-dates">
+                        ${pendingLeaves.map(pl => `
+                            <span class="pending-chip">${(pl.leaveType || '').split(' ')[0] || 'Leave'}</span>
+                        `).join('')}
+                    </div>
+                </div>
+            `
+            : '';
+
+        const shiftStart = dayData.shiftStart || dayData._shiftStart || '09:00';
+        const graceMin = dayData.graceMinutes || dayData._graceMinutes || 15;
+        const showLate = !!isLate || (
+            dayData.checkIn
+                ? computeIsLateForShift(dayData.checkIn, shiftStart, graceMin)
+                : false
+        );
+
+        const statusIcons = [
+            showLate ? '<i class="fa-solid fa-clock-rotate-left late-icon" title="Late entry"></i>' : '',
+            isManual ? '<i class="fa-solid fa-users manual-icon" title="Manually edited by admin"></i>' : '',
+            isPending ? '<i class="fa-solid fa-triangle-exclamation pending-icon" title="Pending"></i>' : ''
+        ].filter(Boolean).join('');
+
+        return `
+            <div class="status-cell status-${normalizedStatus.toLowerCase()}">
+                ${content}
+                ${pendingOverlay}
+                ${statusIcons ? `<div class="status-icons">${statusIcons}</div>` : ''}
+            </div>
+        `;
+    }
+
+    const daysInMonth = new Date(year, date.getMonth() + 1, 0).getDate();
+
+    const getTeamViewHTML = () => {
+        const daysHeader = Array.from({ length: daysInMonth }, (_, i) => {
+            const day = i + 1;
+            const dayName = new Date(year, date.getMonth(), day).toLocaleString('default', { weekday: 'short' }).toUpperCase();
+            return `<th class="attendance-day-header"><div class="day-name">${dayName}</div><div class="day-number">${String(day).padStart(2, '0')}</div></th>`;
+        }).join('');
+
+        // Get all employee IDs from the attendance data
+        const employeeIds = Object.keys(state.attendanceData);
+        const normalizedMeta = employeeIds.reduce((acc, id) => {
+            const entryName = state.attendanceData[id]?.employeeName;
+            if (entryName) acc[id] = entryName;
+            return acc;
+        }, {});
+        console.log('📊 Rendering team attendance for employees:', employeeIds);
+
+        // Calculate stats from all attendance data for the entire month
+        let totalPresent = 0;
+        let totalLate = 0;
+        let totalLeaves = 0;
+        let totalAbsent = 0;
+
+        employeeIds.forEach(empId => {
+            const empData = state.attendanceData[empId] || {};
+            const workWeek = normalizeWorkWeek(empData.workWeek || 'mon-sat');
+            for (let day = 1; day <= daysInMonth; day++) {
+                if (isWeeklyOffDate(year, date.getMonth(), day, workWeek)) continue;
+                const dayData = empData[day];
+                if (dayData) {
+                    if (dayData.leaveType) {
+                        totalLeaves++;
+                    } else if (dayData.status === 'P') {
+                        totalPresent++;
+                        if (dayData.isLate) totalLate++;
+                    } else if (dayData.status === 'A') {
+                        totalAbsent++;
+                    }
+                }
+            }
+        });
+
+        // Generate rows for each employee
+        const employeeRows = employeeIds.map(empId => {
+            const empData = state.attendanceData[empId] || {};
+            const employeeName =
+                normalizedMeta[empId] ||
+                empData.employeeName ||
+                empId;
+            const workWeek = normalizeWorkWeek(empData.workWeek || 'mon-sat');
+
+            // Get initials for avatar
+            const nameParts = employeeName.split(' ');

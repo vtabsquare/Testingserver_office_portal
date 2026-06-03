@@ -1,0 +1,31 @@
+import sys
+import os
+from dotenv import load_dotenv
+
+load_dotenv('backend/id.env')
+
+sys.path.append('backend')
+import unified_server
+
+token = unified_server.get_access_token()
+headers = {
+    'Authorization': f'Bearer {token}', 
+    'Accept': 'application/json', 
+    'OData-MaxVersion': '4.0', 
+    'OData-Version': '4.0'
+}
+sess = unified_server.get_dataverse_session()
+emp = 'EMP015'
+dt = '2026-05-29'
+
+q1 = f"{unified_server.BASE_URL}/{unified_server.LOGIN_ACTIVITY_ENTITY}?$filter=crc6f_employeeid eq '{emp}' and crc6f_date eq '{dt}'"
+r1 = sess.get(q1, headers=headers)
+print("Login Activity:")
+for x in r1.json().get('value', []):
+    print(f"ID: {x['crc6f_hr_loginactivitytbid']} | CheckIn: {x.get('crc6f_checkintime')} | CheckOut: {x.get('crc6f_checkouttime')} | BaseSecs: {x.get('crc6f_base_seconds_worked')}")
+
+q2 = f"{unified_server.BASE_URL}/{unified_server.ATTENDANCE_ENTITY}?$filter=crc6f_employeeid eq '{emp}' and crc6f_date eq '{dt}'"
+r2 = sess.get(q2, headers=headers)
+print("\nAttendance:")
+for x in r2.json().get('value', []):
+    print(f"ID: {x.get('crc6f_table13id') or x.get('cr6f_table13id')} | CheckIn: {x.get('crc6f_check_in_time')} | CheckOut: {x.get('crc6f_check_out_time')} | Duration: {x.get('crc6f_duration')}")

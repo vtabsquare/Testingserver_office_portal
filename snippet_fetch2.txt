@@ -1,0 +1,80 @@
+export const renderTeamAttendancePage = async () => {
+    // Check if user has access
+    if (!canViewTeamAttendance()) {
+        console.warn('⚠️ Access denied: Only administrators, managers, and team leads can view team attendance');
+        document.getElementById('app-content').innerHTML = `
+            <div class="card access-denied-card">
+                <i class="fa-solid fa-lock access-denied-icon"></i>
+                <h2>Access Denied</h2>
+                <p>You don't have permission to view team attendance.</p>
+                <p>Only administrators, managers, and team leads can access this page.</p>
+                <button class="btn btn-primary" onclick="window.location.hash='#/attendance-my'" style="margin-top: 16px;">
+                    <i class="fa-solid fa-arrow-left"></i> Go to My Attendance
+                </button>
+            </div>
+        `;
+        return;
+    }
+
+    // Skeleton for team attendance while logs are loading
+    try {
+        const date = state.currentAttendanceDate;
+        const monthLabel = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+        const skeleton = `
+            <div class="card" style="padding: 16px 20px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1rem;">
+                    <div>
+                        <div class="skeleton skeleton-heading-md" style="width: 220px;"></div>
+                        <div class="skeleton skeleton-text" style="margin-top: 0.4rem; width: 200px;"></div>
+                    </div>
+                    <div class="skeleton skeleton-pill" style="width: 180px; height: 32px;"></div>
+                </div>
+                <div class="skeleton skeleton-chart-line"></div>
+            </div>
+        `;
+        const app = document.getElementById('app-content');
+        if (app) app.innerHTML = skeleton;
+    } catch { }
+
+    const date = state.currentAttendanceDate;
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1;
+
+    // Get current user's employee ID
+    const currentEmpId = String(state.user?.id || '').toUpperCase();
+    console.log('🔍 Current employee ID for team attendance:', currentEmpId);
+
+    // For emp001 (admin), fetch all employees from Dataverse
+    // For other employees, use the filtered list as before
+    let employeesToFetch = [];
+    const employeeMeta = {};
+    let shiftRes = { defaults: { work_week: 'mon-sat' }, by_employee: {} };
+
+    try {
+        // Load holidays for the current month
+        const allHolidays = await getHolidays();
+        currentMonthHolidays = allHolidays.filter(h => {
+            const hDate = new Date(h.crc6f_date);
+            return hDate.getFullYear() === year && hDate.getMonth() + 1 === month;
+        });
+        console.log(`📅 Loaded ${currentMonthHolidays.length} holidays for ${year}-${month}`);
+
+        // Load shift settings once (so DO logic works even on empty months)
+        shiftRes = await fetchShiftSettings().catch(() => ({ defaults: { work_week: 'mon-sat' }, by_employee: {} }));
+
+        // Admin always sees all employees
+        console.log('✅ Admin user detected. Fetching attendance for ALL employees from Dataverse');
+        // Import the listEmployees function if not already imported
+        const { listEmployees } = await import('../features/employeeApi.js');
+        const allEmployees = await listEmployees(1, 5000);
+        const employeeIds = (allEmployees.items || []).map(emp => {
+            const empId = String(emp.employee_id || emp.id || '').toUpperCase();
+            if (empId) {
+                employeeMeta[empId] = {
+                    name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || emp.name || empId,
+                    employeeFlag: emp.employee_flag || emp.employeeFlag || emp.crc6f_employeeflag || 'Employee'
+                };
+            }
+            return empId;
+        }).filter(Boolean);
+

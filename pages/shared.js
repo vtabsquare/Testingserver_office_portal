@@ -3065,7 +3065,10 @@ export const renderInboxPage = async () => {
     const isAdmin = isAdminUser();
     const canViewTeamQueues = isManagerOrAdmin();
     const showAwaitingTab = canViewTeamQueues;
-    console.log('👤 User is admin:', isAdmin, '| can view team queues:', canViewTeamQueues);
+    
+    inboxActionMode = isAdmin;
+    
+    console.log('👤 User is admin:', isAdmin, '| can view team queues:', canViewTeamQueues, '| action mode:', inboxActionMode);
 
     // Initial static content
     const modeBadgeHtml = inboxActionMode ? 

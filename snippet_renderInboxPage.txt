@@ -1,0 +1,35 @@
+export const renderInboxPage = async () => {
+    console.log('📥 Rendering Inbox Page...');
+
+    const navSeqAtStart = (() => {
+        try { return window.__activeRouteNavSeq; } catch { return null; }
+    })();
+    const isStillOnInboxRoute = () => {
+        try {
+            if (navSeqAtStart && window.__activeRouteNavSeq && navSeqAtStart !== window.__activeRouteNavSeq) return false;
+        } catch {}
+        try {
+            const full = window.location.hash.slice(1) || '/';
+            const path = full.split('?')[0] || '/';
+            return path === '/inbox';
+        } catch {
+            return false;
+        }
+    };
+
+    const isAdmin = isAdminUser();
+    const canViewTeamQueues = isManagerOrAdmin();
+    const showAwaitingTab = canViewTeamQueues;
+    console.log('👤 User is admin:', isAdmin, '| can view team queues:', canViewTeamQueues);
+
+    // Initial static content
+    const modeBadgeHtml = inboxActionMode ? 
+        '<span style="padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #d1fae5; color: #065f46;"><i class="fa-solid fa-gavel"></i> Action Mode</span>' : 
+        '<span style="padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #dbeafe; color: #1e3a8a;"><i class="fa-solid fa-eye"></i> View Only</span>';
+
+    const content = `
+    <div class="inbox-container" style="position: relative;">
+        <div style="position:absolute; top: -35px; right: 20px; z-index: 10;">
+            ${modeBadgeHtml}
+        </div>
+        <div class="inbox-sidebar">
