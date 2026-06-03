@@ -32,6 +32,38 @@ export function formatCheckInFromTimestamp(ms) {
   return `${hh}:${mm}:${ss}`;
 }
 
+/** Format stored duration hours as "09h 07m". */
+export function formatDurationHours(hours, fallback = '--') {
+  const h = Number(hours);
+  if (!Number.isFinite(h) || h < 0) return fallback;
+  const totalMins = Math.round(h * 60);
+  const hrs = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+  return `${String(hrs).padStart(2, '0')}h ${String(mins).padStart(2, '0')}m`;
+}
+
+/** Format attendance First In / Last Out for display (IST from API, or ISO → local). */
+export function formatAttendanceDisplayTime(value, fallback = '--:--:--') {
+  if (!value) return fallback;
+  const trimmed = String(value).trim();
+  if (!trimmed) return fallback;
+  if (trimmed.includes('T') || /^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    let v = trimmed;
+    const hasTZ = /Z$|[+-]\d{2}:?\d{2}$/.test(trimmed);
+    if (!hasTZ && /^\d{4}-\d{2}-\d{2}[T ]/.test(trimmed)) {
+      v = trimmed.replace(' ', 'T') + 'Z';
+    }
+    const parsed = new Date(v);
+    if (Number.isNaN(parsed.getTime())) return fallback;
+    return parsed.toTimeString().split(' ')[0].substring(0, 8);
+  }
+  // HH:MM(:SS) from monthly API — already normalized to business timezone (IST).
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
+    return trimmed.length === 5 ? `${trimmed}:00` : trimmed;
+  }
+  return fallback;
+}
+
 /** Pick the later of two HH:MM(:SS) strings (same calendar day). */
 export function maxCheckInTime(a, b) {
   if (!a) return b || null;
@@ -44,6 +76,20 @@ export function maxCheckInTime(a, b) {
     return hh * 60 + mm;
   };
   return toMin(a) >= toMin(b) ? a : b;
+}
+
+/** Pick the earlier of two HH:MM(:SS) strings (same calendar day) — used for First In. */
+export function minCheckInTime(a, b) {
+  if (!a) return b || null;
+  if (!b) return a || null;
+  const toMin = (t) => {
+    const parts = String(t).trim().split(':');
+    const hh = Number(parts[0]);
+    const mm = Number(parts[1] ?? 0);
+    if (!Number.isInteger(hh) || !Number.isInteger(mm)) return -1;
+    return hh * 60 + mm;
+  };
+  return toMin(a) <= toMin(b) ? a : b;
 }
 
 const parseTimeToMinutes = (timeValue) => {

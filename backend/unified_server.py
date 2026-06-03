@@ -1323,7 +1323,23 @@ def _checkin_time_from_record(record):
     # Fall back to the stored time string
     return _format_login_checkin_time(record.get(LA_FIELD_CHECKIN_TIME))
 
-def _format_login_checkin_time(first_checkin):
+def _finalize_checkout_display(checkin_str, checkout_str):
+    """Fix legacy rows where UTC midnight auto-close displays as 05:30 IST."""
+    if not checkout_str:
+        return checkout_str
+    if not checkin_str:
+        return checkout_str
+    try:
+        ci = _time_to_minutes(_normalize_shift_time(checkin_str, "00:00"))
+        co = _time_to_minutes(_normalize_shift_time(checkout_str, "00:00"))
+        if co < ci and checkout_str.startswith("05:30"):
+            return "00:00:00"
+    except Exception:
+        pass
+    return checkout_str
+
+def _format_login_checkin_time(first_checkin, date_str=None, field_role="checkin"):
+    """Normalize check-in/out to HH:MM:SS in business timezone (IST)."""
     if not first_checkin:
         return None
     raw = str(first_checkin).strip()
@@ -1332,12 +1348,40 @@ def _format_login_checkin_time(first_checkin):
     try:
         if "T" in raw:
             parsed_in = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            if parsed_in.tzinfo is not None:
-                parsed_in = parsed_in.astimezone(_attendance_business_tz())
+            if parsed_in.tzinfo is None:
+                parsed_in = parsed_in.replace(tzinfo=timezone.utc)
+            # Legacy auto-close stored as UTC calendar midnight → 05:30 IST (wrong).
+            if field_role == "checkout":
+                utc_wall = parsed_in.astimezone(timezone.utc)
+                if utc_wall.hour == 0 and utc_wall.minute == 0 and utc_wall.second == 0:
+                    return "00:00:00"
+            parsed_in = parsed_in.astimezone(_attendance_business_tz())
             return parsed_in.strftime("%H:%M:%S")
+        # Legacy time-only (HH:MM:SS)
+        if re.match(r"^\d{2}:\d{2}(:\d{2})?$", raw):
+            parts = raw.split(":")
+            hh, mm = int(parts[0]), int(parts[1])
+            ss = int(parts[2]) if len(parts) > 2 else 0
+            # Midnight IST auto-close was stored as 00:00:00 local — do not treat as UTC.
+            if field_role == "checkout" and hh == 0 and mm == 0 and ss == 0:
+                return "00:00:00"
+            # Legacy check-in / manual times were stored as UTC wall clock.
+            day = date.fromisoformat(str(date_str)[:10]) if date_str else datetime.now(timezone.utc).date()
+            dt_utc = datetime(day.year, day.month, day.day, hh, mm, ss, tzinfo=timezone.utc)
+            return dt_utc.astimezone(_attendance_business_tz()).strftime("%H:%M:%S")
         return raw[:8] if len(raw) > 8 else raw
     except Exception:
         return _normalize_shift_time(raw, None) or raw
+
+def _checkout_time_from_record(record):
+    """IST check-out time from login-activity (epoch preferred)."""
+    if not record or not isinstance(record, dict):
+        return None
+    epoch_time = _checkin_time_from_epoch(record.get(LA_FIELD_CHECKOUT_TS))
+    if epoch_time:
+        return epoch_time
+    date_str = str(record.get(LA_FIELD_DATE) or "")[:10] or None
+    return _format_login_checkin_time(record.get(LA_FIELD_CHECKOUT_TIME), date_str, field_role="checkout")
 
 def _latest_checkin_from_day_records(day_records):
     """Latest check-in on a calendar day (multiple sessions)."""
@@ -1491,47 +1535,37 @@ def _min_checkin_time_str(*candidates):
 
 def _primary_checkin_for_late(date_str, actual_checkin, day_records, normalized_emp_id, attendance_checkin=None):
     """
-    Determine the primary check-in time for late logic.
-    Prioritizes actual_checkin (epoch-derived from login_activity).
-    If missing, checks active sessions or attendance_checkin.
+    Earliest check-in of the calendar day (First In) for display and late logic.
+    Compares attendance table, login-activity rows, and any precomputed value.
     """
-    # 1. If we have actual_checkin (from epoch), we trust it completely.
-    # We do NOT want to compare it with attendance_checkin because attendance_checkin
-    # might be a bugged UTC string (e.g. 10:53 vs 16:23).
-    if actual_checkin:
-        return actual_checkin
-
     candidates = []
-    
-    # 2. Fetch manual attendance record if no login activity and not provided
+
+    if actual_checkin:
+        formatted = _format_login_checkin_time(actual_checkin, date_str)
+        if formatted:
+            candidates.append(formatted)
+
     if attendance_checkin is None:
         try:
             token = get_access_token()
             att_rec = _fetch_attendance_for_date(token, normalized_emp_id, date_str)
             if att_rec and att_rec.get(FIELD_CHECKIN):
-                attendance_checkin = _format_login_checkin_time(att_rec.get(FIELD_CHECKIN))
+                attendance_checkin = att_rec.get(FIELD_CHECKIN)
         except Exception:
             pass
 
     if attendance_checkin:
-        candidates.append(attendance_checkin)
-        
-    try:
-        biz_today = datetime.now(_attendance_business_tz()).date().isoformat()
-        if date_str == biz_today:
-            live_ci = _live_session_checkin_for_date(normalized_emp_id, date_str)
-            if live_ci:
-                candidates.append(live_ci)
-    except Exception:
-        pass
-        
+        formatted = _format_login_checkin_time(attendance_checkin, date_str)
+        if formatted:
+            candidates.append(formatted)
+
     first = _first_checkin_from_day_records(day_records)
     if first:
         candidates.append(first)
-        
+
     if candidates:
         return _min_checkin_time_str(*candidates)
-        
+
     return None
 
 def _apply_late_flags_from_login_activity(formatted_records, login_activity_by_date, shift_info, normalized_emp_id):
@@ -1552,16 +1586,13 @@ def _apply_late_flags_from_login_activity(formatted_records, login_activity_by_d
             day_num = int(str(date_str).split("-")[2])
         except Exception:
             continue
-        actual = _checkin_time_from_record(day_records[0])
-        if not actual:
-            continue
         rec = by_day.get(day_num)
         if not rec:
             continue
-        if actual:
-            rec["checkIn"] = actual
         day_rows = login_activity_by_date.get(date_str, [])
-        checkin_for_late = _primary_checkin_for_late(date_str, actual or rec.get("checkIn"), day_rows, normalized_emp_id)
+        checkin_for_late = _primary_checkin_for_late(
+            date_str, rec.get("checkIn"), day_rows, normalized_emp_id
+        )
         if checkin_for_late:
             rec["checkIn"] = checkin_for_late
         rec["isLate"] = _is_late_login_for_shift(checkin_for_late, shift_start, grace)
@@ -2326,7 +2357,7 @@ def _auto_close_stale_login_sessions(employee_id: str):
                 status = _classify_hours(hours_val, emp)
 
                 la_patch = {
-                    LA_FIELD_CHECKOUT_TIME: next_midnight_local.strftime("%H:%M:%S"),
+                    LA_FIELD_CHECKOUT_TIME: cutoff_utc.isoformat(),
                     LA_FIELD_CHECKOUT_TS: cutoff_ts,
                     LA_FIELD_TOTAL_SECONDS: total_seconds,
                 }
@@ -2341,7 +2372,7 @@ def _auto_close_stale_login_sessions(employee_id: str):
                         att_id = rec.get(FIELD_RECORD_ID) or rec.get("cr6f_table13id") or rec.get("id")
                         if att_id:
                             att_patch = {
-                                FIELD_CHECKOUT: next_midnight_local.strftime("%H:%M:%S"),
+                                FIELD_CHECKOUT: cutoff_utc.isoformat(),
                                 FIELD_DURATION: round(hours_val, 2),
                                 FIELD_DURATION_INTEXT: _format_duration_text_from_hours(hours_val),
                             }
@@ -6678,46 +6709,36 @@ def get_monthly_attendance(employee_id, year, month):
             duration_text_raw = r.get(FIELD_DURATION_INTEXT) or ""
             is_manual_override = "[MANUAL]" in str(duration_text_raw)
 
-            # Get actual first check-in and last check-out from login activity
-            actual_checkin = checkin
-            actual_checkout = checkout
-            
+            # First In / Last Out: attendance table is authoritative; merge with login activity.
+            actual_checkin = _format_login_checkin_time(checkin, date_str, field_role="checkin") if checkin else None
+            actual_checkout = _format_login_checkin_time(checkout, date_str, field_role="checkout") if checkout else None
+
             if (not is_manual_override) and date_str and date_str in login_activity_by_date:
                 try:
                     day_records = login_activity_by_date[date_str]
                     if day_records:
-                        # Get first check-in time
-                        first_checkin = day_records[0].get(LA_FIELD_CHECKIN_TIME)
-                        if first_checkin:
-                            # Parse and format time
-                            if 'T' in first_checkin:
-                                # ISO format
-                                parsed_in = datetime.fromisoformat(first_checkin.replace('Z', '+00:00'))
-                                if parsed_in.tzinfo is not None:
-                                    parsed_in = parsed_in.astimezone(_attendance_business_tz())
-                                actual_checkin = parsed_in.strftime('%H:%M:%S')
-                            else:
-                                # Time only format
-                                actual_checkin = first_checkin[:8] if len(first_checkin) > 8 else first_checkin
-                        
-                        # Get last check-out time
-                        last_checkout = day_records[-1].get(LA_FIELD_CHECKOUT_TIME)
+                        la_first = _first_checkin_from_day_records(day_records)
+                        if la_first:
+                            actual_checkin = _min_checkin_time_str(actual_checkin, la_first) or la_first
+
+                        last_checkout = None
+                        for row in reversed(day_records):
+                            last_checkout = _checkout_time_from_record(row)
+                            if last_checkout:
+                                break
                         if last_checkout:
-                            # Parse and format time
-                            if 'T' in last_checkout:
-                                # ISO format
-                                parsed_out = datetime.fromisoformat(last_checkout.replace('Z', '+00:00'))
-                                if parsed_out.tzinfo is not None:
-                                    parsed_out = parsed_out.astimezone(_attendance_business_tz())
-                                actual_checkout = parsed_out.strftime('%H:%M:%S')
-                            else:
-                                # Time only format
-                                actual_checkout = last_checkout[:8] if len(last_checkout) > 8 else last_checkout
-                        
+                            # Login-activity epoch is authoritative; do not max with
+                            # attendance strings that may be legacy UTC midnight (05:30 IST).
+                            actual_checkout = last_checkout
+                        actual_checkout = _finalize_checkout_display(actual_checkin, actual_checkout)
+
                         print(f"[DEBUG] {date_str}: First in={actual_checkin}, Last out={actual_checkout}")
                 except Exception as e:
                     print(f"[WARN] Failed to process login activity for {date_str}: {e}")
-            
+
+            if actual_checkout:
+                actual_checkout = _finalize_checkout_display(actual_checkin, actual_checkout)
+
             try:
                 duration_hours = float(duration_str)
             except ValueError:
@@ -16966,10 +16987,13 @@ def get_login_events():
                     "employee_id": emp_id,
                     "employee_name": emp_name_cache.get(emp_id, emp_id),
                     "date": dt,
-                    "check_in_time": rec.get(LA_FIELD_CHECKIN_TIME),
+                    "check_in_time": _checkin_time_from_record(rec) or _format_login_checkin_time(
+                        rec.get(LA_FIELD_CHECKIN_TIME), dt, field_role="checkin"
+                    ),
                     "check_in_location": rec.get(LA_FIELD_CHECKIN_LOCATION),
-                    "check_out_time": rec.get(LA_FIELD_CHECKOUT_TIME),
+                    "check_out_time": _checkout_time_from_record(rec),
                     "check_out_location": rec.get(LA_FIELD_CHECKOUT_LOCATION),
+                    "total_seconds": rec.get(LA_FIELD_TOTAL_SECONDS),
                     "record_id": rec.get(LOGIN_ACTIVITY_PRIMARY_FIELD),
                 })
 

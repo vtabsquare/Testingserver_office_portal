@@ -349,11 +349,36 @@ def upsert_login_activity(employee_id, date_str, payload):
                 existing = None
         
         if existing and existing.get(LA_PRIMARY_FIELD):
+            patch_payload = dict(payload or {})
+            reopening = False
+            try:
+                existing_checkout = existing.get(LA_FIELD_CHECKOUT_TIME) or existing.get(LA_FIELD_CHECKOUT_TS)
+                clearing_checkout = (
+                    (LA_FIELD_CHECKOUT_TIME in patch_payload and patch_payload.get(LA_FIELD_CHECKOUT_TIME) is None)
+                    or (LA_FIELD_CHECKOUT_TS in patch_payload and patch_payload.get(LA_FIELD_CHECKOUT_TS) is None)
+                )
+                reopening = bool(existing_checkout and clearing_checkout)
+            except Exception:
+                reopening = False
+
+            # Preserve earliest check-in TIME for the day (First In). Session start uses CHECKIN_TS.
+            if (not reopening) and LA_FIELD_CHECKIN_TIME in patch_payload:
+                if existing.get(LA_FIELD_CHECKIN_TIME):
+                    patch_payload.pop(LA_FIELD_CHECKIN_TIME, None)
+
+            if LA_FIELD_BASE_SECONDS in patch_payload:
+                try:
+                    existing_base = int(float(existing.get(LA_FIELD_BASE_SECONDS) or 0))
+                    incoming_base = int(float(patch_payload.get(LA_FIELD_BASE_SECONDS) or 0))
+                    patch_payload[LA_FIELD_BASE_SECONDS] = int(max(existing_base, incoming_base))
+                except Exception:
+                    pass
+
             # Update existing record for today
             record_id = existing.get(LA_PRIMARY_FIELD)
             url = f"{_get_base_url()}/{LOGIN_ACTIVITY_ENTITY}({record_id})"
             print(f"[ATTENDANCE-V2] upsert PATCH {record_id} for {date_str}")
-            resp = s.patch(url, headers=headers, json=payload, timeout=15)
+            resp = s.patch(url, headers=headers, json=patch_payload, timeout=15)
             return resp.status_code < 400
         else:
             # Create new record for today
@@ -638,7 +663,7 @@ def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
 
                 # Login activity close at local midnight.
                 la_patch = {
-                    LA_FIELD_CHECKOUT_TIME: next_midnight_local.strftime("%H:%M:%S"),
+                    LA_FIELD_CHECKOUT_TIME: cutoff_utc.isoformat(),
                     LA_FIELD_CHECKOUT_TS: cutoff_ts,
                     LA_FIELD_TOTAL_SECONDS: total_seconds,
                 }
@@ -653,7 +678,7 @@ def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
                     record_id = existing_att.get(FIELD_RECORD_ID) or existing_att.get("crc6f_table13id")
                     if record_id:
                         update_payload = {
-                            FIELD_CHECKOUT: next_midnight_local.strftime("%H:%M:%S"),
+                            FIELD_CHECKOUT: cutoff_utc.isoformat(),
                             FIELD_DURATION: str(hours),
                             FIELD_DURATION_INTEXT: duration_text,
                         }
@@ -709,7 +734,8 @@ def checkin_v2():
         
         # SERVER TIME IS TRUTH
         now_utc = get_server_now_utc()
-        checkin_time = now_utc.strftime("%H:%M:%S")
+        # Store full UTC timestamp in DB (TIMESTAMPTZ columns). UI can localize.
+        checkin_time = now_utc.isoformat()
         checkin_ts = int(now_utc.timestamp())
         
         # Use client's timezone to determine "today" (handles midnight correctly)
@@ -860,7 +886,8 @@ def perform_checkout_v2(employee_id, tz_name="Asia/Calcutta", location=None):
         return {"success": False, "error": "MISSING_EMPLOYEE_ID"}
 
     now_utc = get_server_now_utc()
-    checkout_time = now_utc.strftime("%H:%M:%S")
+    # Store full UTC timestamp in DB (TIMESTAMPTZ columns). UI can localize.
+    checkout_time = now_utc.isoformat()
     checkout_ts = int(now_utc.timestamp())
 
     try:
