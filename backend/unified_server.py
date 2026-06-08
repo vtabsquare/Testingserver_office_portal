@@ -6706,8 +6706,18 @@ def get_monthly_attendance(employee_id, year, month):
             checkout = r.get(FIELD_CHECKOUT)
             duration_str = r.get(FIELD_DURATION) or "0"
             
-            duration_text_raw = r.get(FIELD_DURATION_INTEXT) or ""
-            is_manual_override = "[MANUAL]" in str(duration_text_raw)
+            duration_text_raw = str(r.get(FIELD_DURATION_INTEXT) or "")
+            is_manual_override = "[MANUAL" in duration_text_raw
+            # New marker format encodes the chosen status, e.g. "[MANUAL:HL]".
+            manual_status_override = None
+            if "[MANUAL:" in duration_text_raw:
+                try:
+                    seg = duration_text_raw.split("[MANUAL:", 1)[1]
+                    manual_status_override = seg.split("]", 1)[0].strip().upper()
+                    if manual_status_override == "H":
+                        manual_status_override = "HL"
+                except Exception:
+                    manual_status_override = None
 
             # First In / Last Out: attendance table is authoritative; merge with login activity.
             actual_checkin = _format_login_checkin_time(checkin, date_str, field_role="checkin") if checkin else None
@@ -6754,17 +6764,20 @@ def get_monthly_attendance(employee_id, year, month):
             effective_hours = live_hours if live_hours > duration_hours else duration_hours
             live_augmented = effective_hours > duration_hours
             
-            # Prefer persisted manual/status field; fallback to hour-based classification
+            # Prefer an explicit manual status override (encoded in the [MANUAL:XX]
+            # marker), then a persisted status field, then hour-based classification.
             persisted_status = (r.get(FIELD_STATUS) or "").strip().upper() if FIELD_STATUS else ""
             if persisted_status == "H":
                 persisted_status = "HL"
-            if persisted_status in ("P", "HL", "H", "A"):
+            if manual_status_override in ("P", "HL", "A"):
+                status = manual_status_override
+            elif persisted_status in ("P", "HL", "H", "A"):
                 status = persisted_status
             else:
                 effective_seconds = max(0, int(round(effective_hours * 3600)))
                 status = _classify_hours(effective_hours, normalized_emp_id)
             
-            if date_str in holidays_set and not actual_checkin:
+            if date_str in holidays_set and not actual_checkin and not manual_status_override:
                 status = "INL"
             
             # Extract day number for frontend mapping
@@ -6888,6 +6901,13 @@ def get_monthly_attendance(employee_id, year, month):
                             formatted_records.append(rec)
                             by_day[day_idx] = rec
                         if status_raw == "approved":
+                            # Manual attendance edits fully take precedence over the leave
+                            # overlay (status AND leave metadata) so an admin's manual change
+                            # is reflected in the UI instead of being masked by the leave.
+                            if rec.get("isManual"):
+                                print(f"[ATT_EDIT] Day {day_idx}: manual override present, skipping leave overlay (preserving status '{rec.get('status')}')")
+                                cur = cur + timedelta(days=1)
+                                continue
                             # Overlay leave fields; approved leaves affect status/metrics
                             rec["leaveType"] = lt_raw
                             rec["paid_unpaid"] = paid_unpaid
@@ -6999,58 +7019,74 @@ def manual_edit_attendance():
 
         safe_emp = normalized_emp_id.replace("'", "''")
         safe_date = date_str
-        filter_q = (
-            f"?$top=1&$filter={FIELD_EMPLOYEE_ID} eq '{safe_emp}' and {FIELD_DATE} eq '{safe_date}'"
-        )
-        url = f"{RESOURCE}/api/data/v9.2/{ATTENDANCE_ENTITY}{filter_q}"
-        print(f"[ATT_EDIT] Searching for existing record: {url}")
-        resp = get_dataverse_session().get(url, headers=headers, timeout=15)
-        record_id = None
-        values = []
-        if resp.status_code == 200:
-            values = resp.json().get("value", [])
-            print(f"[ATT_EDIT] Found {len(values)} existing records for {safe_emp} on {safe_date}")
-        else:
-            print(f"[ATT_EDIT] Dataverse search failed: {resp.status_code} - {resp.text[:200]}")
 
-        # Fallback for DateTime columns where eq 'YYYY-MM-DD' may not match
-        if not values:
+        def _extract_record_id(row):
+            return row.get(FIELD_RECORD_ID) or row.get("crc6f_table13id") or row.get("id")
+
+        # Collect ALL existing rows for this employee+date so duplicate rows can't
+        # keep showing the old status after the edit. Use both an exact-date match
+        # and a [start, next-day) range match (handles date vs datetime columns),
+        # then de-duplicate by primary key.
+        record = None
+        found_rows = []
+        seen_ids = set()
+
+        def _collect(url, label):
             try:
-                d0 = datetime.strptime(date_str, "%Y-%m-%d")
-                d1 = d0 + timedelta(days=1)
-                start_iso = d0.strftime("%Y-%m-%dT00:00:00Z")
-                end_iso = d1.strftime("%Y-%m-%dT00:00:00Z")
-                filter_q2 = (
-                    f"?$top=1&$filter={FIELD_EMPLOYEE_ID} eq '{safe_emp}' and "
-                    f"{FIELD_DATE} ge '{start_iso}' and {FIELD_DATE} lt '{end_iso}'"
-                )
-                url2 = f"{RESOURCE}/api/data/v9.2/{ATTENDANCE_ENTITY}{filter_q2}"
-                print(f"[ATT_EDIT] DateTime fallback search: {url2}")
-                resp2 = get_dataverse_session().get(url2, headers=headers, timeout=15)
-                if resp2.status_code == 200:
-                    values = resp2.json().get("value", [])
-                    print(f"[ATT_EDIT] DateTime fallback found {len(values)} records")
-            except Exception as dt_err:
-                print(f"[ATT_EDIT] DateTime fallback failed: {dt_err}")
+                r = get_dataverse_session().get(url, headers=headers, timeout=15)
+                if r.status_code == 200:
+                    rows = r.json().get("value", [])
+                    print(f"[ATT_EDIT] {label} found {len(rows)} rows")
+                    for row in rows:
+                        rid = _extract_record_id(row)
+                        if rid and rid not in seen_ids:
+                            seen_ids.add(rid)
+                            found_rows.append(row)
+                else:
+                    print(f"[ATT_EDIT] {label} failed: {r.status_code} - {r.text[:200]}")
+            except Exception as exc:
+                print(f"[ATT_EDIT] {label} error: {exc}")
 
-        if values:
-            row = values[0]
-            record_id = row.get(FIELD_RECORD_ID) or row.get("crc6f_table13id") or row.get("id")
-            print(f"[ATT_EDIT] Using existing record_id: {record_id}")
+        exact_q = f"?$filter={FIELD_EMPLOYEE_ID} eq '{safe_emp}' and {FIELD_DATE} eq '{safe_date}'"
+        _collect(f"{RESOURCE}/api/data/v9.2/{ATTENDANCE_ENTITY}{exact_q}", "Exact-date search")
+
+        try:
+            d0 = datetime.strptime(date_str, "%Y-%m-%d")
+            d1 = d0 + timedelta(days=1)
+            start_iso = d0.strftime("%Y-%m-%dT00:00:00Z")
+            end_iso = d1.strftime("%Y-%m-%dT00:00:00Z")
+            range_q = (
+                f"?$filter={FIELD_EMPLOYEE_ID} eq '{safe_emp}' and "
+                f"{FIELD_DATE} ge '{start_iso}' and {FIELD_DATE} lt '{end_iso}'"
+            )
+            _collect(f"{RESOURCE}/api/data/v9.2/{ATTENDANCE_ENTITY}{range_q}", "Range-date search")
+        except Exception as dt_err:
+            print(f"[ATT_EDIT] Range search build failed: {dt_err}")
+
+        record_id = _extract_record_id(found_rows[0]) if found_rows else None
+        print(f"[ATT_EDIT] {len(found_rows)} existing row(s) for {safe_emp} on {safe_date}; primary record_id={record_id}")
 
         payload = {
             FIELD_DURATION: float(int(duration_hours)),
-            FIELD_DURATION_INTEXT: f"{int(duration_hours)} hour(s) 0 minute(s) [MANUAL]",
+            # Encode the explicit chosen status in the marker so the read path uses it
+            # directly instead of re-deriving from hours (which breaks for non-standard
+            # shifts, e.g. a 5h shift would classify a 5h half-day as Present).
+            FIELD_DURATION_INTEXT: f"{int(duration_hours)} hour(s) 0 minute(s) [MANUAL:{canonical_code}]",
             FIELD_CHECKIN: checkin_val,
             FIELD_CHECKOUT: checkout_val,
         }
         if FIELD_STATUS:
             payload[FIELD_STATUS] = canonical_code
 
-        if record_id:
-            print(f"[ATT_EDIT] Updating record {record_id} with payload: {payload}")
-            update_record(ATTENDANCE_ENTITY, record_id, payload)
-            print(f"[ATT_EDIT] Successfully updated record {record_id}")
+        if found_rows:
+            # Update every matching row so any duplicates are kept consistent.
+            for row in found_rows:
+                rid = _extract_record_id(row)
+                if not rid:
+                    continue
+                print(f"[ATT_EDIT] Updating record {rid} with payload: {payload}")
+                update_record(ATTENDANCE_ENTITY, rid, payload)
+                print(f"[ATT_EDIT] Successfully updated record {rid}")
         else:
             new_att_id = generate_random_attendance_id()
             create_payload = {
@@ -7058,7 +7094,7 @@ def manual_edit_attendance():
                 FIELD_DATE: date_str,
                 FIELD_ATTENDANCE_ID_CUSTOM: new_att_id,
                 FIELD_DURATION: float(int(duration_hours)),
-                FIELD_DURATION_INTEXT: f"{int(duration_hours)} hour(s) 0 minute(s) [MANUAL]",
+                FIELD_DURATION_INTEXT: f"{int(duration_hours)} hour(s) 0 minute(s) [MANUAL:{canonical_code}]",
             }
             if FIELD_STATUS:
                 create_payload[FIELD_STATUS] = canonical_code

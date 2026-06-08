@@ -111,12 +111,26 @@ export const renderAttendanceTrackerPage = async (mode) => {
     const year = date.getFullYear();
 
     const getStatusCellHTML = (dayData, isHoliday = false, isWeeklyOff = false) => {
-        if (!dayData) {
-            if (isWeeklyOff) {
+        // A weekly-off day (Saturday for mon-fri employees, Sundays for everyone)
+        // should show DO unless the employee actually has activity that day
+        // (a real check-in, an approved/pending leave, or a present/half status).
+        // This keeps "existing behaviour" for those who do work, while reliably
+        // showing DO for those who don't — even if a stray empty/absent record exists.
+        if (isWeeklyOff) {
+            const dayStatus = String(dayData?.status || '').toUpperCase();
+            const hasRealActivity = !!dayData && (
+                !!dayData.checkIn ||
+                !!dayData.leaveType ||
+                (Array.isArray(dayData.pendingLeaves) && dayData.pendingLeaves.length > 0) ||
+                ['P', 'HL', 'H', 'CL', 'SL', 'CO'].includes(dayStatus)
+            );
+            if (!hasRealActivity) {
                 return `
                     <div class="status-cell status-do">DO</div>
                 `;
             }
+        }
+        if (!dayData) {
             // If it's a holiday but no attendance data, show INL
             if (isHoliday) {
                 return `
@@ -757,6 +771,8 @@ const openTeamAttendanceEditModal = (employeeId, day, year, monthIndex) => {
                             // Wipe entire attendance cache so every employee re-fetches
                             state.cache.attendance = {};
                         }
+                        // Clear state.attendanceData to force fresh fetch
+                        state.attendanceData = {};
                         clearCacheByPrefix('attendance_');
                     } catch (cacheErr) {
                         console.warn('Failed to clear attendance cache:', cacheErr);
