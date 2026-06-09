@@ -712,6 +712,23 @@ def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
         return {"closed": 0}
 
 
+
+import time as _time
+_STATUS_CACHE = {}
+_STATUS_CACHE_TTL = 30
+
+def _get_status_cache(emp_id):
+    entry = _STATUS_CACHE.get(emp_id)
+    if entry and (_time.monotonic() - entry[0]) < _STATUS_CACHE_TTL:
+        return entry[1]
+    return None
+
+def _set_status_cache(emp_id, data):
+    _STATUS_CACHE[emp_id] = (_time.monotonic(), data)
+
+def _invalidate_status_cache(emp_id):
+    _STATUS_CACHE.pop(emp_id, None)
+
 # ================== API ROUTES ==================
 
 @attendance_v2_bp.route('/checkin', methods=['POST'])
@@ -730,7 +747,7 @@ def checkin_v2():
             return jsonify({"success": False, "error": "MISSING_EMPLOYEE_ID"}), 400
 
         # Self-heal stale open sessions from previous local days.
-        _auto_close_stale_sessions(employee_id, tz_name)
+        #_auto_close_stale_sessions(employee_id, tz_name)
         
         # SERVER TIME IS TRUTH
         now_utc = get_server_now_utc()
@@ -1132,6 +1149,9 @@ def get_status_v2(employee_id):
     """
     try:
         employee_id = employee_id.strip().upper()
+        if (_c := _get_status_cache(employee_id)) is not None:
+            print(f"[STATUS-CACHE HIT] {employee_id}")
+            return jsonify(_c)
         tz_name = request.args.get('timezone', 'UTC')
         
         # SERVER TIME IS TRUTH
@@ -1148,7 +1168,7 @@ def get_status_v2(employee_id):
             today_date = now_utc.strftime("%Y-%m-%d")
 
         # Ensure forgotten checkouts from prior days are auto-closed at midnight.
-        _auto_close_stale_sessions(employee_id, tz_name)
+        #_auto_close_stale_sessions(employee_id, tz_name)
 
         username = (request.args.get("username") or "").strip().lower()
         if _apply_force_logout_checkout_if_needed(employee_id, tz_name, username):
@@ -1278,6 +1298,8 @@ def get_status_v2(employee_id):
         else:
             response["display"]["total_text"] = format_duration_text(total_seconds)
         
+        import copy
+        _set_status_cache(employee_id, copy.deepcopy(response))
         return jsonify(response)
         
     except Exception as e:
