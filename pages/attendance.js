@@ -14,6 +14,7 @@ import {
     minCheckInTime,
 } from '../features/shiftLate.js';
 import { runWithSubmissionLoading } from '../utils/submissionLoading.js';
+import { exportTeamPayrollCSV } from '../features/payrollAttendance.js';
 
 /** Set isLate from first check-in vs shift (independent of P/A/HL status). */
 const applyLateFlagsToAttendanceMap = (attendanceMap, employeeId, shiftRes) => {
@@ -634,6 +635,9 @@ export const renderAttendanceTrackerPage = async (mode) => {
                     <button class="btn btn-secondary" id="export-attendance-btn">
                         <i class="fa-solid fa-file-export"></i> Export CSV
                     </button>
+                    <button class="btn btn-primary" id="export-payroll-btn">
+                        <i class="fa-solid fa-file-invoice-dollar"></i> Export Payroll
+                    </button>
                 </div>
             `}
         </div>
@@ -686,6 +690,14 @@ export const renderAttendanceTrackerPage = async (mode) => {
     const exportBtn = document.getElementById('export-attendance-btn');
     if (exportBtn && mode === 'team') {
         exportBtn.addEventListener('click', () => exportTeamAttendanceToCSV(monthName, year));
+    }
+
+    // Set up payroll export button listener
+    const exportPayrollBtn = document.getElementById('export-payroll-btn');
+    if (exportPayrollBtn && mode === 'team') {
+        exportPayrollBtn.addEventListener('click', () => {
+            exportTeamPayrollCSV(state.attendanceData, year, date.getMonth(), currentMonthHolidays, monthName);
+        });
     }
 
     if (mode === 'team' && canEditTeamAttendance()) {
