@@ -5328,7 +5328,7 @@ def list_login_accounts():
                 "userStatus": r.get("crc6f_user_status") or "",
                 "userId": r.get("crc6f_userid") or "",
             })
-        return jsonify({"success": True, "items": items, "count": len(items)})
+        return jsonify({"success": True, "items": items})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -12929,9 +12929,27 @@ def get_attendance_submission_status(employee_id, year, month):
 
 # ... (rest of the code remains the same)
 
+
+import time as _sub_time
+_SUBMISSIONS_CACHE = {}
+_SUBMISSIONS_CACHE_TTL = 60  # 60 seconds
+
+def _get_submissions_cache(key):
+    entry = _SUBMISSIONS_CACHE.get(key)
+    if entry and (_sub_time.monotonic() - entry[0]) < _SUBMISSIONS_CACHE_TTL:
+        return entry[1]
+    return None
+
+def _set_submissions_cache(key, data):
+    _SUBMISSIONS_CACHE[key] = (_sub_time.monotonic(), data)
+
 @app.route('/api/attendance/submissions', methods=['GET'])
 def list_attendance_submissions():
     try:
+        _sub_cache_key = f"submissions_{request.args.get('status','')}_{request.args.get('employee_id','')}"
+        _sub_cached = _get_submissions_cache(_sub_cache_key)
+        if _sub_cached is not None:
+            return jsonify(_sub_cached)
         status_filter = (request.args.get('status') or '').strip().lower()  # pending|approved|rejected
         emp_id = (request.args.get('employee_id') or '').strip().upper()
         year = request.args.get('year')
@@ -12994,6 +13012,10 @@ def list_attendance_submissions():
             }
 
             # Enrich with monthly aggregates if we know year/month/employee
+            # Skip expensive enrichment for pending-only requests (inbox count)
+            if status_filter == "pending":
+                items.append(item_obj)
+                continue
             try:
                 emp_for_q = item_obj["employee_id"]
                 y, m = item_obj.get("year"), item_obj.get("month")

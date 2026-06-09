@@ -1068,7 +1068,7 @@ const startAuthPolicyPolling = () => {
   checkForceLogoutPolicyOnce();
   authPolicyPollTimer = setInterval(() => {
     checkForceLogoutPolicyOnce();
-  }, 10000);
+  }, 60000);  // Changed from 10s to 60s to reduce backend load
 };
 
 const getTodayIST = () => {

@@ -8,7 +8,7 @@ import { API_BASE_URL } from '../config.js';
 const BASE_URL = API_BASE_URL.replace(/\/$/, '');
 
 // ================== CONFIGURATION ==================
-const STATUS_REFRESH_INTERVAL_MS = 5000;  // Refresh status every 5 seconds during active session
+const STATUS_REFRESH_INTERVAL_MS = 30000;  // Changed from 5s to 30s to reduce backend load  // Refresh status every 5 seconds during active session
 const DISPLAY_UPDATE_INTERVAL_MS = 1000;  // Update display every 1 second (visual only)
 
 // Module state (NOT persisted, reset on page load)
