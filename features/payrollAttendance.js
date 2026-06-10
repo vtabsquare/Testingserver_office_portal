@@ -45,16 +45,49 @@ export function isHolidayOnDay(holidays, year, monthIndex, day) {
   });
 }
 
+const normalizeText = (value) => String(value ?? '').trim().toLowerCase();
+
+function hasUnpaidMarker(value) {
+  const text = normalizeText(value);
+  return text === 'false' ||
+    text === 'unpaid' ||
+    text === 'lop' ||
+    text.includes('unpaid') ||
+    text.includes('lop') ||
+    text.includes('loss of pay');
+}
+
+function hasPaidMarker(value) {
+  const text = normalizeText(value);
+  return text === 'true' ||
+    text === 'paid' ||
+    text === 'pay';
+}
+
 function isPaidCompensation(dayData) {
-  return String(dayData?.compensationType || dayData?.paid_unpaid || 'paid')
-    .trim()
-    .toLowerCase() === 'paid';
+  const candidates = [
+    dayData?.compensationType,
+    dayData?.paid_unpaid,
+    dayData?.paidUnpaid,
+    dayData?.compensation,
+    dayData?.isPaid,
+    dayData?.is_paid,
+    dayData?.half,
+    dayData?.leaveType,
+    dayData?.leaveStatus,
+    dayData?.dayDuration,
+  ];
+
+  if (candidates.some(hasUnpaidMarker)) return false;
+  if (candidates.some(hasPaidMarker)) return true;
+  return true;
 }
 
 function isHalfDayRecord(dayData) {
   if (!dayData) return false;
   const dayDur = String(dayData.dayDuration || '').toLowerCase();
   if (dayDur.includes('half')) return true;
+  if (dayData.half) return true;
   const st = String(dayData.status || '').toUpperCase();
   return st === 'HL' || st === 'H';
 }
@@ -90,7 +123,7 @@ export function computeDayPaidCredit(dayData, isHoliday) {
   if (hasApprovedLeave(dayData)) {
     const paid = isPaidCompensation(dayData);
     if (isHalfDayRecord(dayData)) {
-      return paid ? 0.5 : 0;
+      return 0.5;
     }
     return paid ? 1 : 0;
   }
