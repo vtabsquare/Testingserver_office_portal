@@ -114,7 +114,7 @@ export function computeDayPaidCredit(dayData, isHoliday) {
     return 0;
   }
 
-  if (st === 'INL' || (isHoliday && st !== 'A' && !hasApprovedLeave(dayData))) {
+  if (st === 'INL' || (isHoliday && st !== 'A' && st !== 'HL' && st !== 'H' && !hasApprovedLeave(dayData))) {
     if (st === 'P') return 1;
     if (st === 'A') return 0;
     return 1;
@@ -123,7 +123,9 @@ export function computeDayPaidCredit(dayData, isHoliday) {
   if (hasApprovedLeave(dayData)) {
     const paid = isPaidCompensation(dayData);
     if (isHalfDayRecord(dayData)) {
-      return 0.5;
+      // HL + paid leave (CL/SL/CO paid) = full paid day (0.5 work + 0.5 paid leave)
+      // HL + unpaid leave (LOP) = only 0.5 (the worked half)
+      return paid ? 1 : 0.5;
     }
     return paid ? 1 : 0;
   }
