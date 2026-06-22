@@ -2,11 +2,12 @@ import { getPageContentHTML } from '../utils.js';
 import { API_BASE_URL } from '../config.js';
 import { timedFetch } from '../features/timedFetch.js';
 import { fetchOnLeaveToday, fetchEmployeeLeaves } from '../features/leaveApi.js';
-import { listAllEmployees } from '../features/employeeApi.js';
+import { listActiveEmployees } from '../features/employeeApi.js';
 import { fetchLoginEvents } from '../features/loginSettingsApi.js';
 import { isAdminUser } from '../utils/accessControl.js';
 import { canViewApplication } from '../utils/roleSettings.js';
 import { state } from '../state.js';
+import { renderModal, closeModal } from '../components/modal.js';
 
 const BASE_URL = API_BASE_URL.replace(/\/$/, '');
 const DASHBOARD_PATH = '#/admin-dashboard';
@@ -466,7 +467,7 @@ const loadAdminDashboardData = async () => {
     fetchAttendanceMonitoring(),
     fetchActiveTaskSnapshot(),
     fetchOnLeaveToday([], { includeUpcoming: true }),
-    listAllEmployees(),
+    listActiveEmployees(),
     fetchLoginEvents(),
   ]);
 
@@ -851,125 +852,229 @@ const startElapsedTick = () => {
   }, 1000);
 };
 
-const exportWsrReport = async () => {
+// ── Helper: compute Mon-Sun week boundaries ───────────────────────────────────
+const _getWeekRange = (offsetWeeks = 0) => {
+  const today = new Date();
+  // Move to Monday of the current week (week starts Monday)
+  const dayOfWeek = today.getDay(); // 0=Sun … 6=Sat
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + diffToMonday + offsetWeeks * 7);
+  monday.setHours(0, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const fmt = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return { startDate: fmt(monday), endDate: fmt(sunday), monday, sunday, pad2 };
+};
+
+// ── Core export logic (accepts a resolved date range) ────────────────────────
+const _doExportWsrForRange = async (startDate, endDate, label) => {
+  const btn = document.getElementById('admin-export-wsr');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Exporting...';
+  }
+
   try {
-    const btn = document.getElementById('admin-export-wsr');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Exporting...';
-    }
-
     const pad2 = (n) => String(n).padStart(2, '0');
-    
-    // Calculate current week (Monday to Sunday)
-    const today = new Date();
-    const dayOfWeek = today.getDay() === 0 ? 7 : today.getDay();
-    const startOfWeek = new Date(today);
-    startOfWeek.setDate(today.getDate() - dayOfWeek + 1);
-    const endOfWeek = new Date(startOfWeek);
-    endOfWeek.setDate(startOfWeek.getDate() + 6);
-
-    const startDate = `${startOfWeek.getFullYear()}-${pad2(startOfWeek.getMonth() + 1)}-${pad2(startOfWeek.getDate())}`;
-    const endDate = `${endOfWeek.getFullYear()}-${pad2(endOfWeek.getMonth() + 1)}-${pad2(endOfWeek.getDate())}`;
-
     const BREAK_SECS = 3600;
     const STD_WORK_SECS = 9 * 3600;
+
+    // Enumerate every date in the range
+    const rangeDates = [];
+    const cursor = new Date(startDate);
+    const endObj = new Date(endDate);
+    while (cursor <= endObj) {
+      rangeDates.push(cursor.toISOString().slice(0, 10));
+      cursor.setDate(cursor.getDate() + 1);
+    }
 
     const logsRes = await fetch(`${BASE_URL}/api/time-tracker/logs?employee_id=ALL&start_date=${startDate}&end_date=${endDate}`);
     let allLogs = [];
     if (logsRes.ok) {
-        const data = await logsRes.json();
-        allLogs = data.logs || [];
+      const data = await logsRes.json();
+      allLogs = data.logs || [];
     }
 
     const employeesList = _tsMonitorEmployees || [];
     const results = [];
-    const weekDates = [];
-    for(let d = new Date(startOfWeek); d <= endOfWeek; d.setDate(d.getDate() + 1)) {
-        weekDates.push(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`);
-    }
 
     for (const emp of employeesList) {
-        const upEmp = String(emp.employee_id || '').toUpperCase();
-        let empTotalSecs = 0;
-        let empProductiveSecs = 0;
-        let empOtSecs = 0;
+      const upEmp = String(emp.employee_id || '').toUpperCase();
+      let empTotalSecs = 0;
+      let empProductiveSecs = 0;
+      let empOtSecs = 0;
+      let empBillableSecs = 0;
+      let empNonBillableSecs = 0;
 
-        for (const dateStr of weekDates) {
-            const parts = dateStr.split('-');
-            const dateObj = new Date(parts[0], parseInt(parts[1], 10) - 1, parts[2]);
-            const isSunday = dateObj.getDay() === 0;
-            if (isSunday) continue;
+      for (const dateStr of rangeDates) {
+        const parts = dateStr.split('-');
+        const dateObj = new Date(parts[0], parseInt(parts[1], 10) - 1, parts[2]);
+        const isSunday = dateObj.getDay() === 0;
+        if (isSunday) continue;
 
-            let rawSecs = 0;
-            allLogs.forEach(l => {
-                if (String(l.employee_id || '').toUpperCase() === upEmp && String(l.work_date || '').slice(0, 10) === dateStr) {
-                    rawSecs += Number(l.seconds || 0);
-                }
-            });
+        let rawSecs = 0;
+        let dayBillableSecs = 0;
+        let dayNonBillableSecs = 0;
+        allLogs.forEach(l => {
+          if (String(l.employee_id || '').toUpperCase() === upEmp && String(l.work_date || '').slice(0, 10) === dateStr) {
+            const secs = Number(l.seconds || 0);
+            rawSecs += secs;
+            const bt = (l.billing_type || 'Billable').trim().toLowerCase();
+            if (bt === 'non-billable' || bt === 'non billable') {
+              dayNonBillableSecs += secs;
+            } else {
+              dayBillableSecs += secs;
+            }
+          }
+        });
 
-            const netSecs = Math.max(0, rawSecs - BREAK_SECS);
-            const stdSecs = rawSecs > 0 ? Math.min(netSecs, STD_WORK_SECS) : 0;
-            const otSecs = rawSecs > 0 ? Math.max(0, netSecs - STD_WORK_SECS) : 0;
+        const netSecs = Math.max(0, rawSecs - BREAK_SECS);
+        const stdSecs = rawSecs > 0 ? Math.min(netSecs, STD_WORK_SECS) : 0;
+        const otSecs = rawSecs > 0 ? Math.max(0, netSecs - STD_WORK_SECS) : 0;
 
-            empProductiveSecs += stdSecs;
-            empOtSecs += otSecs;
-            empTotalSecs += (stdSecs + otSecs);
-        }
+        empProductiveSecs += stdSecs;
+        empOtSecs += otSecs;
+        empTotalSecs += (stdSecs + otSecs);
+        empBillableSecs += dayBillableSecs;
+        empNonBillableSecs += dayNonBillableSecs;
+      }
 
-        let holidaysAvailed = 0;
-        try {
-            const leaves = await fetchEmployeeLeaves(upEmp);
-            leaves.forEach(l => {
-                if (String(l.status).toLowerCase() === 'approved') {
-                    if (l.leave_type === 'INL') {
-                        const leaveStart = String(l.start_date || '').slice(0, 10);
-                        if (leaveStart >= startDate && leaveStart <= endDate) {
-                            holidaysAvailed += Number(l.total_days || 1);
-                        }
-                    }
-                }
-            });
-        } catch(e) { }
+      // Check INL holidays within the range
+      let holidaysAvailed = 0;
+      try {
+        const leaves = await fetchEmployeeLeaves(upEmp);
+        leaves.forEach(l => {
+          if (String(l.status).toLowerCase() === 'approved' && l.leave_type === 'INL') {
+            const leaveStart = String(l.start_date || '').slice(0, 10);
+            if (leaveStart >= startDate && leaveStart <= endDate) {
+              holidaysAvailed += Number(l.total_days || 1);
+            }
+          }
+        });
+      } catch (e) { /* non-critical */ }
 
-        if (empTotalSecs > 0 || holidaysAvailed > 0) {
-            results.push({
-                name: emp.name,
-                totalHours: (empTotalSecs / 3600).toFixed(2),
-                productiveHours: (empProductiveSecs / 3600).toFixed(2),
-                nonProductiveHours: (empOtSecs / 3600).toFixed(2),
-                holidaysAvailed: holidaysAvailed
-            });
-        }
+      if (empTotalSecs > 0 || holidaysAvailed > 0) {
+        results.push({
+          name: emp.name,
+          totalHours: (empTotalSecs / 3600).toFixed(2),
+          billableHours: (empBillableSecs / 3600).toFixed(2),
+          nonBillableHours: (empNonBillableSecs / 3600).toFixed(2),
+          productiveHours: (empProductiveSecs / 3600).toFixed(2),
+          nonProductiveHours: (empOtSecs / 3600).toFixed(2),
+          holidaysAvailed
+        });
+      }
     }
 
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += "Name,Total Hours,Productive Hours,Non-Productive Hours,Holidays Availed\r\n";
+    let csvContent = 'data:text/csv;charset=utf-8,';
+    csvContent += 'Name,Total Hours,Billable Hours,Non-Billable Hours,Productive Hours,Non-Productive Hours,Holidays Availed\r\n';
     results.forEach(row => {
-        csvContent += `"${row.name.replace(/"/g, '""')}",${row.totalHours},${row.productiveHours},${row.nonProductiveHours},${row.holidaysAvailed}\r\n`;
+      csvContent += `"${row.name.replace(/"/g, '""')}",${row.totalHours},${row.billableHours},${row.nonBillableHours},${row.productiveHours},${row.nonProductiveHours},${row.holidaysAvailed}\r\n`;
     });
 
     const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `WSR_Report_${startDate}_to_${endDate}.csv`);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `WSR_Report_${label}_${startDate}_to_${endDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-
-    if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-download"></i> Export WSR report';
-    }
   } catch (error) {
-    console.error("Export failed", error);
-    alert("Failed to export WSR report.");
-    const btn = document.getElementById('admin-export-wsr');
+    console.error('WSR Export failed', error);
+    alert('Failed to export WSR report.');
+  } finally {
     if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-download"></i> Export WSR report';
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-download"></i> Export WSR report';
     }
   }
+};
+
+// ── Entry point: show week-picker modal, then delegate to _doExportWsrForRange ─
+const exportWsrReport = () => {
+  const thisWeek = _getWeekRange(0);
+  const lastWeek = _getWeekRange(-1);
+
+  const formatDisplay = (d) => {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  };
+
+  const thisLabel = `${formatDisplay(thisWeek.monday)} – ${formatDisplay(thisWeek.sunday)}`;
+  const lastLabel = `${formatDisplay(lastWeek.monday)} – ${formatDisplay(lastWeek.sunday)}`;
+
+  const formHTML = `
+    <p style="margin:0 0 18px;color:var(--text-secondary,#888);font-size:0.95rem;">
+      Select the week period for the WSR timesheet export:
+    </p>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <label id="wsr-week-this" style="
+        display:flex;align-items:center;gap:14px;padding:14px 16px;
+        border:2px solid var(--border-color,#e0e0e0);border-radius:10px;
+        cursor:pointer;transition:border-color .2s,background .2s;
+      ">
+        <input type="radio" name="wsr-week" value="this" checked
+          style="accent-color:var(--primary,#2563eb);width:18px;height:18px;cursor:pointer;">
+        <span>
+          <strong style="display:block;font-size:0.97rem;">This Week</strong>
+          <span style="font-size:0.85rem;color:var(--text-secondary,#888);">${thisLabel}</span>
+        </span>
+      </label>
+      <label id="wsr-week-last" style="
+        display:flex;align-items:center;gap:14px;padding:14px 16px;
+        border:2px solid var(--border-color,#e0e0e0);border-radius:10px;
+        cursor:pointer;transition:border-color .2s,background .2s;
+      ">
+        <input type="radio" name="wsr-week" value="last"
+          style="accent-color:var(--primary,#2563eb);width:18px;height:18px;cursor:pointer;">
+        <span>
+          <strong style="display:block;font-size:0.97rem;">Last Week</strong>
+          <span style="font-size:0.85rem;color:var(--text-secondary,#888);">${lastLabel}</span>
+        </span>
+      </label>
+    </div>
+  `;
+
+  renderModal(
+    '<i class="fa-solid fa-calendar-week" style="margin-right:8px;"></i>Select Week for WSR Export',
+    formHTML,
+    'wsr-week-confirm-btn',
+    'normal',
+    '<i class="fa-solid fa-download" style="margin-right:6px;"></i>Download CSV',
+    () => {
+      // Highlight selected option on change
+      const radios = document.querySelectorAll('input[name="wsr-week"]');
+      const labels = [document.getElementById('wsr-week-this'), document.getElementById('wsr-week-last')];
+      const updateHighlight = () => {
+        radios.forEach((r, i) => {
+          labels[i].style.borderColor = r.checked ? 'var(--primary,#2563eb)' : 'var(--border-color,#e0e0e0)';
+          labels[i].style.background = r.checked ? 'var(--primary-light,rgba(37,99,235,0.07))' : '';
+        });
+      };
+      radios.forEach(r => r.addEventListener('change', updateHighlight));
+      updateHighlight(); // apply initial state
+    }
+  );
+
+  // Attach submit handler after modal is rendered
+  setTimeout(() => {
+    const form = document.getElementById('modal-form');
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const selected = document.querySelector('input[name="wsr-week"]:checked');
+        const choice = selected ? selected.value : 'this';
+        closeModal();
+        if (choice === 'last') {
+          await _doExportWsrForRange(lastWeek.startDate, lastWeek.endDate, 'LastWeek');
+        } else {
+          await _doExportWsrForRange(thisWeek.startDate, thisWeek.endDate, 'ThisWeek');
+        }
+      });
+    }
+  }, 50);
 };
 
 const attachRefreshAction = () => {

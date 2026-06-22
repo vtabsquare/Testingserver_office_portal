@@ -3,6 +3,7 @@ import { renderModal, closeModal } from "../components/modal.js";
 import { state as appState } from "../state.js";
 import { apiBase } from "../config.js";
 import { getUserAccessContext } from "../utils/accessControl.js";
+import { listAllEmployees, isActiveEmployee } from "../features/employeeApi.js";
 
 // // ROLE CHECKER
 // function getUserRole() {
@@ -2342,20 +2343,23 @@ function showEditContributorModal(projectId, recordId, contributor) {
   // ✅ Populate Employee Dropdown
   async function populateEmployeeDropdown() {
     try {
-      const res = await fetch(`${API_ROOT}/api/employees/all`);
-      const data = await res.json();
+      const allEmployees = await listAllEmployees();
 
       const empSelect = document.getElementById("ct-empname-edit");
       empSelect.innerHTML = '<option value="">-- Select Employee --</option>';
 
-      if (data.success && Array.isArray(data.employees)) {
-        data.employees.forEach((emp) => {
-          const fullName = `${emp.first_name || ""} ${emp.last_name || ""
-            }`.trim();
+      if (Array.isArray(allEmployees)) {
+        allEmployees.forEach((emp) => {
+          const currentEmpId = contributor.employee_id || contributor.employeeId;
+          const isAssigned = emp.employee_id === currentEmpId || emp.employee_id === contributor.record_id; // some legacy fields
+          if (!isActiveEmployee(emp) && !isAssigned) return;
+
+          const fullName = `${emp.first_name || ""} ${emp.last_name || ""}`.trim();
+          const labelSuffix = !isActiveEmployee(emp) ? " (Inactive)" : "";
           const option = document.createElement("option");
           option.value = fullName;
           option.setAttribute("data-id", emp.employee_id);
-          option.textContent = `${fullName} (${emp.employee_id || ""})`;
+          option.textContent = `${fullName} (${emp.employee_id || ""})${labelSuffix}`;
           empSelect.appendChild(option);
         });
 
@@ -2520,17 +2524,20 @@ function showContributorModal(projectId, contributor = null) {
   // ✅ Populate Employee Dropdown from Backend (/api/employees/all)
   async function populateEmployeeDropdown() {
     try {
-      const res = await fetch(`${API_ROOT}/api/employees/all`);
-      const data = await res.json();
+      const allEmployees = await listAllEmployees();
 
       const empSelect = document.getElementById("ct-empname");
       empSelect.innerHTML = '<option value="">-- Select Employee --</option>';
 
-      if (data.success && Array.isArray(data.employees)) {
-        data.employees.forEach((emp) => {
-          const fullName = `${emp.first_name || ""} ${emp.last_name || ""
-            }`.trim();
-          const label = `${fullName} (${emp.employee_id || ""})`;
+      if (Array.isArray(allEmployees)) {
+        allEmployees.forEach((emp) => {
+          const currentEmpId = contributor ? (contributor.employee_id || contributor.employeeId) : null;
+          const isAssigned = contributor && emp.employee_id === currentEmpId;
+          if (!isActiveEmployee(emp) && !isAssigned) return;
+
+          const fullName = `${emp.first_name || ""} ${emp.last_name || ""}`.trim();
+          const labelSuffix = !isActiveEmployee(emp) ? " (Inactive)" : "";
+          const label = `${fullName} (${emp.employee_id || ""})${labelSuffix}`;
           const option = document.createElement("option");
           option.value = fullName;
           option.setAttribute("data-id", emp.employee_id);
@@ -2588,7 +2595,7 @@ function showContributorModal(projectId, contributor = null) {
       contributor.designation || "N/A";
 
     document.getElementById("ct-billing").value =
-      contributor.billingType || "Billable";
+      contributor.billing_type || contributor.billingType || "Billable";
     document.getElementById("ct-date").value = contributor.assignedDate || "";
 
     // Wait for dropdown to load, then set employee name
@@ -4039,11 +4046,18 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
 
       if (!res.ok || !data.contributors) return;
 
-      // Convert contributors into usable format
-      const contributors = data.contributors.map((c) => ({
-        id: c.employee_id || c.employeeId,
-        name: c.employee_name || c.employeeName,
-      }));
+      const allEmployees = await listAllEmployees();
+
+      // Convert contributors into usable format and filter active employees
+      const contributors = data.contributors
+        .map((c) => ({
+          id: c.employee_id || c.employeeId,
+          name: c.employee_name || c.employeeName,
+        }))
+        .filter((c) => {
+          const empMatch = allEmployees.find(e => e.employee_id === c.id || e.id === c.id);
+          return empMatch ? isActiveEmployee(empMatch) : false;
+        });
 
       // Initialize multi-select
       const assignedSelect = initMultiSelect("assignedTo", contributors);
