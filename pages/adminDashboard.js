@@ -852,21 +852,7 @@ const startElapsedTick = () => {
   }, 1000);
 };
 
-// ── Helper: compute Mon-Sun week boundaries ───────────────────────────────────
-const _getWeekRange = (offsetWeeks = 0) => {
-  const today = new Date();
-  // Move to Monday of the current week (week starts Monday)
-  const dayOfWeek = today.getDay(); // 0=Sun … 6=Sat
-  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-  const monday = new Date(today);
-  monday.setDate(today.getDate() + diffToMonday + offsetWeeks * 7);
-  monday.setHours(0, 0, 0, 0);
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  const pad2 = (n) => String(n).padStart(2, '0');
-  const fmt = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-  return { startDate: fmt(monday), endDate: fmt(sunday), monday, sunday, pad2 };
-};
+// Helper removed since we compute specific Mon-Sat range inline below
 
 // ── Core export logic (accepts a resolved date range) ────────────────────────
 const _doExportWsrForRange = async (startDate, endDate, label) => {
@@ -992,89 +978,29 @@ const _doExportWsrForRange = async (startDate, endDate, label) => {
   }
 };
 
-// ── Entry point: show week-picker modal, then delegate to _doExportWsrForRange ─
-const exportWsrReport = () => {
-  const thisWeek = _getWeekRange(0);
-  const lastWeek = _getWeekRange(-1);
+// ── Entry point: compute last Mon-Sat and export directly ──────────────────
+const exportWsrReport = async () => {
+  const today = new Date();
+  const dayOfWeek = today.getDay(); // 0=Sun … 6=Sat
+  
+  // Find Monday of the *current* week
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const currentMonday = new Date(today);
+  currentMonday.setDate(today.getDate() + diffToMonday);
+  currentMonday.setHours(0, 0, 0, 0);
 
-  const formatDisplay = (d) => {
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
-  };
+  // Last week's Monday is 7 days before current week's Monday
+  const lastMonday = new Date(currentMonday);
+  lastMonday.setDate(currentMonday.getDate() - 7);
 
-  const thisLabel = `${formatDisplay(thisWeek.monday)} – ${formatDisplay(thisWeek.sunday)}`;
-  const lastLabel = `${formatDisplay(lastWeek.monday)} – ${formatDisplay(lastWeek.sunday)}`;
+  // Last week's Saturday is 5 days after last week's Monday
+  const lastSaturday = new Date(lastMonday);
+  lastSaturday.setDate(lastMonday.getDate() + 5);
 
-  const formHTML = `
-    <p style="margin:0 0 18px;color:var(--text-secondary,#888);font-size:0.95rem;">
-      Select the week period for the WSR timesheet export:
-    </p>
-    <div style="display:flex;flex-direction:column;gap:12px;">
-      <label id="wsr-week-this" style="
-        display:flex;align-items:center;gap:14px;padding:14px 16px;
-        border:2px solid var(--border-color,#e0e0e0);border-radius:10px;
-        cursor:pointer;transition:border-color .2s,background .2s;
-      ">
-        <input type="radio" name="wsr-week" value="this" checked
-          style="accent-color:var(--primary,#2563eb);width:18px;height:18px;cursor:pointer;">
-        <span>
-          <strong style="display:block;font-size:0.97rem;">This Week</strong>
-          <span style="font-size:0.85rem;color:var(--text-secondary,#888);">${thisLabel}</span>
-        </span>
-      </label>
-      <label id="wsr-week-last" style="
-        display:flex;align-items:center;gap:14px;padding:14px 16px;
-        border:2px solid var(--border-color,#e0e0e0);border-radius:10px;
-        cursor:pointer;transition:border-color .2s,background .2s;
-      ">
-        <input type="radio" name="wsr-week" value="last"
-          style="accent-color:var(--primary,#2563eb);width:18px;height:18px;cursor:pointer;">
-        <span>
-          <strong style="display:block;font-size:0.97rem;">Last Week</strong>
-          <span style="font-size:0.85rem;color:var(--text-secondary,#888);">${lastLabel}</span>
-        </span>
-      </label>
-    </div>
-  `;
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const fmt = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
-  renderModal(
-    '<i class="fa-solid fa-calendar-week" style="margin-right:8px;"></i>Select Week for WSR Export',
-    formHTML,
-    'wsr-week-confirm-btn',
-    'normal',
-    '<i class="fa-solid fa-download" style="margin-right:6px;"></i>Download CSV',
-    () => {
-      // Highlight selected option on change
-      const radios = document.querySelectorAll('input[name="wsr-week"]');
-      const labels = [document.getElementById('wsr-week-this'), document.getElementById('wsr-week-last')];
-      const updateHighlight = () => {
-        radios.forEach((r, i) => {
-          labels[i].style.borderColor = r.checked ? 'var(--primary,#2563eb)' : 'var(--border-color,#e0e0e0)';
-          labels[i].style.background = r.checked ? 'var(--primary-light,rgba(37,99,235,0.07))' : '';
-        });
-      };
-      radios.forEach(r => r.addEventListener('change', updateHighlight));
-      updateHighlight(); // apply initial state
-    }
-  );
-
-  // Attach submit handler after modal is rendered
-  setTimeout(() => {
-    const form = document.getElementById('modal-form');
-    if (form) {
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const selected = document.querySelector('input[name="wsr-week"]:checked');
-        const choice = selected ? selected.value : 'this';
-        closeModal();
-        if (choice === 'last') {
-          await _doExportWsrForRange(lastWeek.startDate, lastWeek.endDate, 'LastWeek');
-        } else {
-          await _doExportWsrForRange(thisWeek.startDate, thisWeek.endDate, 'ThisWeek');
-        }
-      });
-    }
-  }, 50);
+  await _doExportWsrForRange(fmt(lastMonday), fmt(lastSaturday), 'LastWeek_Mon_Sat');
 };
 
 const attachRefreshAction = () => {
