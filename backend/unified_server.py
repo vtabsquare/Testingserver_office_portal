@@ -9543,6 +9543,7 @@ def debug_leave_balance_raw(employee_id):
 @app.route('/api/employees', methods=['GET'])
 def list_employees():
     try:
+        include_inactive = request.args.get('include_inactive', 'false').lower() == 'true'
         print(f"\n{'='*60}")
         print(f"[FETCH] LIST EMPLOYEES REQUEST")
         print(f"{'='*60}")
@@ -9610,6 +9611,12 @@ def list_employees():
                 if simple_resp.status_code == 200:
                     body = simple_resp.json()
                     all_records = body.get("value", [])
+                    
+                    if not include_inactive:
+                        active_field = field_map.get('active')
+                        if active_field:
+                            all_records = [r for r in all_records if str(r.get(active_field)).lower() in ['true', '1', 'active']]
+                            
                     all_records = sorted(
                         all_records,
                         key=lambda rec: str(rec.get(field_map.get('id')) or '').strip().upper()
@@ -9744,6 +9751,12 @@ def list_employees():
             }), 500
         body = resp.json()
         all_records = body.get("value", [])
+        
+        if not include_inactive:
+            active_field = field_map.get('active')
+            if active_field:
+                all_records = [r for r in all_records if str(r.get(active_field)).lower() in ['true', '1', 'active']]
+                
         all_records = sorted(
             all_records,
             key=lambda rec: str(rec.get(field_map.get('id')) or '').strip().upper()
@@ -9859,14 +9872,19 @@ def get_all_employees():
     import time as _time
     global _employee_cache
     
+    include_inactive = request.args.get('include_inactive', 'false').lower() == 'true'
+    
     # Check cache first
     now = _time.time()
     if _employee_cache["data"] and (now - _employee_cache["timestamp"]) < EMPLOYEE_CACHE_TTL:
-        print(f"[CACHE HIT] Returning {len(_employee_cache['data'])} cached employees")
+        cached_data = _employee_cache["data"]
+        if not include_inactive:
+            cached_data = [e for e in cached_data if str(e.get('active')).lower() in ['true', '1', 'active']]
+        print(f"[CACHE HIT] Returning {len(cached_data)} cached employees")
         return jsonify({
             "success": True,
-            "count": len(_employee_cache["data"]),
-            "employees": _employee_cache["data"],
+            "count": len(cached_data),
+            "employees": cached_data,
             "cached": True
         }), 200
     
@@ -9960,13 +9978,17 @@ def get_all_employees():
         _employee_cache["data"] = employees
         _employee_cache["timestamp"] = _time.time()
         
-        print(f"[SEND] Returning {len(employees)} total employees (cached)")
+        return_data = employees
+        if not include_inactive:
+            return_data = [e for e in employees if str(e.get('active')).lower() in ['true', '1', 'active']]
+        
+        print(f"[SEND] Returning {len(return_data)} total employees (cached)")
         print(f"{'='*60}\n")
 
         return jsonify({
             "success": True,
-            "count": len(employees),
-            "employees": employees,
+            "count": len(return_data),
+            "employees": return_data,
             "cached": False
         }), 200
 

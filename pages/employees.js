@@ -230,7 +230,7 @@ export const renderEmployeesPage = async (filter = '', page = empCurrentPage) =>
 
     let paginator = '';
     try {
-        const items = await listAllEmployees();
+        const items = await listAllEmployees(false, true);
         state.employees = (items || []).map(e => ({
             id: e.employee_id,
             name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
@@ -584,7 +584,7 @@ export const renderBulkDeletePage = async () => {
     setTimeout(async () => {
         try {
             // Load active employees
-            const { items } = await listEmployees(1, 5000);
+            const { items } = await listEmployees(1, 5000, true);
             bulkDeleteEmployees = (items || []).map(e => ({
                 id: e.employee_id,
                 name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
@@ -1459,7 +1459,7 @@ export const showBulkDeleteModal = () => {
             const deletedEmps = await fetchDeletedEmployees();
             hasDeletedEmployees = deletedEmps.length > 0;
 
-            const { items } = await listEmployees(1, 5000);
+            const { items } = await listEmployees(1, 5000, true);
             bulkDeleteEmployees = (items || []).map(e => ({
                 id: e.employee_id,
                 name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
@@ -1684,7 +1684,7 @@ export const handleRestoreSingle = async (employeeId) => {
             hasDeletedEmployees = currentDeletedEmployees.length > 0;
             renderDeletedEmployeesTable();
             // Also refresh the active employees table
-            const { items } = await listEmployees(1, 5000);
+            const { items } = await listEmployees(1, 5000, true);
             bulkDeleteEmployees = (items || []).map(e => ({
                 id: e.employee_id,
                 name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
@@ -1740,7 +1740,7 @@ export const handleRestoreSelected = async () => {
             renderDeletedEmployeesTable();
 
             // Also refresh the active employees table
-            const { items } = await listEmployees(1, 5000);
+            const { items } = await listEmployees(1, 5000, true);
             bulkDeleteEmployees = (items || []).map(e => ({
                 id: e.employee_id,
                 name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
@@ -2237,7 +2237,7 @@ const handleRestoreAll = async () => {
             if (window.location.hash === '#/employees/bulk-delete') {
                 renderDeletedEmployeesTable();
                 // Also refresh the active employees table
-                const { items } = await listEmployees(1, 5000);
+                const { items } = await listEmployees(1, 5000, true);
                 bulkDeleteEmployees = (items || []).map(e => ({
                     id: e.employee_id,
                     name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),

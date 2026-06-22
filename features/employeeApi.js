@@ -16,12 +16,12 @@ const toDataUrl = (photo) => {
 };
 
 let allEmployeesCache = {
-  data: null,
-  fetchedAt: 0,
+  active: { data: null, fetchedAt: 0 },
+  all: { data: null, fetchedAt: 0 },
 };
 
-export async function listEmployees(page = 1, pageSize = 5) {
-  const cacheKey = `${page}|${pageSize}`;
+export async function listEmployees(page = 1, pageSize = 5, includeInactive = false) {
+  const cacheKey = `${page}|${pageSize}|${includeInactive}`;
   const now = Date.now();
   const cached = state?.cache?.employees?.[cacheKey];
   if (cached && now - cached.fetchedAt < CACHE_TTL_MS) {
@@ -31,6 +31,9 @@ export async function listEmployees(page = 1, pageSize = 5) {
   const url = new URL(`${BASE_URL}/api/employees`);
   url.searchParams.set('page', String(page));
   url.searchParams.set('pageSize', String(pageSize));
+  if (includeInactive) {
+    url.searchParams.set('include_inactive', 'true');
+  }
   const res = await timedFetch(url.toString(), {}, 'listEmployees');
   const data = await res.json();
   if (!res.ok || !data.success) {
@@ -67,17 +70,24 @@ export async function createEmployee(payload) {
   return data.employee;
 }
 
-export async function listAllEmployees(forceRefresh = false) {
+export async function listAllEmployees(forceRefresh = false, includeInactive = false) {
   const now = Date.now();
+  const cacheKey = includeInactive ? 'all' : 'active';
+  
   if (
     !forceRefresh &&
-    allEmployeesCache.data &&
-    now - allEmployeesCache.fetchedAt < EMP_DIRECTORY_CACHE_TTL_MS
+    allEmployeesCache[cacheKey]?.data &&
+    now - allEmployeesCache[cacheKey].fetchedAt < EMP_DIRECTORY_CACHE_TTL_MS
   ) {
-    return allEmployeesCache.data;
+    return allEmployeesCache[cacheKey].data;
   }
 
-  const res = await timedFetch(`${BASE_URL}/api/employees/all`, {}, 'listAllEmployees');
+  const url = new URL(`${BASE_URL}/api/employees/all`);
+  if (includeInactive) {
+    url.searchParams.set('include_inactive', 'true');
+  }
+
+  const res = await timedFetch(url.toString(), {}, 'listAllEmployees');
   let data = null;
   try {
     data = await res.json();
@@ -96,7 +106,7 @@ export async function listAllEmployees(forceRefresh = false) {
     ...e,
     photo: toDataUrl(e.photo || e.profile_picture)
   }));
-  allEmployeesCache = { data: employees, fetchedAt: now };
+  allEmployeesCache[cacheKey] = { data: employees, fetchedAt: now };
   return employees;
 }
 

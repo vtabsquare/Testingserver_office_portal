@@ -859,12 +859,18 @@ const exportWsrReport = async () => {
         btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Exporting...';
     }
 
-    const month = tsMonitorMonth;
-    const year = tsMonitorYear;
     const pad2 = (n) => String(n).padStart(2, '0');
-    const startDate = `${year}-${pad2(month)}-01`;
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const endDate = `${year}-${pad2(month)}-${pad2(daysInMonth)}`;
+    
+    // Calculate current week (Monday to Sunday)
+    const today = new Date();
+    const dayOfWeek = today.getDay() === 0 ? 7 : today.getDay();
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - dayOfWeek + 1);
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+
+    const startDate = `${startOfWeek.getFullYear()}-${pad2(startOfWeek.getMonth() + 1)}-${pad2(startOfWeek.getDate())}`;
+    const endDate = `${endOfWeek.getFullYear()}-${pad2(endOfWeek.getMonth() + 1)}-${pad2(endOfWeek.getDate())}`;
 
     const BREAK_SECS = 3600;
     const STD_WORK_SECS = 9 * 3600;
@@ -878,9 +884,9 @@ const exportWsrReport = async () => {
 
     const employeesList = _tsMonitorEmployees || [];
     const results = [];
-    const monthDates = [];
-    for(let d=1; d<=daysInMonth; d++) {
-        monthDates.push(`${year}-${pad2(month)}-${pad2(d)}`);
+    const weekDates = [];
+    for(let d = new Date(startOfWeek); d <= endOfWeek; d.setDate(d.getDate() + 1)) {
+        weekDates.push(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`);
     }
 
     for (const emp of employeesList) {
@@ -889,7 +895,7 @@ const exportWsrReport = async () => {
         let empProductiveSecs = 0;
         let empOtSecs = 0;
 
-        for (const dateStr of monthDates) {
+        for (const dateStr of weekDates) {
             const parts = dateStr.split('-');
             const dateObj = new Date(parts[0], parseInt(parts[1], 10) - 1, parts[2]);
             const isSunday = dateObj.getDay() === 0;
@@ -917,8 +923,8 @@ const exportWsrReport = async () => {
             leaves.forEach(l => {
                 if (String(l.status).toLowerCase() === 'approved') {
                     if (l.leave_type === 'INL') {
-                        const leaveStart = String(l.start_date || '');
-                        if (leaveStart.startsWith(`${year}-${pad2(month)}`)) {
+                        const leaveStart = String(l.start_date || '').slice(0, 10);
+                        if (leaveStart >= startDate && leaveStart <= endDate) {
                             holidaysAvailed += Number(l.total_days || 1);
                         }
                     }
@@ -946,7 +952,7 @@ const exportWsrReport = async () => {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `WSR_Report_${year}_${pad2(month)}.csv`);
+    link.setAttribute("download", `WSR_Report_${startDate}_to_${endDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
