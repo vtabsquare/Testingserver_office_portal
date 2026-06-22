@@ -41,3 +41,4 @@ id.env
 __pycache__/
 backend/__pycache__/
 backend/google_tokens.db
+backend/_data/*.json
