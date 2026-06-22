@@ -2,7 +2,7 @@ import { getPageContentHTML } from "../utils.js";
 import { state } from "../state.js";
 import { renderModal, closeModal } from "../components/modal.js";
 import { API_BASE_URL } from '../config.js';
-import { listAllEmployees } from '../features/employeeApi.js';
+import { listAllEmployees, isActiveEmployee } from '../features/employeeApi.js';
 import { getUserAccessContext } from '../utils/accessControl.js';
 
 const API_BASE = `${API_BASE_URL}/api/assets`;
@@ -31,6 +31,7 @@ const shapeEmployeeRecord = (entry = {}) => {
     id,
     name: displayName,
     department: entry.department || entry.team || "",
+    isActive: isActiveEmployee(entry),
   };
 };
 
@@ -231,8 +232,11 @@ export const showAssetModal = async (assetId) => {
         (asset?.employeeId && emp.id && emp.id.toUpperCase() === asset.employeeId.toUpperCase()) ||
           (!asset?.employeeId && asset?.assignedTo && emp.name && emp.name.toLowerCase() === asset.assignedTo.toLowerCase())
       );
+      if (!emp.isActive && !isSelected) return "";
+      
       if (isSelected) hasPrefilledSelection = true;
-      const label = emp.department ? `${emp.name} · ${emp.department}` : emp.name;
+      let label = emp.department ? `${emp.name} · ${emp.department}` : emp.name;
+      if (!emp.isActive) label += " (Inactive)";
       return `<option value="${escapeHtml(emp.id)}" data-name="${escapeHtml(emp.name)}"${isSelected ? " selected" : ""}>${escapeHtml(label)}</option>`;
     })
     .join("");

@@ -7798,8 +7798,8 @@ def create_project():
             "crc6f_client": data.get("crc6f_client"),
             "crc6f_manager": data.get("crc6f_manager"),
             "crc6f_projectstatus": data.get("crc6f_projectstatus"),
-            "crc6f_startdate": data.get("crc6f_startdate"),
-            "crc6f_enddate": data.get("crc6f_enddate"),
+            "crc6f_startdate": data.get("crc6f_startdate") or None,
+            "crc6f_enddate": data.get("crc6f_enddate") or None,
             "crc6f_estimationcost": float(data.get("crc6f_estimationcost") or 0),
             "crc6f_noofcontributors": int(data.get("crc6f_noofcontributors") or 0),
             "crc6f_projectdescription": data.get("crc6f_projectdescription"),
@@ -7831,6 +7831,8 @@ def update_project(record_id):
         ]:
             if k in data:
                 val = data.get(k)
+                if (k == "crc6f_startdate" or k == "crc6f_enddate") and val == "":
+                    val = None
                 if k == "crc6f_noofcontributors" and val is not None:
                     try:
                         val = int(val)

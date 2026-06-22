@@ -68,22 +68,28 @@ export async function searchEmployees(query) {
   if (!query) return [];
 
   try {
-    const url = `${CHAT_API_BASE}/employees/search?q=${encodeURIComponent(
-      query
-    )}`;
-    const res = await fetch(url);
+    const { listActiveEmployees } = await import('./employeeApi.js');
+    const arr = await listActiveEmployees();
+    const q = query.toLowerCase();
+    
+    const filtered = arr.filter(emp => {
+      const name = (emp.name || [emp.first_name, emp.last_name].filter(Boolean).join(" ")).trim().toLowerCase();
+      const id = String(emp.employee_id || emp.id).toLowerCase();
+      return name.includes(q) || id.includes(q);
+    });
 
-    if (!res.ok) return [];
-
-    const arr = await res.json();
-    return arr.map((emp) => ({
-      id: emp.id,
-      name: emp.name,
-      email: emp.email,
-      avatar: emp.avatar || emp.name?.slice(0, 1)?.toUpperCase() || "U",
-      photo: toDataUrl(emp.photo) || null,
-    }));
-  } catch {
+    return filtered.map((emp) => {
+      const name = (emp.name || [emp.first_name, emp.last_name].filter(Boolean).join(" ")).trim();
+      return {
+        id: emp.employee_id || emp.id,
+        name: name,
+        email: emp.email,
+        avatar: name.slice(0, 1).toUpperCase() || "U",
+        photo: emp.photo || null,
+      };
+    });
+  } catch (err) {
+    console.error("searchEmployees error:", err);
     return [];
   }
 }
@@ -93,17 +99,20 @@ export async function searchEmployees(query) {
 // --------------------------------------------------
 export async function fetchAllEmployees() {
   try {
-    const res = await fetch(`${CHAT_API_BASE}/employees/all`);
-    if (!res.ok) return [];
-    const arr = await res.json();
-    return (arr || []).map((emp) => ({
-      id: emp.id,
-      name: emp.name,
-      email: emp.email,
-      avatar: emp.avatar || emp.name?.slice(0, 1)?.toUpperCase() || "U",
-      photo: toDataUrl(emp.photo) || null,
-    }));
-  } catch {
+    const { listActiveEmployees } = await import('./employeeApi.js');
+    const arr = await listActiveEmployees();
+    return (arr || []).map((emp) => {
+      const name = (emp.name || [emp.first_name, emp.last_name].filter(Boolean).join(" ")).trim();
+      return {
+        id: emp.employee_id || emp.id,
+        name: name,
+        email: emp.email,
+        avatar: name.slice(0, 1).toUpperCase() || "U",
+        photo: emp.photo || null,
+      };
+    });
+  } catch (err) {
+    console.error("fetchAllEmployees error:", err);
     return [];
   }
 }

@@ -94,6 +94,37 @@ TIMESHEET_RPT_MAP = {
     "crc6f_workdate": "crc6f_RPT_workdate",
 }
 
+# ---------------------------------------------------------------------------
+# Billing-type helper: looks up contributor billing type from Supabase.
+# Used when creating / updating timesheet log entries so each log carries the
+# correct billable / non-billable flag for that (employee, project) pair.
+# ---------------------------------------------------------------------------
+def get_billing_type_for_contributor(employee_id: str, project_id: str) -> str:
+    """Return the billing type ('Billable' or 'Non-Billable') for an employee
+    on a specific project, as stored in crc6f_hr_projectcontributorses.
+    Falls back to 'Billable' if the lookup fails or no record is found."""
+    if not employee_id or not project_id:
+        return "Billable"
+    try:
+        from supabase_helper import get_supabase
+        sb = get_supabase()
+        resp = (
+            sb.table("crc6f_hr_projectcontributorses")
+              .select("crc6f_billingtype")
+              .eq("crc6f_employeeid", employee_id)
+              .eq("crc6f_projectid", project_id)
+              .limit(1)
+              .execute()
+        )
+        rows = resp.data or []
+        if rows:
+            billing = (rows[0].get("crc6f_billingtype") or "").strip()
+            if billing:
+                return billing
+    except Exception as e:
+        print(f"[BILLING_TYPE] Supabase lookup failed for emp={employee_id} proj={project_id}: {e}")
+    return "Billable"
+
 # Simple file-based store for time entries to persist across restarts
 DATA_DIR = os.path.join(os.path.dirname(__file__), "_data")
 ENTRIES_FILE = os.path.join(DATA_DIR, "time_entries.json")
@@ -730,9 +761,17 @@ def set_exact_log():
             except Exception as se:
                 print(f"[TEAM_TS_EDIT] Search error: {se}")
 
+        # Look up billing type for this (employee, project) pair
+        billing_type_exact = get_billing_type_for_contributor(employee_id, project_id)
+        print(f"[BILLING_TYPE][TEAM_TS] emp={employee_id} proj={project_id} -> {billing_type_exact}")
+
         if dv_id:
             # Use proven update_record helper from dataverse_helper.py
-            update_data = {"crc6f_hoursworked": hours_worked_val, "crc6f_workdescription": desc_for_save}
+            update_data = {
+                "crc6f_hoursworked": hours_worked_val,
+                "crc6f_workdescription": desc_for_save,
+                "crc6f_billingtype": billing_type_exact,
+            }
             if b.get("task_name"):
                 update_data["crc6f_taskname"] = str(b.get("task_name")).strip()
             print(f"[TEAM_TS_EDIT] Updating {dv_id} with {update_data}")
@@ -752,6 +791,7 @@ def set_exact_log():
                 "crc6f_hoursworked": hours_worked_val,
                 "crc6f_workdescription": desc_for_save,
                 "crc6f_approvalstatus": "Pending",
+                "crc6f_billingtype": billing_type_exact,
             }
             if project_id:
                 create_data["crc6f_projectid"] = project_id
@@ -1370,6 +1410,10 @@ def create_task_log():
             task_name = (b.get("task_name") or "").strip()
             work_desc = (b.get("description") or task_name or "").strip()
 
+            # Look up billing type for this (employee, project) pair from Supabase
+            billing_type = get_billing_type_for_contributor(employee_id, project_id)
+            print(f"[BILLING_TYPE] emp={employee_id} proj={project_id} -> {billing_type}")
+
             payload = {
                 "crc6f_employeeid": employee_id,
                 "crc6f_projectid": project_id,
@@ -1379,6 +1423,8 @@ def create_task_log():
                 "crc6f_hoursworked": round(hours_worked, 4),
                 "crc6f_workdescription": work_desc,
                 "crc6f_approvalstatus": "Pending",
+                # Billing type from contributor configuration
+                "crc6f_billingtype": billing_type,
                 # Dataverse work date field (Date Only)
                 "crc6f_workdate": seg_work_date if seg_work_date else None
             }
@@ -1679,6 +1725,8 @@ def list_logs():
                     "approval_status": r.get("crc6f_approvalstatus", "Pending"),
                     "created_at": r.get("createdon", ""),
                     "manual": is_manual,
+                    # Billing type: set at log-creation time from contributor configuration
+                    "billing_type": r.get("crc6f_billingtype") or "Billable",
                 }
                 
                 # Apply additional date filtering in case Dataverse filtering didn't work

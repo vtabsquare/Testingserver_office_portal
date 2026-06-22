@@ -110,6 +110,16 @@ export async function listAllEmployees(forceRefresh = false, includeInactive = f
   return employees;
 }
 
+export function isActiveEmployee(emp) {
+  if (!emp) return false;
+  return emp.active === true || emp.active === 'true' || emp.active === 1 || emp.active === 'Active' || String(emp.status).toLowerCase() === 'active';
+}
+
+export async function listActiveEmployees(forceRefresh = false) {
+  const allEmployees = await listAllEmployees(forceRefresh);
+  return allEmployees.filter(isActiveEmployee);
+}
+
 export async function updateEmployee(employeeId, payload) {
   const res = await timedFetch(`${BASE_URL}/api/employees/${encodeURIComponent(employeeId)}`, {
     method: 'PUT',

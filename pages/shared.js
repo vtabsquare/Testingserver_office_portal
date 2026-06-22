@@ -43,12 +43,9 @@ const renderMyTsRow = (days, idx = 0) => {
           <option>Development</option>
         </select>
       </div>
-      <div class="ts-cell">
-        <select class="ts-input ts-billing">
-          <option>Billable</option>
-          <option selected>Non-billable</option>
-        </select>
-      </div>
+      <div class="ts-cell" style="display:flex; justify-content:center; align-items:center;">
+<span class="tt-billing-badge" style="padding:4px 8px; font-size:11px; background:#f1f5f9; color:#64748b; border: 1px solid #cbd5e1;">Auto-assigned</span>
+</div>
       ${dayInputs}
       <div class="ts-cell ts-total" data-row-total="${idx}">00:00</div>
     `;
@@ -122,8 +119,7 @@ const badgeColor = (seed) => {
     let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
     return colors[h % colors.length];
 };
-const teamRow = (emp, days, logs) => {
-    // Helper to format seconds as HH:MM
+const teamRow = (emp, days, logs) => { /* BILLING_PATCHED */
     const formatTime = (secs) => {
         if (!secs) return '00:00';
         const h = Math.floor(secs / 3600);
@@ -133,45 +129,60 @@ const teamRow = (emp, days, logs) => {
 
     const upEmp = (emp.id || '').toUpperCase();
     const manualFlags = [];
-    const dayHours = days.map(d => {
-        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; // YYYY-MM-DD (local)
-        // Use local date for comparison
+
+    // For each day, compute total seconds AND per-project/task billing breakdown
+    const dayData = days.map(d => {
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         const today = new Date();
         const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-        // Only process dates that are today or in the past (string comparison)
         if (dateStr > todayStr) {
             manualFlags.push(false);
-            return 0;
+            return { secs: 0, billable: 0, nonBillable: 0, breakdown: [], isManual: false };
         }
 
         let totalSecs = 0;
+        let billableSecs = 0;
+        let nonBillableSecs = 0;
         let isManual = false;
+        const breakdown = [];
+
         (logs || []).forEach(l => {
             const logEmpId = (l.employee_id || '').toUpperCase();
-            const logDate = (l.work_date || '').slice(0, 10); // Ensure YYYY-MM-DD format
+            const logDate = (l.work_date || '').slice(0, 10);
             if (logEmpId === upEmp && logDate === dateStr) {
                 const secs = Number(l.seconds || 0);
+                if (secs <= 0) return;
                 totalSecs += secs;
                 if (l.manual) isManual = true;
+                const bt = (l.billing_type || 'Billable').trim();
+                if (bt.toLowerCase() === 'non-billable' || bt.toLowerCase() === 'non billable') {
+                    nonBillableSecs += secs;
+                } else {
+                    billableSecs += secs;
+                }
+                breakdown.push({ project_id: l.project_id || '', task_name: l.task_name || l.task_id || 'Task', billing_type: bt, secs });
             }
         });
         manualFlags.push(isManual);
-        return totalSecs;
+        return { secs: totalSecs, billable: billableSecs, nonBillable: nonBillableSecs, breakdown, isManual };
     });
 
-    // Calculate total for the month
+    const dayHours = dayData.map(d => d.secs);
     const totalSecs = dayHours.reduce((sum, h) => sum + h, 0);
+    const totalBillableSecs = dayData.reduce((sum, d) => sum + d.billable, 0);
+    const totalNonBillableSecs = dayData.reduce((sum, d) => sum + d.nonBillable, 0);
 
-    // Debug logging for employees with logged time
     if (totalSecs > 0) {
         console.log(`Team Timesheet - ${emp.name} (${emp.id}): ${formatTime(totalSecs)} total`);
-        console.log(`  Day hours:`, dayHours.map((h, i) => {
-            const d = days[i];
-            const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-            return `${ds}=${formatTime(h)}`;
-        }).filter((_, i) => dayHours[i] > 0));
     }
+
+    const billingSummaryHtml = totalSecs > 0 ? (() => {
+        const parts = [];
+        if (totalBillableSecs > 0) parts.push(`<span class="tt-billing-badge tt-billing-billable" title="Billable hours this period"><i class="fa-solid fa-circle-dollar-to-slot" style="font-size:9px;"></i> ${formatTime(totalBillableSecs)}</span>`);
+        if (totalNonBillableSecs > 0) parts.push(`<span class="tt-billing-badge tt-billing-nonbillable" title="Non-Billable hours this period"><i class="fa-solid fa-circle-xmark" style="font-size:9px;"></i> ${formatTime(totalNonBillableSecs)}</span>`);
+        return parts.length ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;">${parts.join('')}</div>` : '';
+    })() : '';
 
     const left = `
       <div class="tt-cell tt-sticky" style="display:flex; align-items:center; justify-content:flex-start; gap:10px;">
@@ -179,26 +190,39 @@ const teamRow = (emp, days, logs) => {
         <div>
           <div style="font-weight:600; color: var(--text-primary, #1f2937);">${emp.name}</div>
           <div style="color: var(--text-secondary, #6b7280); font-size:12px;">${emp.id}</div>
+          ${billingSummaryHtml}
         </div>
       </div>`;
     const total = `<div class="tt-cell tt-total" style="text-align:center; font-weight:600;">${formatTime(totalSecs)}</div>`;
-    const cells = dayHours.map((h, i) => {
+    const cells = dayData.map((dayInfo, i) => {
         const d = days[i];
+        const h = dayInfo.secs;
         const isSunday = d.getDay() === 0;
         const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         const today = new Date();
         const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-        // Hard guard: never render time for future days
         const isFuture = ds > todayStr;
-        if (isSunday) {
-            return `<div class="tt-cell day-off"><span>DO</span></div>`;
-        }
+
+        if (isSunday) return `<div class="tt-cell day-off"><span>DO</span></div>`;
+
         if (!isFuture && h > 0) {
             const icon = manualFlags[i]
                 ? '<i class="fa-solid fa-users" style="font-size:10px; color:#eaf2ff; position:absolute; top:4px; right:4px;" title="Manually edited by admin"></i>'
                 : '<i class="fa-regular fa-clock" style="font-size:10px; color:#eaf2ff; position:absolute; top:4px; right:4px;" title="Automatic capture (play/stop)"></i>';
-            return `<div class="tt-cell worked" data-emp="${emp.id}" data-date="${ds}" style="position:relative;"><span style="font-weight:700; font-size:13px;">${formatTime(h)}</span>${icon}</div>`;
+
+            let billingBadgeHtml = '';
+            if (dayInfo.billable > 0 && dayInfo.nonBillable > 0) {
+                billingBadgeHtml = `<div style="display:flex;gap:2px;justify-content:center;flex-wrap:wrap;margin-top:2px;"><span class="tt-billing-badge tt-billing-billable" style="font-size:8px;padding:1px 4px;" title="Billable: ${formatTime(dayInfo.billable)}">B ${formatTime(dayInfo.billable)}</span><span class="tt-billing-badge tt-billing-nonbillable" style="font-size:8px;padding:1px 4px;" title="Non-Billable: ${formatTime(dayInfo.nonBillable)}">NB ${formatTime(dayInfo.nonBillable)}</span></div>`;
+            } else if (dayInfo.nonBillable > 0) {
+                billingBadgeHtml = `<div style="display:flex;justify-content:center;margin-top:2px;"><span class="tt-billing-badge tt-billing-nonbillable" style="font-size:8px;padding:1px 5px;">Non-Billable</span></div>`;
+            } else {
+                billingBadgeHtml = `<div style="display:flex;justify-content:center;margin-top:2px;"><span class="tt-billing-badge tt-billing-billable" style="font-size:8px;padding:1px 5px;">Billable</span></div>`;
+            }
+
+            const tooltipLines = dayInfo.breakdown.map(br => `[${br.billing_type.toLowerCase().includes('non') ? 'NB' : 'B'}] ${br.task_name} (${br.project_id || 'No proj'}) - ${formatTime(br.secs)}`);
+            const tooltipAttr = tooltipLines.length ? `title="${tooltipLines.join('&#10;').replace(/"/g, '&quot;')}"` : '';
+
+            return `<div class="tt-cell worked" data-emp="${emp.id}" data-date="${ds}" style="position:relative;cursor:pointer;" ${tooltipAttr}><span style="font-weight:700; font-size:13px;">${formatTime(h)}</span>${icon}${billingBadgeHtml}</div>`;
         }
         return `<div class="tt-cell empty"></div>`;
     }).join('');
@@ -1595,7 +1619,7 @@ export const renderMyTimesheetPage = async () => {
                     task_id: l.task_id || matchedMeta.task_id || '',
                     task_name: l.task_name || matchedMeta.task_name || '',
                     board_id: matchedMeta.board_id || '',
-                    billing: 'Non-billable',
+                    billing: l.billing_type || 'Billable',
                     hours: Array(7).fill(0),
                     manualFlags: Array(7).fill(false),
                     dayLogIds: Array(7).fill(''),
@@ -1656,7 +1680,7 @@ export const renderMyTimesheetPage = async () => {
 
         if (gridRows.length === 0) {
             // Show a single placeholder manual row if nothing exists
-            manualRows = [{ id: Date.now(), _manual: true, project_id: '', project_name: 'Manual row', task_guid: '', task_id: '', task_name: 'Manual task', billing: 'Non-billable', hours: Array(7).fill(0) }];
+            manualRows = [{ id: Date.now(), _manual: true, project_id: '', project_name: 'Manual row', task_guid: '', task_id: '', task_name: 'Manual task', billing: 'Auto-assigned', hours: Array(7).fill(0) }];
             gridRows = manualRows.slice();
             try { sessionStorage.setItem(weekKey, JSON.stringify(manualRows)); } catch { }
         }
@@ -1765,11 +1789,14 @@ export const renderMyTimesheetPage = async () => {
                         <div style="padding: 8px; color: #334155 !important;">${taskDisplay}</div>
                     </td>
                     <td>
-                        <select class="ts-select ts-billing" data-row="${idx}">
-                            <option value="Non-billable" ${row.billing === 'Non-billable' ? 'selected' : ''}>Non-billable</option>
-                            <option value="Billable" ${row.billing === 'Billable' ? 'selected' : ''}>Billable</option>
-                        </select>
-                    </td>
+<div style="display:flex;justify-content:center;">
+  ${(row.billing || 'Billable').trim().toLowerCase() === 'auto-assigned' ? 
+    '<span class="tt-billing-badge" style="padding:4px 8px; font-size:11px; background:#f1f5f9; color:#64748b; border: 1px solid #cbd5e1;">Auto-assigned</span>' : 
+    ((row.billing || 'Billable').trim().toLowerCase().includes('non') ? 
+      '<span class="tt-billing-badge tt-billing-nonbillable" style="padding:4px 8px; font-size:11px;">Non-Billable</span>' : 
+      '<span class="tt-billing-badge tt-billing-billable" style="padding:4px 8px; font-size:11px;">Billable</span>')}
+</div>
+</td>
                     ${dayInputs}
                     <td class="ts-total">${rowTotal}</td>
                     <td class="ts-actions">
@@ -2677,6 +2704,40 @@ export const renderTeamTimesheetPage = async () => {
             .tt-footnote { color: var(--text-secondary, #6b7280); font-size:12px; padding:10px 14px; }
             /* Alternate background for day headers to align with columns */
             .tt-head .th:nth-child(2n+3) { background: var(--surface-hover, #f6f7fb); }
+          
+            /* === Billing type badges for team timesheet === */
+            .tt-billing-badge {
+              display: inline-flex;
+              align-items: center;
+              gap: 2px;
+              border-radius: 20px;
+              font-weight: 700;
+              letter-spacing: 0.2px;
+              line-height: 1.2;
+              white-space: nowrap;
+            }
+            .tt-billing-billable {
+              background: rgba(16, 185, 129, 0.18);
+              color: #065f46;
+              border: 1px solid rgba(16, 185, 129, 0.35);
+            }
+            .tt-billing-nonbillable {
+              background: rgba(245, 158, 11, 0.18);
+              color: #92400e;
+              border: 1px solid rgba(245, 158, 11, 0.35);
+            }
+            [data-theme='dark'] .tt-billing-billable,
+            .dark .tt-billing-billable {
+              background: rgba(16,185,129,0.25);
+              color: #6ee7b7;
+              border-color: rgba(16,185,129,0.4);
+            }
+            [data-theme='dark'] .tt-billing-nonbillable,
+            .dark .tt-billing-nonbillable {
+              background: rgba(245,158,11,0.25);
+              color: #fcd34d;
+              border-color: rgba(245,158,11,0.4);
+            }
           </style>
           <div class="card" style="padding:0;">
             <div class="tt-header">
