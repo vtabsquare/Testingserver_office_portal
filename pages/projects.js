@@ -3861,7 +3861,7 @@ function initMultiSelect(elementId, items) {
   function renderDropdown(filter = "") {
     dropdown.innerHTML = "";
     items
-      .filter((i) => i.name.toLowerCase().includes(filter.toLowerCase()))
+      .filter((i) => (i.name || '').toLowerCase().includes(filter.toLowerCase()))
       .forEach((i) => {
         const div = document.createElement("div");
         div.textContent = i.name;
@@ -4046,18 +4046,13 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
 
       if (!res.ok || !data.contributors) return;
 
-      const allEmployees = await listAllEmployees();
-
-      // Convert contributors into usable format and filter active employees
+      // Convert contributors into usable format
       const contributors = data.contributors
         .map((c) => ({
           id: c.employee_id || c.employeeId,
-          name: c.employee_name || c.employeeName,
+          name: c.employee_name || c.employeeName || c.employee_id || c.employeeId || '',
         }))
-        .filter((c) => {
-          const empMatch = allEmployees.find(e => e.employee_id === c.id || e.id === c.id);
-          return empMatch ? isActiveEmployee(empMatch) : false;
-        });
+        .filter((c) => c.id && c.name);
 
       // Initialize multi-select
       const assignedSelect = initMultiSelect("assignedTo", contributors);

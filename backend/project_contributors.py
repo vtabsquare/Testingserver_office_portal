@@ -195,20 +195,29 @@ def get_contributors(project_code):
             if r.get(F_PROJECT_ID) == project_code
         ]
 
-        # fetch employee master designations once
+        # fetch employee master designations and names once
         token = get_access_token()
         emp_entity = "crc6f_table12s"
-        emp_url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{emp_entity}?$select=crc6f_employeeid,crc6f_designation&$top=5000"
+        emp_url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{emp_entity}?$select=crc6f_employeeid,crc6f_designation,crc6f_firstname,crc6f_lastname&$top=5000"
         emp_res = get_dataverse_session().get(emp_url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}, timeout=15)
 
         emp_designations = {}
+        emp_names = {}
         if emp_res.ok:
             for emp in emp_res.json().get("value", []):
-                emp_designations[emp.get("crc6f_employeeid")] = emp.get("crc6f_designation", "N/A")
+                eid = emp.get("crc6f_employeeid")
+                emp_designations[eid] = emp.get("crc6f_designation", "N/A")
+                first = emp.get("crc6f_firstname") or ""
+                last = emp.get("crc6f_lastname") or ""
+                full = f"{first} {last}".strip()
+                if full:
+                    emp_names[eid] = full
 
         for c in contributors:
             emp_id = c.get("employee_id")
             c["designation"] = emp_designations.get(emp_id, "N/A")
+            if not c.get("employee_name"):
+                c["employee_name"] = emp_names.get(emp_id, emp_id)
 
         current_app.logger.info("=== END OF LIST ===")
 
