@@ -1225,57 +1225,6 @@ const init = async () => {
       return;
     }
     if (target.closest("#add-employee-btn")) showAddEmployeeModal();
-    // FaceAuth Admin button - fetch SSO token from backend and redirect to FaceAuth admin dashboard
-    if (target.closest("#faceauth-admin-btn")) {
-      e.preventDefault();
-      
-      // Get auth token for API call
-      const authToken = localStorage.getItem('authToken') || localStorage.getItem('face_auth_token');
-      if (!authToken) {
-        alert('Session expired. Please login again.');
-        window.location.href = '/login.html';
-        return;
-      }
-      
-      // Fetch admin SSO token from backend
-      const btn = target.closest("#faceauth-admin-btn");
-      const originalText = btn.innerHTML;
-      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Loading...';
-      btn.disabled = true;
-      
-      (async () => {
-        try {
-          const res = await fetch(`${API_BASE_URL}/api/faceauth/admin-sso-token`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${authToken}`,
-              'Content-Type': 'application/json'
-            }
-          });
-          
-          const data = await res.json();
-          
-          if (!res.ok || !data.success) {
-            alert(data.error || 'Failed to generate admin SSO token. Please try again.');
-            btn.innerHTML = originalText;
-            btn.disabled = false;
-            return;
-          }
-          
-          // Redirect to FaceAuth admin SSO endpoint with the new token
-          const faceAuthAdminUrl = `${data.admin_url}?token=${encodeURIComponent(data.sso_token)}`;
-          window.open(faceAuthAdminUrl, '_blank');
-          
-        } catch (err) {
-          console.error('[FACEAUTH-ADMIN] Error:', err);
-          alert('Failed to connect to FaceAuth admin. Please try again.');
-        } finally {
-          btn.innerHTML = originalText;
-          btn.disabled = false;
-        }
-      })();
-      return;
-    }
     if (target.id === "apply-leave-btn" || target.closest("#apply-leave-btn")) {
       showApplyLeaveModal();
     }

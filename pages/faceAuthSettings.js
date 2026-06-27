@@ -9,6 +9,26 @@ import { renderSettingsLayout } from '../components/settingsLayout.js';
 
 let cachedEmployees = [];
 let isLoading = false;
+let currentFilter = 'all';
+
+function applyFilterAndRender() {
+    let filtered = cachedEmployees;
+    if (currentFilter === 'enabled') {
+        filtered = cachedEmployees.filter(e => e.face_auth_required);
+    } else if (currentFilter === 'disabled') {
+        filtered = cachedEmployees.filter(e => !e.face_auth_required);
+    }
+    
+    const tableContainer = document.getElementById('faceauth-table-container');
+    if (tableContainer) {
+        tableContainer.innerHTML = renderTable(filtered);
+    }
+    
+    const countDisplay = document.getElementById('employee-count-display');
+    if (countDisplay) {
+        countDisplay.textContent = `${filtered.length} employees`;
+    }
+}
 
 async function fetchFaceAuthSettings() {
     try {
@@ -79,7 +99,7 @@ function renderEmployeeRow(emp) {
                             data-enabled="${isEnabled}"
                             style="padding: 6px 12px; font-size: 12px;">
                         <i class="fa-solid ${isEnabled ? 'fa-toggle-on' : 'fa-toggle-off'}"></i>
-                        ${isEnabled ? 'Disable' : 'Enable'}
+                        ${isEnabled ? 'Enabled' : 'Disabled'}
                     </button>
                 </div>
             </td>
@@ -135,11 +155,8 @@ async function handleToggleClick(e) {
             emp.face_auth_required = newEnabled;
         }
         
-        // Re-render the row
-        const row = document.querySelector(`tr[data-employee-id="${employeeId}"]`);
-        if (row) {
-            row.outerHTML = renderEmployeeRow({ ...emp, face_auth_required: newEnabled });
-        }
+        // Re-render table based on current filter
+        applyFilterAndRender();
         
         // Show success message
         showToast(`Face verification ${newEnabled ? 'enabled' : 'disabled'} for ${emp?.name || employeeId}`, 'success');
@@ -147,7 +164,7 @@ async function handleToggleClick(e) {
         // Re-enable button on failure
         btn.disabled = false;
         btn.style.opacity = '1';
-        btn.innerHTML = `<i class="fa-solid ${currentEnabled ? 'fa-toggle-on' : 'fa-toggle-off'}"></i> ${currentEnabled ? 'Disable' : 'Enable'}`;
+        btn.innerHTML = `<i class="fa-solid ${currentEnabled ? 'fa-toggle-on' : 'fa-toggle-off'}"></i> ${currentEnabled ? 'Enabled' : 'Disabled'}`;
         showToast('Failed to update setting', 'error');
     }
 }
@@ -219,6 +236,8 @@ export async function renderFaceAuthSettings() {
     cachedEmployees = await fetchFaceAuthSettings();
     isLoading = false;
     
+    currentFilter = 'all'; // Reset filter on page load
+    
     // Render full page
     container.innerHTML = getPageContentHTML('Settings', renderSettingsLayout('faceauth-settings', `
         <div class="card">
@@ -228,10 +247,12 @@ export async function renderFaceAuthSettings() {
                     <p class="allocation-description" style="margin: 4px 0 0 0;">Manage face verification requirements for employees.</p>
                 </div>
                 <div style="display: flex; align-items: center; gap: 12px;">
-                    <span style="font-size: 13px; color: var(--text-secondary);">${cachedEmployees.length} employees</span>
-                    <button id="refresh-faceauth-btn" class="btn btn-secondary" style="padding: 8px 14px;">
-                        <i class="fa-solid fa-arrows-rotate"></i> Refresh
-                    </button>
+                    <select id="faceauth-filter" class="form-control" style="padding: 6px 12px; border-radius: 4px; border: 1px solid var(--border-color, #ccc); background-color: var(--bg-color, #fff); color: var(--text-primary, #333); font-size: 13px; outline: none; cursor: pointer;">
+                        <option value="all">All Users</option>
+                        <option value="enabled">Enabled Only</option>
+                        <option value="disabled">Disabled Only</option>
+                    </select>
+                    <span id="employee-count-display" style="font-size: 13px; color: var(--text-secondary);">${cachedEmployees.length} employees</span>
                 </div>
             </div>
             
@@ -254,23 +275,11 @@ export async function renderFaceAuthSettings() {
     // Add event listeners
     document.addEventListener('click', handleToggleClick);
     
-    const refreshBtn = document.getElementById('refresh-faceauth-btn');
-    if (refreshBtn) {
-        refreshBtn.addEventListener('click', async () => {
-            refreshBtn.disabled = true;
-            refreshBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Refreshing...';
-            
-            cachedEmployees = await fetchFaceAuthSettings();
-            
-            const tableContainer = document.getElementById('faceauth-table-container');
-            if (tableContainer) {
-                tableContainer.innerHTML = renderTable(cachedEmployees);
-            }
-            
-            refreshBtn.disabled = false;
-            refreshBtn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> Refresh';
-            
-            showToast('Settings refreshed', 'success');
+    const filterSelect = document.getElementById('faceauth-filter');
+    if (filterSelect) {
+        filterSelect.addEventListener('change', (e) => {
+            currentFilter = e.target.value;
+            applyFilterAndRender();
         });
     }
 }

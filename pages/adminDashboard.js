@@ -28,6 +28,8 @@ let adminDashboardTickId = null;
 let refreshInFlight = false;
 let liveRefreshDebounceId = null;
 let liveHooksBound = false;
+let activeAdminTab = 'officehub'; // 'officehub' | 'faceauth'
+let faceAuthIframeLoaded = false;
 
 const escapeHtml = (value = '') => String(value)
   .replace(/&/g, '&amp;')
@@ -94,6 +96,28 @@ const formatUpcomingLabel = (daysUntil) => {
   return `Upcoming in ${safeDays} day${safeDays === 1 ? '' : 's'}`;
 };
 
+const getAvatarInitials = (name = '') => {
+  const parts = name.trim().split(' ').filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  if (parts.length === 1 && parts[0]) return parts[0].slice(0, 2).toUpperCase();
+  return '??';
+};
+
+const buildAvatar = (name) => {
+  return `<div style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:#eff6ff;color:#1d4ed8;font-size:10px;font-weight:500;flex-shrink:0;">${escapeHtml(getAvatarInitials(name))}</div>`;
+};
+
+const buildStatusBadge = (type, text) => {
+  const bg = type === 'approved' ? '#f0fdf4' : type === 'warning' ? '#fffbeb' : '#f1f5f9';
+  const color = type === 'approved' ? '#15803d' : type === 'warning' ? '#b45309' : '#475569';
+  return `<span style="display:inline-block;padding:2px 8px;border-radius:9999px;font-size:11px;font-weight:500;background:${bg};color:${color};">${escapeHtml(text)}</span>`;
+};
+
+const buildStatusDot = (status) => {
+  const color = status === 'green' ? '#10b981' : status === 'red' ? '#ef4444' : status === 'amber' ? '#f59e0b' : '#94a3b8';
+  return `<div style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;"></div>`;
+};
+
 const stopDashboardTimers = () => {
   if (adminDashboardPollId) {
     clearInterval(adminDashboardPollId);
@@ -136,27 +160,29 @@ const bindLiveRefreshHooks = () => {
 const buildStatusDonut = (checkedIn = 0, notCheckedIn = 0) => {
   const total = Math.max(checkedIn + notCheckedIn, 1);
   const checkedPct = (checkedIn / total) * 100;
-  // Calculate dash offset for SVG circle (circumference = 2 * pi * r ≈ 440 for r=70)
-  const circumference = 2 * Math.PI * 70;
+  const circumference = 2 * Math.PI * 56; // Radius 56
   const offset = circumference - (checkedPct / 100) * circumference;
   
   return `
-    <div class="hud-ring-container">
-      <svg class="hud-ring-svg" viewBox="0 0 160 160">
-        <circle class="hud-ring-bg" cx="80" cy="80" r="70"></circle>
-        <circle class="hud-ring-fg" cx="80" cy="80" r="70" 
-          stroke-dasharray="${circumference}" 
-          stroke-dashoffset="${offset}"
-        ></circle>
-      </svg>
-      <div class="hud-ring-center">
-        <div class="value">${checkedIn}<span style="font-size:1rem;color:#64748b;">/${total}</span></div>
-        <div class="label">Checked In</div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:24px;justify-content:center;height:100%;">
+      <div style="position:relative;width:140px;height:140px;">
+        <svg viewBox="0 0 140 140" style="width:100%;height:100%;transform:rotate(-90deg);">
+          <circle cx="70" cy="70" r="56" fill="none" stroke="#f1f5f9" stroke-width="12"></circle>
+          <circle cx="70" cy="70" r="56" fill="none" stroke="#3b82f6" stroke-width="12" 
+            stroke-dasharray="${circumference}" 
+            stroke-dashoffset="${offset}"
+            stroke-linecap="round"
+          ></circle>
+        </svg>
+        <div style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;flex-direction:column;">
+          <div style="font-size:28px;font-weight:600;color:var(--text-primary);line-height:1;margin-bottom:4px;">${checkedIn}<span style="font-size:16px;color:var(--text-secondary);font-weight:500;">/${total}</span></div>
+          <div style="font-size:11px;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Checked In</div>
+        </div>
       </div>
-    </div>
-    <div class="hud-donut-legend">
-      <span><i class="dot dot-present"></i> Checked In</span>
-      <span><i class="dot dot-absent"></i> Offline</span>
+      <div style="display:flex;align-items:center;gap:16px;font-size:13px;color:var(--text-primary);font-weight:500;">
+        <div style="display:flex;align-items:center;gap:6px;"><div style="width:8px;height:8px;border-radius:50%;background:#3b82f6;"></div> Checked In</div>
+        <div style="display:flex;align-items:center;gap:6px;"><div style="width:8px;height:8px;border-radius:50%;background:#e2e8f0;"></div> Offline</div>
+      </div>
     </div>
   `;
 };
@@ -553,7 +579,9 @@ const loadAdminDashboardData = async () => {
     };
   });
 
-  const loginActivityRows = (loginEvents.daily_summary || []).map((row) => {
+  const loginActivityRows = (loginEvents.daily_summary || [])
+    .filter(row => employeeNameMap.has(normalizeEmpId(row.employee_id)))
+    .map((row) => {
     const id = normalizeEmpId(row.employee_id);
     return {
       employee_id: id,
@@ -592,24 +620,45 @@ const buildLiveWorkView = ({ activeTasks = [], idleEmployeeRows = [] } = {}) => 
         .map(
           (task) => `
       <tr>
-        <td>${escapeHtml(task.employee_name || task.employee_id)}</td>
-        <td>${escapeHtml(task.task_name || task.task_id || task.task_guid)}</td>
-        <td>${escapeHtml(task.project_name || task.project_id || '--')}</td>
-        <td class="mono" data-elapsed data-started-at="${escapeHtml(task.started_at_utc || '')}"><i class="led-indicator led-running"></i> ${formatDuration(task.elapsed_seconds)}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px;">
+            ${buildAvatar(task.employee_name || task.employee_id)}
+            <span>${escapeHtml(task.employee_name || task.employee_id)}</span>
+          </div>
+        </td>
+        <td style="color:var(--text-secondary); font-size:12.5px;">${escapeHtml(task.project_name || '--')}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:6px;">
+            ${buildStatusDot('green')}
+            <span>${escapeHtml(task.task_name || task.task_id || task.task_guid)}</span>
+          </div>
+        </td>
+        <td class="mono" data-elapsed data-started-at="${escapeHtml(task.started_at_utc || '')}">${formatDuration(task.elapsed_seconds)}</td>
       </tr>
     `
         )
         .join('')
-    : '<tr><td colspan="4" style="color: var(--text-secondary);">No active task sessions right now.</td></tr>';
+    : '<tr><td colspan="4" style="color: var(--text-secondary); text-align: center; padding: 12px;">No active task sessions right now.</td></tr>';
 
   const idleRows = (idleEmployeeRows || []).length
     ? (idleEmployeeRows || [])
         .map(
           (row) => `
       <tr>
-        <td>${escapeHtml(row.employee_name || row.employee_id)}</td>
-        <td colspan="2" style="color:var(--text-secondary);"><i class="led-indicator led-idle"></i> Checked in — no task started</td>
-        <td>${escapeHtml(formatCheckInTime(row.check_in_time))}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px;">
+            ${buildAvatar(row.employee_name || row.employee_id)}
+            <span>${escapeHtml(row.employee_name || row.employee_id)}</span>
+          </div>
+        </td>
+        <td style="color:var(--text-secondary); font-size:12.5px;">--</td>
+        <td style="color:var(--text-secondary);">
+          <div style="display:flex;align-items:center;gap:6px;">
+            ${buildStatusDot('gray')}
+            <span>No task</span>
+          </div>
+        </td>
+        <td style="color:var(--text-secondary);">${escapeHtml(formatCheckInTime(row.check_in_time))}</td>
       </tr>
     `
         )
@@ -617,7 +666,7 @@ const buildLiveWorkView = ({ activeTasks = [], idleEmployeeRows = [] } = {}) => 
     : '';
 
   const idleNoteHtml = (idleEmployeeRows || []).length
-    ? `<div style="padding:6px 16px 10px;font-size:0.75rem;color:var(--text-secondary);"><i class="led-indicator led-idle" style="background:#f59e0b;box-shadow: 0 0 10px #f59e0b;"></i>${(idleEmployeeRows || []).length} employee${(idleEmployeeRows || []).length > 1 ? 's' : ''} checked in but no task started</div>`
+    ? `<div style="padding:12px;font-size:12px;color:var(--text-secondary);border-top:1px solid #f3f4f6;"><span style="display:inline-block;padding:2px 8px;border-radius:9999px;font-size:11px;font-weight:500;background:#fffbeb;color:#b45309;margin-right:8px;">${(idleEmployeeRows || []).length} Idle</span> employees checked in but no task started</div>`
     : '';
 
   return {
@@ -684,133 +733,278 @@ const patchLiveWorkSection = (liveData = {}) => {
 const buildDashboardLayout = (data) => {
   const combinedLeaveRows = [
     ...(data.leaveRows || []),
-    ...((data.upcomingLeaveRows || []).length ? [{ row_kind: 'separator' }] : []),
     ...(data.upcomingLeaveRows || []),
   ];
 
   const leaveTableRows = combinedLeaveRows.length
     ? combinedLeaveRows.map((row) => {
-      if (row.row_kind === 'separator') {
-        return `
-      <tr>
-        <td colspan="5" style="background: rgba(148, 163, 184, 0.08); color: var(--text-secondary); font-weight: 600;">Upcoming Approved Leaves This Month</td>
-      </tr>
-    `;
-      }
+      const isUpcoming = row.row_kind === 'upcoming';
+      const dateDisplay = row.start_date === row.end_date ? escapeHtml(row.start_date) : `${escapeHtml(row.start_date)} to ${escapeHtml(row.end_date)}`;
       return `
       <tr>
-        <td>${escapeHtml(row.employee_id)}</td>
-        <td>${escapeHtml(row.employee_name)}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px;">
+            ${buildAvatar(row.employee_name)}
+            <div>
+              <div>${escapeHtml(row.employee_name)}</div>
+              <div style="font-size:11px;color:var(--text-secondary);">${escapeHtml(row.employee_id)}</div>
+            </div>
+          </div>
+        </td>
         <td>${escapeHtml(row.leave_type)}</td>
-        <td>${escapeHtml(row.start_date)}</td>
-        <td>${escapeHtml(row.end_date)}</td>
+        <td style="color:var(--text-secondary); white-space:nowrap;">${dateDisplay}</td>
+        <td>${buildStatusBadge('approved', isUpcoming ? 'Upcoming' : 'On Leave')}</td>
       </tr>
     `;
-    }).join('')
-    : '<tr><td colspan="5" style="color: var(--text-secondary);">No employees are on leave today or upcoming.</td></tr>';
+    }).slice(0, 6).join('') // Max 6 rows visible
+    : '<tr><td colspan="4" style="color: var(--text-secondary);text-align:center;padding:12px;">No employees are on leave today or upcoming.</td></tr>';
 
-  const loginActivityRows = data.loginActivityRows.length
+  const loginActivityTableRows = data.loginActivityRows.length
     ? data.loginActivityRows.map((row) => `
       <tr>
         <td>
-          <div class="admin-employee-cell">
-            <strong>${escapeHtml(row.employee_id)}</strong>
+          <div style="display:flex;align-items:center;gap:8px;white-space:nowrap;">
+            ${buildAvatar(row.employee_name)}
             <span>${escapeHtml(row.employee_name)}</span>
           </div>
         </td>
-        <td>${escapeHtml(row.date || '--')}</td>
-        <td>${escapeHtml(formatCheckInTime(row.check_in_time))}</td>
-        <td><span class="status-badge compact ${row.is_checked_in ? 'present' : 'absent'}">${row.is_checked_in ? 'Checked In' : 'Offline'}</span></td>
-        <td>${escapeHtml(formatCheckInTime(row.check_out_time))}</td>
+        <td>${escapeHtml(row.employee_id)}</td>
+        <td style="white-space:nowrap;">${row.is_checked_in ? escapeHtml(formatCheckInTime(row.check_in_time)) : '--'}</td>
+        <td style="color:var(--text-secondary);white-space:nowrap;">${row.check_out_time ? escapeHtml(formatCheckInTime(row.check_out_time)) : '--'}</td>
+        <td style="color:${row.is_checked_in ? '#10b981' : '#9ca3af'}; font-weight:500;">${row.is_checked_in ? 'Online' : 'Offline'}</td>
       </tr>
     `).join('')
-    : '<tr><td colspan="5" style="color: var(--text-secondary);">No login activity available for today.</td></tr>';
+    : '<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:1rem;">No login activity available for today.</td></tr>';
 
   const liveWork = buildLiveWorkView(data);
 
+  // Stats for "At a Glance"
+  const totalEmployees = data.attendance.total_employees || 0;
+  const onTasksCount = liveWork.activeTaskCount;
+  const idleCount = (data.idleEmployeeRows || []).length;
+  const approvedLeaves = combinedLeaveRows.length;
+
   return `
-    <section class="admin-dashboard admin-dashboard-hightech">
-      <div class="admin-kpis admin-kpis-hightech">
-        <div class="hero-stat-hightech"><strong>${data.attendance.total_employees || 0}</strong><span>Total Employees</span></div>
-        <div class="hero-stat-hightech"><strong>${data.attendance.checked_in_count || 0}</strong><span>Checked In</span></div>
-        <div class="hero-stat-hightech"><strong>${data.attendance.not_checked_in_count || 0}</strong><span>Not Checked In</span></div>
-        <div class="hero-stat-hightech"><strong id="admin-kpi-active-task-count">${liveWork.activeTaskCount}</strong><span>Active Tasks</span></div>
+    <style>
+      .admin-layout-v2 {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        font-family: inherit;
+        font-weight: 400;
+        margin-bottom: 24px;
+      }
+      .admin-stat-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+      }
+      .admin-stat-tile {
+        background: #f9fafb;
+        border-radius: 12px;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+      }
+      .admin-stat-number {
+        font-size: 22px;
+        font-weight: 500;
+        color: var(--text-primary);
+        line-height: 1.2;
+      }
+      .admin-stat-label {
+        font-size: 11px;
+        color: var(--text-secondary);
+        margin-top: 4px;
+        text-transform: uppercase;
+      }
+      .admin-layout-grid {
+        display: grid;
+        grid-template-columns: 1.85fr 1fr;
+        gap: 16px;
+      }
+      .admin-card-v2 {
+        background: #ffffff;
+        border: 1px solid #f3f4f6;
+        border-radius: 12px;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .admin-card-header {
+        margin-bottom: 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+      }
+      .admin-section-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #2563eb; /* brand blue */
+        font-weight: 500;
+        margin-bottom: 4px;
+      }
+      .admin-section-title {
+        font-size: 15px;
+        font-weight: 500;
+        color: var(--text-primary);
+        margin: 0;
+      }
+      .admin-table-v2 {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .admin-table-v2 th {
+        font-size: 11px;
+        text-transform: uppercase;
+        color: var(--text-secondary);
+        font-weight: 500;
+        text-align: left;
+        padding: 8px 12px;
+        border-bottom: 1px solid #f3f4f6;
+      }
+      .admin-table-v2 td {
+        font-size: 12.5px;
+        padding: 8px 12px;
+        height: 36px;
+        color: var(--text-primary);
+        border-bottom: 1px solid #f3f4f6;
+        vertical-align: middle;
+      }
+      .admin-table-v2 tbody tr:hover {
+        background-color: #f9fafb;
+      }
+      .admin-table-v2 tbody tr:last-child td {
+        border-bottom: none;
+      }
+      .glance-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 0;
+        border-bottom: 1px solid #f3f4f6;
+      }
+      .glance-row:last-child {
+        border-bottom: none;
+      }
+      .glance-label {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+      .glance-value {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-primary);
+      }
+      .auto-refresh-pill {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 9999px;
+        font-size: 11px;
+        background: #eff6ff;
+        color: #2563eb;
+        font-weight: 500;
+      }
+    </style>
+    
+    <div class="admin-layout-v2">
+      <!-- Row 1: Summary Stats -->
+      <div class="admin-stat-row">
+        <div class="admin-stat-tile">
+          <div class="admin-stat-number">${data.attendance.checked_in_count || 0}</div>
+          <div class="admin-stat-label">TOTAL CHECKED IN</div>
+        </div>
+        <div class="admin-stat-tile">
+          <div class="admin-stat-number">${data.attendance.not_checked_in_count || 0}</div>
+          <div class="admin-stat-label">OFFLINE / NOT CHECKED IN</div>
+        </div>
+        <div class="admin-stat-tile">
+          <div class="admin-stat-number" id="admin-kpi-active-task-count">${onTasksCount}</div>
+          <div class="admin-stat-label">EMPLOYEES ON ACTIVE TASKS</div>
+        </div>
+        <div class="admin-stat-tile">
+          <div class="admin-stat-number">${idleCount}</div>
+          <div class="admin-stat-label">CHECKED IN BUT NO TASK STARTED</div>
+        </div>
       </div>
 
-      <div class="admin-dashboard-grid-hightech">
-        <section class="admin-card-hightech col-span-3">
-          <header class="card-heading">
-            <div>
-              <p class="eyebrow">Live Work</p>
-              <h3>Active Tasks Across Organization</h3>
-            </div>
-            <span class="badge" style="background:rgba(56,189,248,0.2);color:#38bdf8;border:1px solid #38bdf8;">Auto refresh: 15s</span>
-          </header>
-          <div class="leave-table-scroll admin-table-scroll">
-            <table class="table leave-table">
-              <thead>
-                <tr>
-                  <th>Employee</th>
-                  <th>Task</th>
-                  <th>Project</th>
-                  <th>Running</th>
-                </tr>
-              </thead>
-              <tbody id="admin-live-work-body">
-                ${liveWork.activeTaskRows}
-                ${liveWork.idleRows}
-              </tbody>
-            </table>
+      <!-- Row 2: Live Work (Full Width) -->
+      <div class="admin-card-v2">
+        <div class="admin-card-header">
+          <div>
+            <div class="admin-section-label">Live Work</div>
+            <h3 class="admin-section-title">Active Tasks Across Organization</h3>
           </div>
-          <div id="admin-live-work-idle-note">${liveWork.idleNoteHtml}</div>
-        </section>
+          <div class="auto-refresh-pill">Auto refresh: 15s</div>
+        </div>
+        <div style="flex:1;max-height:280px;overflow-y:auto;">
+          <table class="admin-table-v2">
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th>Project</th>
+                <th>Task/Status</th>
+                <th>Running</th>
+              </tr>
+            </thead>
+            <tbody id="admin-live-work-body">
+              ${liveWork.activeTaskRows}
+              ${liveWork.idleRows}
+            </tbody>
+          </table>
+        </div>
+        <div id="admin-live-work-idle-note">${liveWork.idleNoteHtml}</div>
+      </div>
 
-        <section class="admin-card-hightech col-span-2">
-          <header class="card-heading">
+      <!-- Row 3: Attendance & Leave Snapshot -->
+      <div class="admin-layout-grid">
+        <div class="admin-card-v2" style="display:flex;flex-direction:column;padding:24px;">
+          <div class="admin-card-header" style="margin-bottom:24px;">
             <div>
-              <p class="eyebrow">Attendance</p>
-              <h3>Today's Overview</h3>
+              <div class="admin-section-label">Attendance</div>
+              <h3 class="admin-section-title">Today's Overview</h3>
             </div>
-          </header>
-          <div style="display:flex;gap:2rem;align-items:center;flex-wrap:wrap;">
-            <div style="flex:1;min-width:200px;display:flex;flex-direction:column;align-items:center;">
+          </div>
+          <div style="display:flex;gap:20px;flex:1;align-items:stretch;">
+            <div style="flex:0 0 170px;display:flex;align-items:center;justify-content:center;">
               ${buildStatusDonut(data.attendance.checked_in_count || 0, data.attendance.not_checked_in_count || 0)}
             </div>
-            <div class="admin-monitoring-table-wrap admin-table-scroll" style="flex:2;min-width:300px;max-height:280px;overflow-y:auto;">
-              <table class="table leave-table admin-monitoring-table">
-                <thead>
+            <div style="flex:1;max-height:280px;overflow-y:auto;border:1px solid #f3f4f6;border-radius:12px;">
+              <table class="admin-table-v2" style="margin:0;">
+                <thead style="position:sticky;top:0;background:#f9fafb;z-index:1;">
                   <tr>
-                    <th>Employee</th>
-                    <th>Date</th>
-                    <th>Check-In</th>
-                    <th>Presence</th>
-                    <th>Check-Out</th>
+                    <th style="padding:10px 12px;white-space:nowrap;">Employee</th>
+                    <th style="padding:10px 12px;">ID</th>
+                    <th style="padding:10px 12px;white-space:nowrap;">Check-In</th>
+                    <th style="padding:10px 12px;white-space:nowrap;">Check-Out</th>
+                    <th style="padding:10px 12px;">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  ${loginActivityRows}
+                  ${loginActivityTableRows}
                 </tbody>
               </table>
             </div>
           </div>
-        </section>
+        </div>
 
-        <section class="admin-card-hightech col-span-1" style="display:flex;flex-direction:column;">
-          <header class="card-heading">
+        <div class="admin-card-v2">
+          <div class="admin-card-header">
             <div>
-              <p class="eyebrow">Leave</p>
-              <h3>Leaves Snapshot</h3>
+              <div class="admin-section-label">Leave</div>
+              <h3 class="admin-section-title">Leaves Snapshot</h3>
             </div>
-          </header>
-          <div class="leave-table-scroll admin-table-scroll" style="flex:1;max-height:280px;overflow-y:auto;">
-            <table class="table leave-table">
+          </div>
+          <div style="flex:1;max-height:280px;overflow-y:auto;">
+            <table class="admin-table-v2">
               <thead>
                 <tr>
-                  <th>ID</th>
-                  <th>Name</th>
+                  <th>Employee</th>
                   <th>Leave Type</th>
-                  <th>Start</th>
-                  <th>End</th>
+                  <th>Dates</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -818,10 +1012,11 @@ const buildDashboardLayout = (data) => {
               </tbody>
             </table>
           </div>
-        </section>
-
+        </div>
       </div>
+    </div>
 
+    <section class="admin-dashboard admin-dashboard-hightech">
       <div id="ts-monitor-container">
         <!-- Timesheet Monitor gets rendered here -->
       </div>
@@ -1042,14 +1237,42 @@ const refreshAndRender = async (showSkeleton = true, scope = 'full') => {
     }
 
     const data = await loadAdminDashboardData();
+
+    // Check if URL hash has ?tab=faceauth
+    const hashStr = window.location.hash || '';
+    const hashQs = hashStr.includes('?') ? hashStr.split('?')[1] : '';
+    const hashParams = new URLSearchParams(hashQs);
+    if (hashParams.get('tab') === 'faceauth') {
+      activeAdminTab = 'faceauth';
+    }
+
+    const tabBarHtml = `
+      <div style="display:flex;border-bottom:1px solid #e5e7eb;padding:0 24px;margin-bottom:16px;">
+        <button id="admin-tab-officehub" style="padding:10px 20px;font-size:14px;font-weight:500;border:none;border-bottom:2px solid ${activeAdminTab === 'officehub' ? '#2563eb' : 'transparent'};color:${activeAdminTab === 'officehub' ? '#2563eb' : '#9ca3af'};background:transparent;cursor:pointer;margin-bottom:-1px;transition:color 0.2s,border-color 0.2s;">OfficeHub</button>
+        <button id="admin-tab-faceauth" style="padding:10px 20px;font-size:14px;font-weight:500;border:none;border-bottom:2px solid ${activeAdminTab === 'faceauth' ? '#2563eb' : 'transparent'};color:${activeAdminTab === 'faceauth' ? '#2563eb' : '#9ca3af'};background:transparent;cursor:pointer;margin-bottom:-1px;transition:color 0.2s,border-color 0.2s;">FaceAuth</button>
+      </div>
+    `;
+
+    const dashboardContent = buildDashboardLayout(data);
+
     appContent.innerHTML = getPageContentHTML(
       'Admin Dashboard',
-      buildDashboardLayout(data),
+      `${tabBarHtml}
+       <div id="officehub-content" style="display:${activeAdminTab === 'officehub' ? 'block' : 'none'};">${dashboardContent}</div>
+       <iframe id="faceauth-iframe" title="FaceAuth Admin" allow="camera; microphone"
+         style="display:${activeAdminTab === 'faceauth' ? 'block' : 'none'};width:100%;height:calc(100vh - 130px);border:none;"
+       ></iframe>`,
       '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>'
     );
 
     attachRefreshAction();
+    attachTabSwitcher();
     startElapsedTick();
+
+    // If faceauth tab is active, load the iframe
+    if (activeAdminTab === 'faceauth') {
+      loadFaceAuthIframe();
+    }
 
     // Async-load timesheet monitor card (non-blocking)
     loadAndRenderTimesheetMonitor();
@@ -1067,9 +1290,49 @@ const refreshAndRender = async (showSkeleton = true, scope = 'full') => {
   }
 };
 
+const switchAdminTab = (tab) => {
+  activeAdminTab = tab;
+  const ohContent = document.getElementById('officehub-content');
+  const faIframe = document.getElementById('faceauth-iframe');
+  const ohTab = document.getElementById('admin-tab-officehub');
+  const faTab = document.getElementById('admin-tab-faceauth');
+
+  if (ohContent) ohContent.style.display = tab === 'officehub' ? 'block' : 'none';
+  if (faIframe) faIframe.style.display = tab === 'faceauth' ? 'block' : 'none';
+
+  if (ohTab) {
+    ohTab.style.borderBottomColor = tab === 'officehub' ? '#2563eb' : 'transparent';
+    ohTab.style.color = tab === 'officehub' ? '#2563eb' : '#9ca3af';
+  }
+  if (faTab) {
+    faTab.style.borderBottomColor = tab === 'faceauth' ? '#2563eb' : 'transparent';
+    faTab.style.color = tab === 'faceauth' ? '#2563eb' : '#9ca3af';
+  }
+
+  if (tab === 'faceauth') {
+    loadFaceAuthIframe();
+  }
+};
+
+const loadFaceAuthIframe = () => {
+  const iframe = document.getElementById('faceauth-iframe');
+  if (!iframe || faceAuthIframeLoaded) return;
+
+  iframe.src = 'https://biometrics.vtabsquare.com/admin/dashboard';
+  faceAuthIframeLoaded = true;
+};
+
+const attachTabSwitcher = () => {
+  const ohTab = document.getElementById('admin-tab-officehub');
+  const faTab = document.getElementById('admin-tab-faceauth');
+  if (ohTab) ohTab.onclick = () => switchAdminTab('officehub');
+  if (faTab) faTab.onclick = () => switchAdminTab('faceauth');
+};
+
 export const renderAdminDashboardPage = async () => {
   stopDashboardTimers();
   bindLiveRefreshHooks();
+  faceAuthIframeLoaded = false;
 
   const appContent = document.getElementById('app-content');
   if (!appContent) return;

@@ -103,7 +103,7 @@ export const getSidebarHTML = () => {
                 <i class="fa-solid fa-gear" style="margin-right: 8px;"></i>Settings
             </a>
         </li>
-        ${canViewApplication('faceauth_admin') ? '<li><a href="#" class="nav-link" id="faceauth-admin-btn"><i class="fa-solid fa-fingerprint"></i> FaceAuth Admin</a></li>' : ''}` : ''}
+        ${canViewApplication('faceauth_admin') ? '<li><a href="#/admin-dashboard?tab=faceauth" class="nav-link" data-page="admin-dashboard"><i class="fa-solid fa-fingerprint"></i> FaceAuth Admin</a></li>' : ''}` : ''}
     </ul>
 `;
 };
