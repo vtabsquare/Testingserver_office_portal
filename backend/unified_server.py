@@ -12,6 +12,9 @@ import os
 import hashlib
 import json
 import uuid
+import io
+import zipfile
+import csv
 import imaplib
 import email
 from typing import Tuple
@@ -17835,6 +17838,196 @@ def seed_role_permissions():
     except Exception as e:
         logger.error(f"Error seeding role permissions: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+# ================== ADMIN BACKUP + PURGE ROUTES ==================
+
+@app.route('/api/admin/backup', methods=['GET'])
+def admin_backup():
+    """
+    Fetches the last 3 months of data from every major table and streams
+    a ZIP file (one CSV per table) to the browser for local download.
+    The ZIP also contains a README explaining the purge cutoff.
+    """
+    try:
+        sb = get_supabase()
+
+        # Compute cutoff: beginning of the month exactly 3 months ago
+        today = datetime.now(timezone.utc).date()
+        cutoff = today.replace(day=1)
+        for _ in range(3):
+            cutoff = (cutoff - timedelta(days=1)).replace(day=1)
+        since_date = cutoff.isoformat()   # oldest date kept in backup window
+        until_date = today.isoformat()
+
+        # --- Table definitions: (friendly_name, table_name, date_column_or_None) ---
+        TABLE_DEFS = [
+            ("employees",           "crc6f_table12s",                  "created_at"),
+            ("attendance",          "crc6f_table13s",                  "crc6f_date"),
+            ("leave_requests",      "crc6f_table14s",                  "created_at"),
+            ("leave_management",    "crc6f_hr_leavemangements",        "created_at"),
+            ("comp_off_requests",   "crc6f_compensatoryrequests",      "created_at"),
+            ("assets",              "crc6f_hr_assetdetailses",         "created_at"),
+            ("holidays",            "crc6f_hr_holidayses",             None),
+            ("projects",            "crc6f_hr_projectheaders",         "created_at"),
+            ("project_details",     "crc6f_hr_projectdetailses",       "created_at"),
+            ("tasks",               "crc6f_hr_taskdetailses",          "created_at"),
+            ("contributors",        "crc6f_hr_projectcontributorses",  "created_at"),
+            ("timesheet_logs",      "crc6f_hr_timesheetlogs",          "created_at"),
+            ("login_activity",      "crc6f_hr_loginactivitytbs",       "crc6f_date"),
+            ("inbox",               "crc6f_hr_inboxes",                "created_at"),
+            ("hierarchies",         "crc6f_hierarchies",               "created_at"),
+            ("role_permissions",    "role_permissions",                "created_at"),
+        ]
+
+        zip_buffer = io.BytesIO()
+        row_counts = {}
+
+        with zipfile.ZipFile(zip_buffer, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+            for (friendly, table, date_col) in TABLE_DEFS:
+                try:
+                    query = sb.table(table).select('*')
+                    if date_col:
+                        query = query.gte(date_col, since_date).lte(date_col, until_date)
+                    result = query.limit(10000).execute()
+                    rows = result.data or []
+                except Exception as tbl_err:
+                    print(f"[BACKUP] Skipping {table}: {tbl_err}")
+                    rows = []
+
+                row_counts[friendly] = len(rows)
+
+                if not rows:
+                    csv_bytes = b""
+                else:
+                    csv_io = io.StringIO()
+                    writer = csv.DictWriter(
+                        csv_io,
+                        fieldnames=list(rows[0].keys()),
+                        extrasaction='ignore',
+                        lineterminator='\r\n'
+                    )
+                    writer.writeheader()
+                    writer.writerows(rows)
+                    csv_bytes = csv_io.getvalue().encode('utf-8-sig')  # utf-8-sig for Excel compat
+
+                zf.writestr(f"{friendly}.csv", csv_bytes)
+
+            # Write a README so the admin knows what this ZIP contains
+            readme_lines = [
+                f"OfficeTool Backup",
+                f"=================",
+                f"Generated : {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                f"Period    : {since_date}  to  {until_date}",
+                f"",
+                f"Files in this archive (last 3 months of data):",
+            ]
+            for (friendly, _, _dc) in TABLE_DEFS:
+                readme_lines.append(f"  {friendly}.csv  — {row_counts.get(friendly, 0)} rows")
+            readme_lines += [
+                "",
+                "NOTE: After downloading this backup you may use the",
+                "      'Purge Old Data' action to delete rows older than",
+                f"     {since_date} from the live Supabase database.",
+                "      The tables themselves are NEVER dropped.",
+            ]
+            zf.writestr("README.txt", "\n".join(readme_lines).encode("utf-8"))
+
+        zip_buffer.seek(0)
+
+        timestamp_label = today.strftime('%Y%m%d')
+        filename = f"OfficeTool_Backup_{since_date}_to_{until_date}_{timestamp_label}.zip"
+
+        from flask import send_file
+        return send_file(
+            zip_buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except Exception as e:
+        import traceback as _tb
+        print(f"[ERROR] admin_backup failed: {e}\n{_tb.format_exc()}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/purge-old-data', methods=['POST'])
+def admin_purge_old_data():
+    """
+    Deletes rows that are OLDER than 3 months from transactional tables.
+    Master / reference data (employees, projects, assets, etc.) is never touched.
+    Deletion order respects FK constraints (children before parents).
+    Only rows are removed — tables are never dropped.
+    """
+    try:
+        sb = get_supabase()
+
+        # Cutoff = first day of the month 3 months ago
+        today = datetime.now(timezone.utc).date()
+        cutoff = today.replace(day=1)
+        for _ in range(3):
+            cutoff = (cutoff - timedelta(days=1)).replace(day=1)
+        cutoff_iso = cutoff.isoformat()
+
+        print(f"[PURGE] Deleting rows older than {cutoff_iso} from transactional tables ...")
+
+        # Deletion order: children first, then parents, to satisfy FK constraints.
+        # Format: (label, table_name, date_column_used_for_cutoff)
+        PURGE_ORDER = [
+            # ── Transactional / time-series tables only ──────────────────────
+            # Inbox / notifications
+            ("inbox",            "crc6f_hr_inboxes",            "created_at"),
+            # Login activity (check-in/check-out geo log)
+            ("login_activity",   "crc6f_hr_loginactivitytbs",   "crc6f_date"),
+            # Attendance records
+            ("attendance",       "crc6f_table13s",              "crc6f_date"),
+            # Timesheet logs
+            ("timesheet_logs",   "crc6f_hr_timesheetlogs",      "created_at"),
+            # Comp-off requests
+            ("comp_off_requests","crc6f_compensatoryrequests",  "created_at"),
+            # Leave requests
+            ("leave_requests",   "crc6f_table14s",              "created_at"),
+            # Auth session events (security audit log)
+            ("auth_session_events", "auth_session_events",      "created_at"),
+        ]
+
+        # Master/reference tables intentionally excluded from purge:
+        #   employees, projects, boards, tasks, contributors, assets,
+        #   holidays, hierarchies, leave_management (balances), role_permissions,
+        #   login_accounts, chat tables (conversations, messages, message_statuses)
+
+        deleted_counts = {}
+
+        for (label, table, date_col) in PURGE_ORDER:
+            try:
+                # lt = strictly less than cutoff date
+                result = (sb.table(table)
+                           .delete()
+                           .lt(date_col, cutoff_iso)
+                           .execute())
+                # Supabase returns deleted rows in result.data
+                count = len(result.data) if result.data else 0
+                deleted_counts[label] = count
+                print(f"[PURGE]  {label}: deleted {count} rows (before {cutoff_iso})")
+            except Exception as tbl_err:
+                print(f"[PURGE]  {label}: FAILED — {tbl_err}")
+                deleted_counts[label] = f"error: {tbl_err}"
+
+        total_deleted = sum(v for v in deleted_counts.values() if isinstance(v, int))
+        print(f"[PURGE] Done. Total rows deleted: {total_deleted}")
+
+        return jsonify({
+            'success': True,
+            'cutoff_date': cutoff_iso,
+            'deleted': deleted_counts,
+            'total_deleted': total_deleted,
+        }), 200
+
+    except Exception as e:
+        import traceback as _tb
+        print(f"[ERROR] admin_purge_old_data failed: {e}\n{_tb.format_exc()}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     print('\n' + '== ' * 30)

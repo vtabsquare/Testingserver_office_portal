@@ -1198,6 +1198,75 @@ const exportWsrReport = async () => {
   await _doExportWsrForRange(fmt(lastMonday), fmt(lastSaturday), 'LastWeek_Mon_Sat');
 };
 
+// ── Backup: download last 3 months + purge older data from Supabase ──────────
+const downloadAdminBackup = async () => {
+  const btn = document.getElementById('admin-backup-btn');
+  const _setBtnState = (html, disabled = true) => {
+    if (btn) { btn.disabled = disabled; btn.innerHTML = html; }
+  };
+
+  _setBtnState('<i class="fa-solid fa-spinner fa-spin"></i> Backing up&hellip;');
+
+  try {
+    // ── Step 1: Download the ZIP ─────────────────────────────────────────────
+    const res = await fetch(`${BASE_URL}/api/admin/backup`, { method: 'GET' });
+    if (!res.ok) {
+      let msg = `Server error ${res.status}`;
+      try { const d = await res.json(); msg = d.error || msg; } catch (_) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const contentDisposition = res.headers.get('Content-Disposition') || '';
+    const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+    const filename = filenameMatch
+      ? filenameMatch[1]
+      : `OfficeTool_Backup_${new Date().toISOString().slice(0, 10)}.zip`;
+
+    // Trigger browser save-file dialog
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+    // ── Step 2: Purge old data from Supabase ─────────────────────────────────
+    _setBtnState('<i class="fa-solid fa-spinner fa-spin"></i> Purging old data&hellip;');
+
+    const purgeRes = await fetch(`${BASE_URL}/api/admin/purge-old-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const purgeData = await purgeRes.json();
+
+    if (!purgeRes.ok || !purgeData.success) {
+      throw new Error(purgeData.error || `Purge failed (HTTP ${purgeRes.status})`);
+    }
+
+    // ── Step 3: Show success summary ─────────────────────────────────────────
+    _setBtnState('<i class="fa-solid fa-circle-check"></i> Done!', false);
+    setTimeout(() => _setBtnState('<i class="fa-solid fa-database"></i> Backup', false), 3000);
+
+    const { cutoff_date, deleted, total_deleted } = purgeData;
+    const tableLines = Object.entries(deleted || {})
+      .map(([tbl, cnt]) => `  • ${tbl}: ${typeof cnt === 'number' ? cnt + ' rows deleted' : cnt}`)
+      .join('\n');
+    alert(
+      `✅ Backup complete!\n\n` +
+      `📦 File saved: ${filename}\n\n` +
+      `🗑️ Purged ${total_deleted} rows older than ${cutoff_date} from Supabase:\n` +
+      `${tableLines}`
+    );
+
+  } catch (err) {
+    console.error('Backup/Purge failed:', err);
+    alert(`Backup or purge failed:\n${err.message || 'Unknown error'}`);
+    _setBtnState('<i class="fa-solid fa-database"></i> Backup', false);
+  }
+};
+
 const attachRefreshAction = () => {
   const refreshBtn = document.getElementById('admin-dashboard-refresh');
   const exportBtn = document.getElementById('admin-export-wsr');
@@ -1212,6 +1281,10 @@ const attachRefreshAction = () => {
   }
   if (exportBtn) {
     exportBtn.onclick = exportWsrReport;
+  }
+  const backupBtn = document.getElementById('admin-backup-btn');
+  if (backupBtn) {
+    backupBtn.onclick = downloadAdminBackup;
   }
 };
 
@@ -1233,7 +1306,7 @@ const refreshAndRender = async (showSkeleton = true, scope = 'full') => {
     }
 
     if (showSkeleton) {
-      appContent.innerHTML = getPageContentHTML('Admin Dashboard', buildSkeleton(), '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>');
+      appContent.innerHTML = getPageContentHTML('Admin Dashboard', buildSkeleton(), '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-backup-btn" class="btn btn-outline" style="margin-right: 8px;"><i class="fa-solid fa-database"></i> Backup</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>');
     }
 
     const data = await loadAdminDashboardData();
@@ -1262,7 +1335,7 @@ const refreshAndRender = async (showSkeleton = true, scope = 'full') => {
        <iframe id="faceauth-iframe" title="FaceAuth Admin" allow="camera; microphone"
          style="display:${activeAdminTab === 'faceauth' ? 'block' : 'none'};width:100%;height:calc(100vh - 130px);border:none;"
        ></iframe>`,
-      '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>'
+      '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-backup-btn" class="btn btn-outline" style="margin-right: 8px;"><i class="fa-solid fa-database"></i> Backup</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>'
     );
 
     attachRefreshAction();
