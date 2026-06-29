@@ -1387,12 +1387,26 @@ const switchAdminTab = (tab) => {
   }
 };
 
-const loadFaceAuthIframe = () => {
+const loadFaceAuthIframe = async () => {
   const iframe = document.getElementById('faceauth-iframe');
   if (!iframe || faceAuthIframeLoaded) return;
-
-  iframe.src = 'https://biometrics.vtabsquare.com/admin/dashboard';
   faceAuthIframeLoaded = true;
+
+  try {
+    const authToken = localStorage.getItem('authToken') || '';
+    const res = await fetch(`${BASE_URL}/api/faceauth/admin-sso-token`, {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    const data = await res.json();
+    if (res.ok && data.success && data.sso_token && data.admin_url) {
+      iframe.src = `${data.admin_url}?token=${encodeURIComponent(data.sso_token)}`;
+    } else {
+      iframe.src = 'https://biometrics.vtabsquare.com/admin/dashboard';
+    }
+  } catch (err) {
+    console.error('[FaceAuth] SSO token fetch failed, falling back:', err);
+    iframe.src = 'https://biometrics.vtabsquare.com/admin/dashboard';
+  }
 };
 
 const attachTabSwitcher = () => {
