@@ -47,6 +47,7 @@ from attendance_service_v2 import attendance_v2_bp, force_attendance_checkout_fo
 from attendance_scheduler import setup_scheduler as _setup_attendance_scheduler
 from overdue_tasks_notifier import bp_overdue
 from overdue_scheduler import setup_overdue_scheduler
+import backup_scheduler as _bk_sched
 
 try:
     from zoneinfo import ZoneInfo
@@ -17839,6 +17840,91 @@ def seed_role_permissions():
         logger.error(f"Error seeding role permissions: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+# ================== ADMIN BACKUP CONFIG ==================
+
+_BACKUP_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'backup_config.json')
+_BACKUP_CONFIG_DEFAULTS = {
+    'frequency': 'monthly',      # 'daily' | 'weekly' | 'fortnightly' | 'monthly' | 'quarterly'
+    'day_of_month': 1,           # for monthly/quarterly: which day triggers backup
+    'interval_days': None,       # for daily/weekly/fortnightly: number of days between backups
+    'enabled': True,
+    'last_backup_date': None,    # ISO date string of last successful backup (updated by frontend)
+}
+
+def _read_backup_config():
+    try:
+        if os.path.exists(_BACKUP_CONFIG_FILE):
+            with open(_BACKUP_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            # Merge with defaults so new keys are always present
+            merged = {**_BACKUP_CONFIG_DEFAULTS, **data}
+            return merged
+    except Exception as e:
+        print(f"[BACKUP-CONFIG] Read error: {e}")
+    return dict(_BACKUP_CONFIG_DEFAULTS)
+
+def _write_backup_config(cfg: dict):
+    try:
+        with open(_BACKUP_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"[BACKUP-CONFIG] Write error: {e}")
+        return False
+
+
+@app.route('/api/admin/backup-config', methods=['GET'])
+def get_backup_config():
+    """Return current backup schedule configuration."""
+    try:
+        cfg = _read_backup_config()
+        return jsonify({'success': True, 'config': cfg}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/backup-config', methods=['POST'])
+def save_backup_config():
+    """Save backup schedule configuration sent from the Admin Dashboard UI."""
+    try:
+        body = request.get_json(force=True) or {}
+        cfg = _read_backup_config()
+
+        allowed_keys = {'frequency', 'day_of_month', 'interval_days', 'enabled', 'last_backup_date'}
+        for k, v in body.items():
+            if k in allowed_keys:
+                cfg[k] = v
+
+        # Compute interval_days from frequency for convenience
+        freq_to_days = {
+            'daily':       1,
+            'weekly':      7,
+            'fortnightly': 14,
+            'monthly':     None,   # handled by day_of_month
+            'quarterly':   None,   # handled by day_of_month
+        }
+        if cfg['frequency'] in freq_to_days:
+            cfg['interval_days'] = freq_to_days[cfg['frequency']]
+
+        ok = _write_backup_config(cfg)
+        if not ok:
+            return jsonify({'success': False, 'error': 'Failed to write config file'}), 500
+
+        # Live-update the APScheduler job with the new trigger (no restart needed)
+        try:
+            _bk_sched.reschedule(
+                read_cfg_fn     = _read_backup_config,
+                get_supabase_fn = get_supabase,
+                write_cfg_fn    = _write_backup_config,
+            )
+        except Exception as sched_err:
+            print(f'[BACKUP-CONFIG] reschedule warning: {sched_err}')
+
+        return jsonify({'success': True, 'config': cfg}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ================== ADMIN BACKUP + PURGE ROUTES ==================
 
 @app.route('/api/admin/backup', methods=['GET'])
@@ -18028,6 +18114,18 @@ def admin_purge_old_data():
         print(f"[ERROR] admin_purge_old_data failed: {e}\n{_tb.format_exc()}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+# ── Backup scheduler status endpoint ──────────────────────────────────────────
+@app.route('/api/admin/backup-status', methods=['GET'])
+def get_backup_scheduler_status():
+    """Return current APScheduler state and last backup info."""
+    cfg    = _read_backup_config()
+    sched  = _bk_sched.get_scheduler_status()
+    return jsonify({
+        'success': True,
+        'scheduler': sched,
+        'config':   cfg,
+    }), 200
+
 
 if __name__ == '__main__':
     print('\n' + '== ' * 30)
@@ -18036,4 +18134,14 @@ if __name__ == '__main__':
     print('Server running on: http://localhost:5000')
     print('Frontend should connect to: http://localhost:5000/api/*')
     print('\n' + '='*80 + '\n')
+
+    # Start server-side backup scheduler (runs independently of any browser session)
+    _bk_sched.init_backup_scheduler(
+        app,
+        get_supabase_fn = get_supabase,
+        read_cfg_fn     = _read_backup_config,
+        write_cfg_fn    = _write_backup_config,
+    )
+
     app.run(host='0.0.0.0', port=5000, debug=True)
+

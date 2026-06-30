@@ -1021,6 +1021,11 @@ const buildDashboardLayout = (data) => {
         <!-- Timesheet Monitor gets rendered here -->
       </div>
     </section>
+
+    <!-- Backup Schedule Settings Card -->
+    <div style="padding:0 0 24px 0;" id="backup-schedule-wrap">
+      ${buildBackupScheduleCard()}
+    </div>
   `;
 };
 
@@ -1267,6 +1272,383 @@ const downloadAdminBackup = async () => {
   }
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTO-BACKUP SCHEDULER ENGINE
+// ═══════════════════════════════════════════════════════════════════════════
+
+const BACKUP_LS_KEY = 'officetool_last_backup_date';   // localStorage key
+
+/** Show a slim, non-blocking toast at the bottom-right of the screen */
+const showBackupToast = (msg, type = 'info', durationMs = 5000) => {
+  const existing = document.getElementById('backup-toast');
+  if (existing) existing.remove();
+
+  const colors = {
+    info:    { bg: '#1e3a5f', border: '#2563eb', icon: 'fa-circle-info',    text: '#93c5fd' },
+    success: { bg: '#14532d', border: '#16a34a', icon: 'fa-circle-check',   text: '#86efac' },
+    error:   { bg: '#7f1d1d', border: '#dc2626', icon: 'fa-circle-xmark',   text: '#fca5a5' },
+    working: { bg: '#1e3a5f', border: '#7c3aed', icon: 'fa-spinner fa-spin', text: '#c4b5fd' },
+  };
+  const c = colors[type] || colors.info;
+
+  const toast = document.createElement('div');
+  toast.id = 'backup-toast';
+  toast.style.cssText = [
+    'position:fixed', 'bottom:24px', 'right:24px', 'z-index:99999',
+    `background:${c.bg}`, `border:1px solid ${c.border}`, 'border-radius:12px',
+    'padding:12px 18px', 'display:flex', 'align-items:center', 'gap:10px',
+    'box-shadow:0 8px 32px rgba(0,0,0,0.4)', 'max-width:380px',
+    'font-size:13px', 'font-weight:500', `color:${c.text}`,
+    'transition:opacity 0.4s', 'opacity:1',
+  ].join(';');
+  toast.innerHTML = `<i class="fa-solid ${c.icon}" style="flex-shrink:0;font-size:15px;"></i><span>${msg}</span>`;
+  document.body.appendChild(toast);
+
+  if (durationMs > 0) {
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => toast.remove(), 450);
+    }, durationMs);
+  }
+  return toast;
+};
+
+/**
+ * Determines whether a backup is due based on the stored config and the
+ * last-backup date stored in localStorage on this machine.
+ */
+const isBackupDue = (cfg) => {
+  if (!cfg || cfg.enabled === false) return false;
+
+  const lastStr = localStorage.getItem(BACKUP_LS_KEY);
+  const today   = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (!lastStr) return true;   // Never backed up → run now
+
+  const last = new Date(lastStr);
+  last.setHours(0, 0, 0, 0);
+  if (isNaN(last.getTime())) return true;
+
+  const freq = cfg.frequency || 'monthly';
+
+  if (freq === 'daily') {
+    return today > last;
+  }
+  if (freq === 'weekly') {
+    const diff = (today - last) / 86400000;
+    return diff >= 7;
+  }
+  if (freq === 'fortnightly') {
+    const diff = (today - last) / 86400000;
+    return diff >= 14;
+  }
+  if (freq === 'monthly') {
+    const dom = cfg.day_of_month || 1;
+    // Due if we are on or past the target day and haven't backed up this month
+    return (
+      today.getDate() >= dom &&
+      (last.getFullYear() < today.getFullYear() || last.getMonth() < today.getMonth())
+    );
+  }
+  if (freq === 'quarterly') {
+    const dom = cfg.day_of_month || 1;
+    const monthsElapsed =
+      (today.getFullYear() - last.getFullYear()) * 12 +
+      (today.getMonth() - last.getMonth());
+    return monthsElapsed >= 3 && today.getDate() >= dom;
+  }
+  return false;
+};
+
+/**
+ * Runs the full backup+purge silently in the background.
+ * Shows toast notifications at each stage. Never blocks the UI.
+ */
+const runAutoBackup = async (silent = true) => {
+  const toast = showBackupToast(
+    silent
+      ? '<i class="fa-solid fa-database" style="margin-right:4px;"></i> Auto-backup running…'
+      : 'Manual backup running…',
+    'working',
+    0   // keep open until we update it
+  );
+
+  try {
+    // ── 1. Download ZIP ──────────────────────────────────────────────────────
+    const res = await fetch(`${BASE_URL}/api/admin/backup`, { method: 'GET' });
+    if (!res.ok) {
+      let m = `HTTP ${res.status}`;
+      try { m = (await res.json()).error || m; } catch (_) {}
+      throw new Error(m);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : `OfficeTool_Backup_${new Date().toISOString().slice(0, 10)}.zip`;
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+    // ── 2. Purge old rows ────────────────────────────────────────────────────
+    if (toast) toast.querySelector('span').textContent = 'Purging data older than 3 months…';
+
+    const purgeRes = await fetch(`${BASE_URL}/api/admin/purge-old-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const purgeData = await purgeRes.json();
+    if (!purgeRes.ok || !purgeData.success) throw new Error(purgeData.error || 'Purge failed');
+
+    // ── 3. Persist last-run date ─────────────────────────────────────────────
+    const todayStr = new Date().toISOString().slice(0, 10);
+    localStorage.setItem(BACKUP_LS_KEY, todayStr);
+
+    // Also update backend config so it reflects last_backup_date
+    await fetch(`${BASE_URL}/api/admin/backup-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ last_backup_date: todayStr }),
+    }).catch(() => {});
+
+    // Refresh the schedule card to show updated last-run
+    _refreshBackupScheduleCardStatus();
+
+    if (toast) toast.remove();
+    showBackupToast(
+      `✅ Backup complete — ${purgeData.total_deleted} old rows purged from Supabase`,
+      'success', 7000
+    );
+
+  } catch (err) {
+    console.error('[AUTO-BACKUP] Failed:', err);
+    if (toast) toast.remove();
+    showBackupToast(`❌ Auto-backup failed: ${err.message || 'unknown error'}`, 'error', 8000);
+  }
+};
+
+/**
+ * Called once when the admin dashboard loads.
+ * Fetches the schedule config and silently runs backup if due.
+ */
+const checkAndRunAutoBackup = async () => {
+  try {
+    const res = await fetch(`${BASE_URL}/api/admin/backup-config`);
+    if (!res.ok) return;
+    const { config } = await res.json();
+    if (!config || config.enabled === false) return;
+    if (isBackupDue(config)) {
+      // Tiny delay so the dashboard UI finishes painting first
+      setTimeout(() => runAutoBackup(true), 1500);
+    }
+  } catch (e) {
+    console.warn('[AUTO-BACKUP] Config fetch failed:', e);
+  }
+};
+
+// ── Schedule settings card ────────────────────────────────────────────────────
+
+const buildBackupScheduleCard = (cfg = {}) => {
+  const freq      = cfg.frequency    || 'monthly';
+  const dom       = cfg.day_of_month || 1;
+  const enabled   = cfg.enabled !== false;
+  const lastDate  = localStorage.getItem(BACKUP_LS_KEY) || cfg.last_backup_date || null;
+
+  const nextLabel = (() => {
+    if (!enabled) return 'Disabled';
+    const today = new Date();
+    if (freq === 'daily')       return 'Tomorrow';
+    if (freq === 'weekly')      return `In 7 days`;
+    if (freq === 'fortnightly') return `In 14 days`;
+    if (freq === 'monthly') {
+      const next = new Date(today.getFullYear(), today.getMonth(), dom);
+      if (next <= today) next.setMonth(next.getMonth() + 1);
+      return next.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+    }
+    if (freq === 'quarterly') {
+      const next = new Date(today.getFullYear(), today.getMonth(), dom);
+      if (next <= today) next.setMonth(next.getMonth() + 3);
+      return next.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+    }
+    return '—';
+  })();
+
+  const lastLabel = lastDate
+    ? new Date(lastDate).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })
+    : 'Never';
+
+  const opt = (val, label) =>
+    `<option value="${val}" ${freq === val ? 'selected' : ''}>${label}</option>`;
+
+  return `
+    <div class="admin-card-v2" id="backup-schedule-card" style="margin-top:16px;">
+      <div class="admin-card-header">
+        <div>
+          <div class="admin-section-label">Automated Backup</div>
+          <h3 class="admin-section-title">Backup Schedule Settings</h3>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);cursor:pointer;">
+          <div id="backup-toggle-wrap" style="position:relative;width:40px;height:22px;">
+            <input type="checkbox" id="backup-enabled-toggle" ${enabled ? 'checked' : ''}
+              style="opacity:0;width:0;height:0;position:absolute;"
+            />
+            <span id="backup-toggle-track" style="
+              position:absolute;inset:0;border-radius:11px;
+              background:${enabled ? '#2563eb' : '#d1d5db'};
+              transition:background 0.2s;
+            "></span>
+            <span style="
+              position:absolute;top:3px;left:${enabled ? '21px' : '3px'};
+              width:16px;height:16px;border-radius:50%;background:#fff;
+              box-shadow:0 1px 3px rgba(0,0,0,0.2);transition:left 0.2s;
+              pointer-events:none;
+            " id="backup-toggle-knob"></span>
+          </div>
+          ${enabled ? 'Enabled' : 'Disabled'}
+        </label>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px;">
+        <div style="background:#f8fafc;border-radius:10px;padding:14px;">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;font-weight:500;margin-bottom:6px;">Status</div>
+          <div style="font-size:13px;font-weight:600;color:${enabled ? '#16a34a' : '#dc2626'}">
+            ${enabled ? '🟢 Active' : '🔴 Disabled'}
+          </div>
+        </div>
+        <div style="background:#f8fafc;border-radius:10px;padding:14px;" id="backup-last-run-tile">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;font-weight:500;margin-bottom:6px;">Last Backup</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text-primary);" id="backup-last-run-label">${lastLabel}</div>
+        </div>
+        <div style="background:#f8fafc;border-radius:10px;padding:14px;">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;font-weight:500;margin-bottom:6px;">Next Backup</div>
+          <div style="font-size:13px;font-weight:600;color:#2563eb;" id="backup-next-run-label">${nextLabel}</div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:180px;">
+          <label style="display:block;font-size:12px;font-weight:500;color:var(--text-secondary);margin-bottom:6px;">Backup Frequency</label>
+          <select id="backup-frequency-select" style="
+            width:100%;padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;
+            font-size:13px;background:#fff;color:var(--text-primary);cursor:pointer;
+            outline:none;appearance:none;
+          ">
+            ${opt('daily',       'Daily')}
+            ${opt('weekly',      'Every Week')}
+            ${opt('fortnightly', 'Every 2 Weeks')}
+            ${opt('monthly',     'Monthly (on a specific day)')}
+            ${opt('quarterly',   'Every 3 Months')}
+          </select>
+        </div>
+        <div id="backup-dom-wrap" style="min-width:160px;${['monthly','quarterly'].includes(freq) ? '' : 'display:none;'}">
+          <label style="display:block;font-size:12px;font-weight:500;color:var(--text-secondary);margin-bottom:6px;">Day of Month</label>
+          <select id="backup-dom-select" style="
+            width:100%;padding:9px 12px;border:1px solid #e2e8f0;border-radius:8px;
+            font-size:13px;background:#fff;color:var(--text-primary);cursor:pointer;
+            outline:none;appearance:none;
+          ">
+            ${Array.from({length:28}, (_, i) => i+1).map(d =>
+              `<option value="${d}" ${dom === d ? 'selected' : ''}>Day ${d}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <button id="backup-schedule-save" class="btn btn-primary" style="height:38px;white-space:nowrap;">
+          <i class="fa-solid fa-floppy-disk"></i> Save Schedule
+        </button>
+        <button id="backup-run-now-btn" class="btn btn-outline" style="height:38px;white-space:nowrap;">
+          <i class="fa-solid fa-database"></i> Run Now
+        </button>
+      </div>
+
+      <div style="margin-top:14px;padding:10px 14px;background:#eff6ff;border-radius:8px;font-size:12px;color:#1e40af;">
+        <i class="fa-solid fa-shield-halved" style="margin-right:6px;"></i>
+        Backups include the last 3 months of transactional data and are saved directly to your machine.
+        Master records (employees, projects, assets, role settings) are <strong>never deleted</strong>.
+      </div>
+    </div>
+  `;
+};
+
+/** Update just the "Last Backup" label inside the card without a full re-render */
+const _refreshBackupScheduleCardStatus = () => {
+  const el = document.getElementById('backup-last-run-label');
+  if (!el) return;
+  const lastDate = localStorage.getItem(BACKUP_LS_KEY);
+  el.textContent = lastDate
+    ? new Date(lastDate).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })
+    : 'Never';
+};
+
+/** Save new schedule to backend and update UI */
+const saveBackupSchedule = async () => {
+  const saveBtn   = document.getElementById('backup-schedule-save');
+  const freqEl    = document.getElementById('backup-frequency-select');
+  const domEl     = document.getElementById('backup-dom-select');
+  const toggleEl  = document.getElementById('backup-enabled-toggle');
+
+  if (!freqEl) return;
+  const freq    = freqEl.value;
+  const dom     = domEl ? parseInt(domEl.value, 10) : 1;
+  const enabled = toggleEl ? toggleEl.checked : true;
+
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…'; }
+
+  try {
+    const res = await fetch(`${BASE_URL}/api/admin/backup-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ frequency: freq, day_of_month: dom, enabled }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error || 'Save failed');
+    showBackupToast('✅ Backup schedule saved', 'success', 3500);
+  } catch (err) {
+    showBackupToast(`❌ Failed to save schedule: ${err.message}`, 'error', 5000);
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Schedule'; }
+  }
+};
+
+/** Attach all event handlers inside the backup schedule card */
+const attachBackupScheduleHandlers = () => {
+  // Frequency dropdown → show/hide day-of-month picker
+  const freqEl = document.getElementById('backup-frequency-select');
+  const domWrap = document.getElementById('backup-dom-wrap');
+  if (freqEl && domWrap) {
+    freqEl.onchange = () => {
+      domWrap.style.display = ['monthly', 'quarterly'].includes(freqEl.value) ? '' : 'none';
+    };
+  }
+
+  // Toggle switch behaviour
+  const toggleEl = document.getElementById('backup-enabled-toggle');
+  const track    = document.getElementById('backup-toggle-track');
+  const knob     = document.getElementById('backup-toggle-knob');
+  if (toggleEl && track && knob) {
+    toggleEl.onchange = () => {
+      const on = toggleEl.checked;
+      track.style.background = on ? '#2563eb' : '#d1d5db';
+      knob.style.left = on ? '21px' : '3px';
+    };
+  }
+
+  // Save button
+  const saveBtn = document.getElementById('backup-schedule-save');
+  if (saveBtn) saveBtn.onclick = saveBackupSchedule;
+
+  // Run-Now button
+  const runNowBtn = document.getElementById('backup-run-now-btn');
+  if (runNowBtn) {
+    runNowBtn.onclick = () => {
+      runNowBtn.disabled = true;
+      runAutoBackup(false).finally(() => { runNowBtn.disabled = false; });
+    };
+  }
+};
+
 const attachRefreshAction = () => {
   const refreshBtn = document.getElementById('admin-dashboard-refresh');
   const exportBtn = document.getElementById('admin-export-wsr');
@@ -1286,6 +1668,8 @@ const attachRefreshAction = () => {
   if (backupBtn) {
     backupBtn.onclick = downloadAdminBackup;
   }
+  // Wire up backup schedule card handlers after each render
+  attachBackupScheduleHandlers();
 };
 
 const refreshAndRender = async (showSkeleton = true, scope = 'full') => {
@@ -1436,6 +1820,9 @@ export const renderAdminDashboardPage = async () => {
   }
 
   await refreshAndRender(true);
+
+  // Silently check and run auto-backup if it is due (non-blocking)
+  checkAndRunAutoBackup();
 
   adminDashboardPollId = setInterval(async () => {
     if (!isAdminDashboardRoute()) {
