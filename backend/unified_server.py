@@ -18126,6 +18126,17 @@ def get_backup_scheduler_status():
         'config':   cfg,
     }), 200
 
+# Start server-side backup scheduler (runs independently of any browser session)
+try:
+    _bk_sched.init_backup_scheduler(
+        app,
+        get_supabase_fn = get_supabase,
+        read_cfg_fn     = _read_backup_config,
+        write_cfg_fn    = _write_backup_config,
+    )
+    print("[INIT] Background Backup Scheduler Started Successfully")
+except Exception as e:
+    print(f"[INIT] Failed to start backup scheduler: {e}")
 
 if __name__ == '__main__':
     print('\n' + '== ' * 30)
@@ -18134,14 +18145,6 @@ if __name__ == '__main__':
     print('Server running on: http://localhost:5000')
     print('Frontend should connect to: http://localhost:5000/api/*')
     print('\n' + '='*80 + '\n')
-
-    # Start server-side backup scheduler (runs independently of any browser session)
-    _bk_sched.init_backup_scheduler(
-        app,
-        get_supabase_fn = get_supabase,
-        read_cfg_fn     = _read_backup_config,
-        write_cfg_fn    = _write_backup_config,
-    )
 
     app.run(host='0.0.0.0', port=5000, debug=True)
 

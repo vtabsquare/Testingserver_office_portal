@@ -1439,6 +1439,16 @@ const checkAndRunAutoBackup = async () => {
     const res = await fetch(`${BASE_URL}/api/admin/backup-config`);
     if (!res.ok) return;
     const { config } = await res.json();
+    
+    // Re-render the card with the latest config
+    if (config) {
+      const wrap = document.getElementById('backup-schedule-wrap');
+      if (wrap) {
+        wrap.innerHTML = buildBackupScheduleCard(config);
+        attachBackupScheduleHandlers();
+      }
+    }
+
     if (!config || config.enabled === false) return;
     if (isBackupDue(config)) {
       // Tiny delay so the dashboard UI finishes painting first
@@ -1605,6 +1615,15 @@ const saveBackupSchedule = async () => {
     const data = await res.json();
     if (!res.ok || !data.success) throw new Error(data.error || 'Save failed');
     showBackupToast('✅ Backup schedule saved', 'success', 3500);
+    
+    // Re-render the card with the updated config from backend
+    if (data.config) {
+      const wrap = document.getElementById('backup-schedule-wrap');
+      if (wrap) {
+        wrap.innerHTML = buildBackupScheduleCard(data.config);
+        attachBackupScheduleHandlers();
+      }
+    }
   } catch (err) {
     showBackupToast(`❌ Failed to save schedule: ${err.message}`, 'error', 5000);
   } finally {
