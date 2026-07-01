@@ -370,7 +370,7 @@ def _build_trigger(cfg: dict):
     dom  = int(cfg.get('day_of_month', 1))
 
     if freq == 'daily':
-        return CronTrigger(hour=0, minute=0)                        # 12:00 AM daily
+        return CronTrigger(minute='*')                                # EVERY MINUTE (TEMP FOR TESTING)
     if freq == 'weekly':
         return CronTrigger(day_of_week='mon', hour=0, minute=0)     # Every Monday 12:00 AM
     if freq == 'fortnightly':
