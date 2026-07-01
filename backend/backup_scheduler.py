@@ -429,7 +429,7 @@ def init_backup_scheduler(app, get_supabase_fn, read_cfg_fn, write_cfg_fn):
         jobstores=jobstores,
         executors=executors,
         job_defaults=job_defaults,
-        timezone='UTC',
+        timezone='Asia/Calcutta',
     )
 
     trigger = _build_trigger(cfg)
