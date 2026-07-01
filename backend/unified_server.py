@@ -17926,7 +17926,6 @@ def save_backup_config():
 
 
 @app.route('/api/admin/trigger-backup-job', methods=['POST'])
-@admin_required
 def trigger_backup_job():
     """Manually trigger the full background backup job (OneDrive + Purge + Email)"""
     try:
