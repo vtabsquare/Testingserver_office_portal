@@ -1405,13 +1405,13 @@ const runAutoBackup = async (silent = true) => {
     a.click();
     document.body.removeChild(a);
     
-    // Refresh the whole UI to pull the latest backup history logs
-    await refreshAndRender(false);
+    // Refresh the backup card to pull the latest backup history logs
+    await checkAndRunAutoBackup();
   } catch (err) {
     console.error('[AUTO-BACKUP] Failed:', err);
     if (toast) toast.remove();
     showBackupToast(`❌ Backup Failed: ${err.message || 'unknown error'}`, 'error', 6000);
-    await refreshAndRender(false);
+    await checkAndRunAutoBackup();
   }
 };
 
