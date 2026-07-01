@@ -391,19 +391,19 @@ def _build_trigger(cfg: dict):
     dom  = int(cfg.get('day_of_month', 1))
 
     if freq == 'daily':
-        return CronTrigger(hour=14, minute=34)                        # 12:00 AM daily
+        return CronTrigger(hour=0, minute=0)                        # 12:00 AM daily
     if freq == 'weekly':
-        return CronTrigger(day_of_week='mon', hour=14, minute=34)     # Every Monday 12:00 AM
+        return CronTrigger(day_of_week='mon', hour=0, minute=0)     # Every Monday 12:00 AM
     if freq == 'fortnightly':
         return IntervalTrigger(weeks=2)                             # Every 14 days
     if freq == 'monthly':
-        return CronTrigger(day=dom, hour=14, minute=34)               # Monthly on day X at 12:00 AM
+        return CronTrigger(day=dom, hour=0, minute=0)               # Monthly on day X at 12:00 AM
     if freq == 'quarterly':
         # Every 3 months on dom at 12:00 AM — approximate via month list
         months = '1,4,7,10'
-        return CronTrigger(month=months, day=dom, hour=14, minute=34)
+        return CronTrigger(month=months, day=dom, hour=0, minute=0)
     # Default fallback — 1st of every month
-    return CronTrigger(day=1, hour=14, minute=34)
+    return CronTrigger(day=1, hour=0, minute=0)
 
 
 def init_backup_scheduler(app, get_supabase_fn, read_cfg_fn, write_cfg_fn):
