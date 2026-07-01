@@ -1378,7 +1378,7 @@ const runAutoBackup = async (silent = true) => {
     const res = await fetch(`${BASE_URL}/api/admin/trigger-backup-job`, { 
         method: 'POST',
         headers: {
-            'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`
+            'Authorization': `Bearer ${localStorage.getItem('authToken')}`
         }
     });
     
