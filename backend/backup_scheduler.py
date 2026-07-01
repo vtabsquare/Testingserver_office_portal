@@ -443,7 +443,8 @@ def reschedule(read_cfg_fn, get_supabase_fn, write_cfg_fn):
     """
     global _scheduler
     if _scheduler is None:
-        logger.warning('[BACKUP-SCHEDULER] reschedule() called but scheduler not running.')
+        logger.info('[BACKUP-SCHEDULER] reschedule() called but scheduler not running. Initializing now...')
+        init_backup_scheduler(None, get_supabase_fn, read_cfg_fn, write_cfg_fn)
         return
 
     cfg = read_cfg_fn()
