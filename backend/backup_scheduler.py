@@ -370,8 +370,7 @@ def _build_trigger(cfg: dict):
     dom  = int(cfg.get('day_of_month', 1))
 
     if freq == 'daily':
-        from apscheduler.triggers.interval import IntervalTrigger
-        return IntervalTrigger(seconds=15)                            # EVERY 15 SECONDS (TEMP FOR TESTING)
+        return CronTrigger(hour=0, minute=0)
     if freq == 'weekly':
         return CronTrigger(day_of_week='mon', hour=0, minute=0)     # Every Monday 12:00 AM
     if freq == 'fortnightly':
