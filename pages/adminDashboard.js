@@ -1538,7 +1538,7 @@ const buildBackupScheduleCard = (cfg = {}) => {
         </div>
       </div>
 
-      <div style="display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;">
+      <div style="display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:20px;">
         <div style="flex:1;min-width:180px;">
           <label style="display:block;font-size:12px;font-weight:500;color:var(--text-secondary);margin-bottom:6px;">Backup Frequency</label>
           <select id="backup-frequency-select" style="
@@ -1573,10 +1573,50 @@ const buildBackupScheduleCard = (cfg = {}) => {
         </button>
       </div>
 
-      <div style="margin-top:14px;padding:10px 14px;background:#eff6ff;border-radius:8px;font-size:12px;color:#1e40af;">
+      <div style="margin-top:14px;padding:10px 14px;background:#eff6ff;border-radius:8px;font-size:12px;color:#1e40af;margin-bottom:20px;">
         <i class="fa-solid fa-shield-halved" style="margin-right:6px;"></i>
         Backups include the last 3 months of transactional data and are saved directly to your machine.
         Master records (employees, projects, assets, role settings) are <strong>never deleted</strong>.
+      </div>
+      
+      <div style="border-top:1px solid #e2e8f0;padding-top:20px;">
+        <h4 style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--text-primary);">Backup Execution Logs</h4>
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;text-align:left;color:#64748b;">
+                <th style="padding:10px 12px;font-weight:600;">Timestamp</th>
+                <th style="padding:10px 12px;font-weight:600;">Status</th>
+                <th style="padding:10px 12px;font-weight:600;">Details</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(cfg.history && cfg.history.length > 0) ? cfg.history.map(log => `
+                <tr style="border-bottom:1px solid #f1f5f9;">
+                  <td style="padding:10px 12px;color:var(--text-primary);white-space:nowrap;">
+                    ${new Date(log.timestamp).toLocaleString('en-IN', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:true})}
+                  </td>
+                  <td style="padding:10px 12px;">
+                    ${log.status === 'success' 
+                      ? '<span style="display:inline-block;padding:2px 8px;border-radius:12px;background:#dcfce7;color:#166534;font-weight:500;">Success</span>'
+                      : '<span style="display:inline-block;padding:2px 8px;border-radius:12px;background:#fee2e2;color:#991b1b;font-weight:500;">Failed</span>'
+                    }
+                  </td>
+                  <td style="padding:10px 12px;color:var(--text-secondary);">
+                    ${log.status === 'success' 
+                      ? `Purged ${log.records_purged || 0} rows. <a href="${log.url}" target="_blank" style="color:#2563eb;text-decoration:none;"><i class="fa-solid fa-arrow-up-right-from-square"></i> OneDrive File</a>` 
+                      : `<span style="color:#dc2626">${log.error || 'Unknown error'}</span>`
+                    }
+                  </td>
+                </tr>
+              `).join('') : `
+                <tr>
+                  <td colspan="3" style="padding:16px;text-align:center;color:#94a3b8;font-style:italic;">No backup logs recorded yet.</td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   `;

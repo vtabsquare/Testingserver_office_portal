@@ -312,8 +312,18 @@ def run_scheduled_backup(get_supabase_fn, read_cfg_fn, write_cfg_fn):
         total_deleted = sum(v for v in deleted.values() if isinstance(v, int))
         logger.info(f'[BACKUP-SCHEDULER] Purge done. Total deleted: {total_deleted}')
 
-        # 4. Update config with last_backup_date
+        # 4. Update config with last_backup_date and append history log
         cfg = read_cfg_fn()
+        history = cfg.get('history', [])
+        history.insert(0, {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'status': 'success',
+            'filename': filename,
+            'url': upload_result.get('url', ''),
+            'records_purged': total_deleted,
+            'error': None
+        })
+        cfg['history'] = history[:50]  # Keep last 50 logs
         cfg['last_backup_date'] = today.isoformat()
         cfg['last_backup_onedrive_url'] = upload_result.get('url', '')
         cfg['last_backup_status'] = 'success'
@@ -330,6 +340,24 @@ def run_scheduled_backup(get_supabase_fn, read_cfg_fn, write_cfg_fn):
         import traceback as _tb
         tb_str = _tb.format_exc()
         logger.error(f'[BACKUP-SCHEDULER] Job FAILED: {e}\n{tb_str}')
+        
+        # Log failure to history
+        try:
+            cfg = read_cfg_fn()
+            history = cfg.get('history', [])
+            history.insert(0, {
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'status': 'failed',
+                'filename': None,
+                'url': None,
+                'records_purged': 0,
+                'error': str(e)
+            })
+            cfg['history'] = history[:50]
+            cfg['last_backup_status'] = 'failed'
+            write_cfg_fn(cfg)
+        except Exception as log_err:
+            logger.error(f'[BACKUP-SCHEDULER] Failed to write failure log: {log_err}')
         
         if sb_inst is None:
             try:
@@ -356,19 +384,19 @@ def _build_trigger(cfg: dict):
     dom  = int(cfg.get('day_of_month', 1))
 
     if freq == 'daily':
-        return CronTrigger(hour=2, minute=0)                        # 02:00 AM daily
+        return CronTrigger(hour=0, minute=0)                        # 12:00 AM daily
     if freq == 'weekly':
-        return CronTrigger(day_of_week='mon', hour=2, minute=0)     # Every Monday 02:00 AM
+        return CronTrigger(day_of_week='mon', hour=0, minute=0)     # Every Monday 12:00 AM
     if freq == 'fortnightly':
         return IntervalTrigger(weeks=2)                             # Every 14 days
     if freq == 'monthly':
-        return CronTrigger(day=dom, hour=2, minute=0)               # Monthly on day X at 02:00 AM
+        return CronTrigger(day=dom, hour=0, minute=0)               # Monthly on day X at 12:00 AM
     if freq == 'quarterly':
-        # Every 3 months on dom at 02:00 AM — approximate via month list
+        # Every 3 months on dom at 12:00 AM — approximate via month list
         months = '1,4,7,10'
-        return CronTrigger(month=months, day=dom, hour=2, minute=0)
+        return CronTrigger(month=months, day=dom, hour=0, minute=0)
     # Default fallback — 1st of every month
-    return CronTrigger(day=1, hour=2, minute=0)
+    return CronTrigger(day=1, hour=0, minute=0)
 
 
 def init_backup_scheduler(app, get_supabase_fn, read_cfg_fn, write_cfg_fn):
