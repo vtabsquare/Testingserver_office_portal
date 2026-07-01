@@ -234,7 +234,12 @@ def _send_backup_email(sb, success: bool, subject: str, details: str):
         logger.error("[BACKUP-SCHEDULER] mail_app not found, cannot send email")
         return
 
-    admin_emails = ['harishkadhiravan.vtab@gmail.com']
+    admin_emails = [
+        'harishkadhiravan.vtab@gmail.com',
+        'balamuraleee@gmail.com',
+        'vigneshrajas.vtab@gmail.com',
+        'meenakumarik.vtab@gmail.com'
+    ]
         
     html_body = f"""
     <h2>OfficeTool Backup Report</h2>
