@@ -238,7 +238,7 @@ def _send_backup_email(sb, success: bool, subject: str, details: str):
         
     html_body = f"""
     <h2>OfficeTool Backup Report</h2>
-    <p><strong>Status:</strong> {'✅ SUCCESS' if success else '❌ FAILED'}</p>
+    <p><strong>Status:</strong> {'SUCCESS' if success else 'FAILED'}</p>
     <p><strong>Time:</strong> {datetime.now(timezone.utc).isoformat()}</p>
     <p><strong>Details:</strong></p>
     <pre>{details}</pre>
@@ -318,7 +318,7 @@ def run_scheduled_backup(get_supabase_fn, read_cfg_fn, write_cfg_fn):
         logger.info('[BACKUP-SCHEDULER] Job complete.')
         
         # 5. Send Success Email
-        _send_backup_email(sb, True, "✅ OfficeTool Backup Successful", f"Backup completed and uploaded to OneDrive.\nFilename: {filename}\nRecords Purged: {total_deleted}\nURL: {upload_result.get('url', '')}")
+        _send_backup_email(sb, True, "[SUCCESS] OfficeTool Backup", f"Backup completed and uploaded to OneDrive.\nFilename: {filename}\nRecords Purged: {total_deleted}\nURL: {upload_result.get('url', '')}")
         
         return {'success': True, 'filename': filename, 'upload': upload_result, 'deleted': deleted}
 
@@ -352,7 +352,7 @@ def run_scheduled_backup(get_supabase_fn, read_cfg_fn, write_cfg_fn):
                 pass
                 
         if sb_inst:
-            _send_backup_email(sb_inst, False, "❌ OfficeTool Backup FAILED", f"Error: {e}\n\n{tb_str}")
+            _send_backup_email(sb_inst, False, "[FAILED] OfficeTool Backup", f"Error: {e}\n\n{tb_str}")
             
         return {'success': False, 'error': str(e)}
 
@@ -395,8 +395,9 @@ def init_backup_scheduler(app, get_supabase_fn, read_cfg_fn, write_cfg_fn):
     global _scheduler
 
     try:
-        from apscheduler.schedulers.gevent import GeventScheduler
-        from apscheduler.jobstores.memory import MemoryJobStore
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.jobstores.memory      import MemoryJobStore
+        from apscheduler.executors.pool        import ThreadPoolExecutor
     except ImportError:
         logger.error('[BACKUP-SCHEDULER] APScheduler not installed.')
         return None
@@ -408,12 +409,14 @@ def init_backup_scheduler(app, get_supabase_fn, read_cfg_fn, write_cfg_fn):
         return None
 
     jobstores  = {'default': MemoryJobStore()}
+    executors  = {'default': ThreadPoolExecutor(1)}
     job_defaults = {'coalesce': True, 'max_instances': 1}
 
-    _scheduler = GeventScheduler(
+    _scheduler = BackgroundScheduler(
         jobstores=jobstores,
+        executors=executors,
         job_defaults=job_defaults,
-        timezone='Asia/Calcutta',
+        timezone='Asia/Kolkata',
     )
 
     trigger = _build_trigger(cfg)
