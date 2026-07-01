@@ -395,11 +395,10 @@ def init_backup_scheduler(app, get_supabase_fn, read_cfg_fn, write_cfg_fn):
     global _scheduler
 
     try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        from apscheduler.jobstores.memory      import MemoryJobStore
-        from apscheduler.executors.pool        import ThreadPoolExecutor
+        from apscheduler.schedulers.gevent import GeventScheduler
+        from apscheduler.jobstores.memory import MemoryJobStore
     except ImportError:
-        logger.error('[BACKUP-SCHEDULER] APScheduler not installed. Run: pip install APScheduler')
+        logger.error('[BACKUP-SCHEDULER] APScheduler not installed.')
         return None
 
     cfg = read_cfg_fn()
@@ -409,12 +408,10 @@ def init_backup_scheduler(app, get_supabase_fn, read_cfg_fn, write_cfg_fn):
         return None
 
     jobstores  = {'default': MemoryJobStore()}
-    executors  = {'default': ThreadPoolExecutor(1)}
     job_defaults = {'coalesce': True, 'max_instances': 1}
 
-    _scheduler = BackgroundScheduler(
+    _scheduler = GeventScheduler(
         jobstores=jobstores,
-        executors=executors,
         job_defaults=job_defaults,
         timezone='Asia/Calcutta',
     )
