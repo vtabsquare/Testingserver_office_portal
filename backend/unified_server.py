@@ -17925,6 +17925,33 @@ def save_backup_config():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/admin/trigger-backup-job', methods=['POST'])
+@admin_required
+def trigger_backup_job():
+    """Manually trigger the full background backup job (OneDrive + Purge + Email)"""
+    try:
+        from backup_scheduler import run_scheduled_backup
+        result = run_scheduled_backup(get_supabase, _read_backup_config, _write_backup_config)
+        return jsonify(result), 200 if result.get('success') else 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/download-latest-backup', methods=['GET'])
+def download_latest_backup():
+    """Serves the most recent local backup zip for browser download"""
+    try:
+        if not os.path.exists('temp_backup.zip'):
+            return "No backup available", 404
+        return send_file(
+            'temp_backup.zip',
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=f"OfficeTool_Manual_Backup_{datetime.now().strftime('%Y%m%d')}.zip"
+        )
+    except Exception as e:
+        return str(e), 500
+
 # ================== ADMIN BACKUP + PURGE ROUTES ==================
 
 @app.route('/api/admin/backup', methods=['GET'])

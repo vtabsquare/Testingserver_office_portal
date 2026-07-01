@@ -310,7 +310,14 @@ def run_scheduled_backup(get_supabase_fn, read_cfg_fn, write_cfg_fn):
         logger.info(f'[BACKUP-SCHEDULER] Purging rows older than {since_date}...')
         deleted = _purge_old_rows(sb, since_date)
         total_deleted = sum(v for v in deleted.values() if isinstance(v, int))
-        logger.info(f'[BACKUP-SCHEDULER] Purge done. Total deleted: {total_deleted}')
+        logger.info(f'[BACKUP-SCHEDULER] Generated ZIP in-memory ({len(zip_bytes)} bytes)')
+
+        # Save a temporary local copy so the frontend can download it if triggered manually
+        try:
+            with open('temp_backup.zip', 'wb') as f:
+                f.write(zip_bytes)
+        except Exception as tmp_err:
+            logger.warning(f'[BACKUP-SCHEDULER] Could not save temporary local copy: {tmp_err}')
 
         # 4. Update config with last_backup_date and append history log
         cfg = read_cfg_fn()
@@ -384,19 +391,19 @@ def _build_trigger(cfg: dict):
     dom  = int(cfg.get('day_of_month', 1))
 
     if freq == 'daily':
-        return CronTrigger(hour=0, minute=0)                        # 12:00 AM daily
+        return CronTrigger(hour=14, minute=34)                        # 12:00 AM daily
     if freq == 'weekly':
-        return CronTrigger(day_of_week='mon', hour=0, minute=0)     # Every Monday 12:00 AM
+        return CronTrigger(day_of_week='mon', hour=14, minute=34)     # Every Monday 12:00 AM
     if freq == 'fortnightly':
         return IntervalTrigger(weeks=2)                             # Every 14 days
     if freq == 'monthly':
-        return CronTrigger(day=dom, hour=0, minute=0)               # Monthly on day X at 12:00 AM
+        return CronTrigger(day=dom, hour=14, minute=34)               # Monthly on day X at 12:00 AM
     if freq == 'quarterly':
         # Every 3 months on dom at 12:00 AM — approximate via month list
         months = '1,4,7,10'
-        return CronTrigger(month=months, day=dom, hour=0, minute=0)
+        return CronTrigger(month=months, day=dom, hour=14, minute=34)
     # Default fallback — 1st of every month
-    return CronTrigger(day=1, hour=0, minute=0)
+    return CronTrigger(day=1, hour=14, minute=34)
 
 
 def init_backup_scheduler(app, get_supabase_fn, read_cfg_fn, write_cfg_fn):
