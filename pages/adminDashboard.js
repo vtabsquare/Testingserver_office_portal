@@ -1371,62 +1371,39 @@ const runAutoBackup = async (silent = true) => {
       ? '<i class="fa-solid fa-database" style="margin-right:4px;"></i> Auto-backup running…'
       : 'Manual backup running…',
     'working',
-    0   // keep open until we update it
+    0
   );
 
   try {
-    // ── 1. Download ZIP ──────────────────────────────────────────────────────
-    const res = await fetch(`${BASE_URL}/api/admin/backup`, { method: 'GET' });
+    const res = await fetch(`${BASE_URL}/api/admin/trigger-backup-job`, { 
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${localStorage.getItem(TOKEN_KEY)}`
+        }
+    });
+    
     if (!res.ok) {
       let m = `HTTP ${res.status}`;
       try { m = (await res.json()).error || m; } catch (_) {}
       throw new Error(m);
     }
-    const blob = await res.blob();
-    const cd = res.headers.get('Content-Disposition') || '';
-    const match = cd.match(/filename="?([^"]+)"?/);
-    const filename = match ? match[1] : `OfficeTool_Backup_${new Date().toISOString().slice(0, 10)}.zip`;
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Backup job failed');
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-
-    // ── 2. Purge old rows ────────────────────────────────────────────────────
-    if (toast) toast.querySelector('span').textContent = 'Purging data older than 3 months…';
-
-    const purgeRes = await fetch(`${BASE_URL}/api/admin/purge-old-data`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    const purgeData = await purgeRes.json();
-    if (!purgeRes.ok || !purgeData.success) throw new Error(purgeData.error || 'Purge failed');
-
-    // ── 3. Persist last-run date ─────────────────────────────────────────────
+    // Persist last-run date locally
     const todayStr = new Date().toISOString().slice(0, 10);
     localStorage.setItem(BACKUP_LS_KEY, todayStr);
 
-    // Also update backend config so it reflects last_backup_date
-    await fetch(`${BASE_URL}/api/admin/backup-config`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ last_backup_date: todayStr }),
-    }).catch(() => {});
-
-    // Refresh the schedule card to show updated last-run
-    _refreshBackupScheduleCardStatus();
-
     if (toast) toast.remove();
-    showBackupToast(
-      `✅ Backup complete — ${purgeData.total_deleted} old rows purged from Supabase`,
-      'success', 7000
-    );
-
+    showBackupToast('✅ Backup completed successfully', 'success', 4000);
+    
+    // Refresh the whole UI to pull the latest backup history logs
+    await refreshAndRender(false);
   } catch (err) {
     console.error('[AUTO-BACKUP] Failed:', err);
     if (toast) toast.remove();
-    showBackupToast(`❌ Auto-backup failed: ${err.message || 'unknown error'}`, 'error', 8000);
+    showBackupToast(`❌ Backup Failed: ${err.message || 'unknown error'}`, 'error', 6000);
+    await refreshAndRender(false);
   }
 };
 

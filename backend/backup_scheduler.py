@@ -243,9 +243,9 @@ def _send_backup_email(sb, success: bool, subject: str, details: str):
         
     # 2. From database
     try:
-        res = sb.table('crc6f_table12s').select('email,crc6f_designation').execute()
+        res = sb.table('crc6f_table12s').select('crc6f_emailaddress1,crc6f_designation').execute()
         for emp in res.data or []:
-            email = emp.get('email')
+            email = emp.get('crc6f_emailaddress1')
             desig = (emp.get('crc6f_designation') or '').lower()
             if email and ('admin' in desig or 'l3' in desig):
                 admin_emails.append(email)
