@@ -227,14 +227,60 @@ def _purge_old_rows(sb, cutoff_iso: str) -> dict:
 # The main scheduled job
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _send_backup_email(sb, success: bool, subject: str, details: str):
+    try:
+        from mail_app import send_email
+    except ImportError:
+        logger.error("[BACKUP-SCHEDULER] mail_app not found, cannot send email")
+        return
+
+    admin_emails = []
+    
+    # 1. From env
+    env_admin = os.getenv('ADMIN_EMAIL')
+    if env_admin:
+        admin_emails.append(env_admin)
+        
+    # 2. From database
+    try:
+        res = sb.table('crc6f_table12s').select('email,crc6f_designation').execute()
+        for emp in res.data or []:
+            email = emp.get('email')
+            desig = (emp.get('crc6f_designation') or '').lower()
+            if email and ('admin' in desig or 'l3' in desig):
+                admin_emails.append(email)
+    except Exception as e:
+        logger.error(f"[BACKUP-SCHEDULER] Could not fetch DB admins for email: {e}")
+
+    admin_emails = list(set(admin_emails))
+    if not admin_emails:
+        logger.warning("[BACKUP-SCHEDULER] No admin emails found to notify.")
+        return
+        
+    html_body = f"""
+    <h2>OfficeTool Backup Report</h2>
+    <p><strong>Status:</strong> {'✅ SUCCESS' if success else '❌ FAILED'}</p>
+    <p><strong>Time:</strong> {datetime.now(timezone.utc).isoformat()}</p>
+    <p><strong>Details:</strong></p>
+    <pre>{details}</pre>
+    """
+    
+    try:
+        send_email(subject, admin_emails, details, html=html_body, async_send=True)
+        logger.info(f"[BACKUP-SCHEDULER] Sent notification to {len(admin_emails)} admins.")
+    except Exception as e:
+        logger.error(f"[BACKUP-SCHEDULER] Failed to send email: {e}")
+
 def run_scheduled_backup(get_supabase_fn, read_cfg_fn, write_cfg_fn):
     """
     Full backup job: build ZIP → upload to OneDrive → purge old rows → update config.
     Called by APScheduler — runs entirely on the server, no browser required.
     """
     logger.info('[BACKUP-SCHEDULER] Starting scheduled backup job...')
+    sb_inst = None
     try:
         sb = get_supabase_fn()
+        sb_inst = sb
 
         # Date window
         today     = datetime.now(timezone.utc).date()
@@ -258,6 +304,7 @@ def run_scheduled_backup(get_supabase_fn, read_cfg_fn, write_cfg_fn):
             logger.info(f'[BACKUP-SCHEDULER] OneDrive upload OK → {upload_result.get("url")}')
         else:
             logger.error(f'[BACKUP-SCHEDULER] OneDrive upload FAILED: {upload_result.get("error")}')
+            raise Exception(f"OneDrive upload failed: {upload_result.get('error')}. Aborting purge.")
 
         # 3. Purge old rows (runs regardless of upload success — data is already safe in OD)
         logger.info(f'[BACKUP-SCHEDULER] Purging rows older than {since_date}...')
@@ -269,15 +316,30 @@ def run_scheduled_backup(get_supabase_fn, read_cfg_fn, write_cfg_fn):
         cfg = read_cfg_fn()
         cfg['last_backup_date'] = today.isoformat()
         cfg['last_backup_onedrive_url'] = upload_result.get('url', '')
-        cfg['last_backup_status'] = 'success' if upload_result.get('success') else 'upload_failed'
+        cfg['last_backup_status'] = 'success'
         write_cfg_fn(cfg)
 
         logger.info('[BACKUP-SCHEDULER] Job complete.')
+        
+        # 5. Send Success Email
+        _send_backup_email(sb, True, "✅ OfficeTool Backup Successful", f"Backup completed and uploaded to OneDrive.\nFilename: {filename}\nRecords Purged: {total_deleted}\nURL: {upload_result.get('url', '')}")
+        
         return {'success': True, 'filename': filename, 'upload': upload_result, 'deleted': deleted}
 
     except Exception as e:
         import traceback as _tb
-        logger.error(f'[BACKUP-SCHEDULER] Job FAILED: {e}\n{_tb.format_exc()}')
+        tb_str = _tb.format_exc()
+        logger.error(f'[BACKUP-SCHEDULER] Job FAILED: {e}\n{tb_str}')
+        
+        if sb_inst is None:
+            try:
+                sb_inst = get_supabase_fn()
+            except:
+                pass
+                
+        if sb_inst:
+            _send_backup_email(sb_inst, False, "❌ OfficeTool Backup FAILED", f"Error: {e}\n\n{tb_str}")
+            
         return {'success': False, 'error': str(e)}
 
 
