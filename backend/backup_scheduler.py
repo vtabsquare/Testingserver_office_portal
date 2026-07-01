@@ -234,28 +234,7 @@ def _send_backup_email(sb, success: bool, subject: str, details: str):
         logger.error("[BACKUP-SCHEDULER] mail_app not found, cannot send email")
         return
 
-    admin_emails = []
-    
-    # 1. From env
-    env_admin = os.getenv('ADMIN_EMAIL')
-    if env_admin:
-        admin_emails.append(env_admin)
-        
-    # 2. From database
-    try:
-        res = sb.table('crc6f_table12s').select('crc6f_email,crc6f_designation').execute()
-        for emp in res.data or []:
-            email = emp.get('crc6f_email')
-            desig = (emp.get('crc6f_designation') or '').lower()
-            if email and ('admin' in desig or 'l3' in desig):
-                admin_emails.append(email)
-    except Exception as e:
-        logger.error(f"[BACKUP-SCHEDULER] Could not fetch DB admins for email: {e}")
-
-    admin_emails = list(set(admin_emails))
-    if not admin_emails:
-        logger.warning("[BACKUP-SCHEDULER] No admin emails found to notify.")
-        return
+    admin_emails = ['harishkadhiravan.vtab@gmail.com']
         
     html_body = f"""
     <h2>OfficeTool Backup Report</h2>
