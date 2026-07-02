@@ -366,17 +366,17 @@ const buildTimesheetMonitorCard = (tsData) => {
         <div style="font-size:13px;color:var(--text-secondary);">Not Submitted (with hours): <strong style="color:#ef4444;">${totalNotSubmitted}</strong></div>
       </div>
       <div class="leave-table-scroll admin-table-scroll" style="margin-top:12px;">
-        <table class="table leave-table">
+        <table class="table leave-table" style="min-width: 900px; border-collapse: separate; border-spacing: 0;">
           <thead>
             <tr>
-              <th id="ts-mon-sort-emp" style="text-align:left;min-width:180px;cursor:pointer;user-select:none;" title="Click to sort by ID or Name">
+              <th id="ts-mon-sort-emp" style="position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #e5e7eb; text-align:left;min-width:180px;cursor:pointer;user-select:none;" title="Click to sort by ID or Name">
                 Employee
                 <span style="display:inline-block;margin-left:8px;font-size:12px;color:var(--text-secondary);">
                   ${tsMonitorSort.key === 'employee_name' ? 'Name' : 'ID'} 
                   ${tsMonitorSort.dir === 'asc' ? '<i class="fa-solid fa-arrow-up"></i>' : '<i class="fa-solid fa-arrow-down"></i>'}
                 </span>
               </th>
-              ${weeks.map(w => `<th style="text-align:center;min-width:120px;">${formatWeekHeader(w)}</th>`).join('')}
+              ${weeks.map(w => `<th style="position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #e5e7eb; text-align:center;min-width:120px;">${formatWeekHeader(w)}</th>`).join('')}
             </tr>
           </thead>
           <tbody>
@@ -939,14 +939,14 @@ const buildDashboardLayout = (data) => {
           </div>
           <div class="auto-refresh-pill">Auto refresh: 15s</div>
         </div>
-        <div style="flex:1;max-height:280px;overflow-y:auto;">
-          <table class="admin-table-v2">
+        <div style="flex:1;max-height:280px;overflow-y:auto;overflow-x:auto;">
+          <table class="admin-table-v2" style="border-collapse: separate; border-spacing: 0;">
             <thead>
               <tr>
-                <th>Employee</th>
-                <th>Project</th>
-                <th>Task/Status</th>
-                <th>Running</th>
+                <th style="position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #e5e7eb;">Employee</th>
+                <th style="position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #e5e7eb;">Project</th>
+                <th style="position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #e5e7eb;">Task/Status</th>
+                <th style="position: sticky; top: 0; background: #fff; z-index: 10; border-bottom: 1px solid #e5e7eb;">Running</th>
               </tr>
             </thead>
             <tbody id="admin-live-work-body">
@@ -1252,7 +1252,7 @@ const downloadAdminBackup = async () => {
 
     // ── Step 3: Show success summary ─────────────────────────────────────────
     _setBtnState('<i class="fa-solid fa-circle-check"></i> Done!', false);
-    setTimeout(() => _setBtnState('<i class="fa-solid fa-database"></i> Backup', false), 3000);
+    setTimeout(() => _setBtnState('<i class="fa-solid fa-download"></i> Backup local', false), 3000);
 
     const { cutoff_date, deleted, total_deleted } = purgeData;
     const tableLines = Object.entries(deleted || {})
@@ -1268,7 +1268,7 @@ const downloadAdminBackup = async () => {
   } catch (err) {
     console.error('Backup/Purge failed:', err);
     alert(`Backup or purge failed:\n${err.message || 'Unknown error'}`);
-    _setBtnState('<i class="fa-solid fa-database"></i> Backup', false);
+    _setBtnState('<i class="fa-solid fa-download"></i> Backup local', false);
   }
 };
 
@@ -1548,6 +1548,9 @@ const buildBackupScheduleCard = (cfg = {}) => {
         <button id="backup-run-now-btn" class="btn btn-outline" style="height:38px;white-space:nowrap;">
           <i class="fa-solid fa-database"></i> Run Now
         </button>
+        <button id="admin-backup-btn" class="btn btn-outline" style="height:38px;white-space:nowrap;margin-left:8px;">
+          <i class="fa-solid fa-download"></i> Backup local
+        </button>
       </div>
 
       <div style="margin-top:14px;padding:10px 14px;background:#eff6ff;border-radius:8px;font-size:12px;color:#1e40af;margin-bottom:20px;">
@@ -1558,13 +1561,13 @@ const buildBackupScheduleCard = (cfg = {}) => {
       
       <div style="border-top:1px solid #e2e8f0;padding-top:20px;">
         <h4 style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--text-primary);">Backup Execution Logs</h4>
-        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
-          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;max-height:300px;overflow-y:auto;overflow-x:auto;">
+          <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;">
             <thead>
               <tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;text-align:left;color:#64748b;">
-                <th style="padding:10px 12px;font-weight:600;">Timestamp</th>
-                <th style="padding:10px 12px;font-weight:600;">Status</th>
-                <th style="padding:10px 12px;font-weight:600;">Details</th>
+                <th style="position:sticky;top:0;background:#f8fafc;z-index:10;border-bottom:1px solid #e2e8f0;padding:10px 12px;font-weight:600;">Timestamp</th>
+                <th style="position:sticky;top:0;background:#f8fafc;z-index:10;border-bottom:1px solid #e2e8f0;padding:10px 12px;font-weight:600;">Status</th>
+                <th style="position:sticky;top:0;background:#f8fafc;z-index:10;border-bottom:1px solid #e2e8f0;padding:10px 12px;font-weight:600;">Details</th>
               </tr>
             </thead>
             <tbody>
@@ -1683,6 +1686,12 @@ const attachBackupScheduleHandlers = () => {
       runAutoBackup(false).finally(() => { runNowBtn.disabled = false; });
     };
   }
+
+  // Backup local button
+  const backupLocalBtn = document.getElementById('admin-backup-btn');
+  if (backupLocalBtn) {
+    backupLocalBtn.onclick = downloadAdminBackup;
+  }
 };
 
 const attachRefreshAction = () => {
@@ -1726,7 +1735,7 @@ const refreshAndRender = async (showSkeleton = true, scope = 'full') => {
     }
 
     if (showSkeleton) {
-      appContent.innerHTML = getPageContentHTML('Admin Dashboard', buildSkeleton(), '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-backup-btn" class="btn btn-outline" style="margin-right: 8px;"><i class="fa-solid fa-database"></i> Backup</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>');
+      appContent.innerHTML = getPageContentHTML('Admin Dashboard', buildSkeleton(), '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>');
     }
 
     const data = await loadAdminDashboardData();
@@ -1755,7 +1764,7 @@ const refreshAndRender = async (showSkeleton = true, scope = 'full') => {
        <iframe id="faceauth-iframe" title="FaceAuth Admin" allow="camera; microphone"
          style="display:${activeAdminTab === 'faceauth' ? 'block' : 'none'};width:100%;height:calc(100vh - 130px);border:none;"
        ></iframe>`,
-      '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-backup-btn" class="btn btn-outline" style="margin-right: 8px;"><i class="fa-solid fa-database"></i> Backup</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>'
+      '<button id="admin-export-wsr" class="btn btn-primary" style="margin-right: 8px;"><i class="fa-solid fa-download"></i> Export WSR report</button><button id="admin-dashboard-refresh" class="btn btn-outline"><i class="fa-solid fa-rotate"></i> Refresh</button>'
     );
 
     attachRefreshAction();
