@@ -1395,15 +1395,7 @@ const runAutoBackup = async (silent = true) => {
     localStorage.setItem(BACKUP_LS_KEY, todayStr);
 
     if (toast) toast.remove();
-    showBackupToast('✅ Backup completed & downloaded', 'success', 4000);
-    
-    // Automatically trigger browser download of the newly generated local copy
-    const a = document.createElement('a');
-    a.href = `${BASE_URL}/api/admin/download-latest-backup`;
-    a.download = 'backup.zip'; // Optional, backend provides download_name
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    showBackupToast('✅ Backup completed successfully', 'success', 4000);
     
     // Refresh the backup card to pull the latest backup history logs
     await checkAndRunAutoBackup();
