@@ -1131,12 +1131,12 @@ const _doExportWsrForRange = async (startDate, endDate, label) => {
         empNonBillableSecs += adjNonBillableSecs;
       }
 
-      // Check INL holidays within the range
+      // Check all approved leaves within the range
       let holidaysAvailed = 0;
       try {
         const leaves = await fetchEmployeeLeaves(upEmp);
         leaves.forEach(l => {
-          if (String(l.status).toLowerCase() === 'approved' && l.leave_type === 'INL') {
+          if (String(l.status).toLowerCase() === 'approved') {
             const leaveStart = String(l.start_date || '').slice(0, 10);
             if (leaveStart >= startDate && leaveStart <= endDate) {
               holidaysAvailed += Number(l.total_days || 1);
