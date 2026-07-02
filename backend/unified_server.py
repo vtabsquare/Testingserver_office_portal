@@ -17940,10 +17940,12 @@ def trigger_backup_job():
 def download_latest_backup():
     """Serves the most recent local backup zip for browser download"""
     try:
-        if not os.path.exists('temp_backup.zip'):
+        import tempfile
+        temp_path = os.path.join(tempfile.gettempdir(), 'temp_backup.zip')
+        if not os.path.exists(temp_path):
             return "No backup available", 404
         return send_file(
-            'temp_backup.zip',
+            temp_path,
             mimetype='application/zip',
             as_attachment=True,
             download_name=f"OfficeTool_Manual_Backup_{datetime.now().strftime('%Y%m%d')}.zip"
