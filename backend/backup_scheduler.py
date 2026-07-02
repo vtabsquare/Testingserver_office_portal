@@ -278,6 +278,10 @@ def run_scheduled_backup(get_supabase_fn, read_cfg_fn, write_cfg_fn):
         logger.info(f'[BACKUP-SCHEDULER] Building ZIP for {since_date} → {until_date}')
         zip_bytes, row_counts = _build_backup_zip(sb, since_date, until_date)
 
+        # Write to local disk so the manual trigger download API can serve it
+        with open('temp_backup.zip', 'wb') as f:
+            f.write(zip_bytes)
+
         # 2. Upload to OneDrive
         ts       = today.strftime('%Y%m%d')
         filename = f'OfficeTool_Backup_{since_date}_to_{until_date}_{ts}.zip'
