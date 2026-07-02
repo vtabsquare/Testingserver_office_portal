@@ -1120,11 +1120,15 @@ const _doExportWsrForRange = async (startDate, endDate, label) => {
         const stdSecs = rawSecs > 0 ? Math.min(netSecs, STD_WORK_SECS) : 0;
         const otSecs = rawSecs > 0 ? Math.max(0, netSecs - STD_WORK_SECS) : 0;
 
+        const ratio = rawSecs > 0 ? netSecs / rawSecs : 0;
+        const adjBillableSecs = dayBillableSecs * ratio;
+        const adjNonBillableSecs = dayNonBillableSecs * ratio;
+
         empProductiveSecs += stdSecs;
         empOtSecs += otSecs;
         empTotalSecs += (stdSecs + otSecs);
-        empBillableSecs += dayBillableSecs;
-        empNonBillableSecs += dayNonBillableSecs;
+        empBillableSecs += adjBillableSecs;
+        empNonBillableSecs += adjNonBillableSecs;
       }
 
       // Check INL holidays within the range
