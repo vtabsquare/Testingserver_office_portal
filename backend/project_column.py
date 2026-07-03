@@ -293,9 +293,9 @@ def get_columns(project_id):
         board = request.args.get("board")
         hdrs = dv_headers()
 
-        filter_q = f"crc6f_projectid eq '{project_id}'"
-        if board:
-            filter_q += f" and crc6f_boardid eq '{board}'"
+        filter_q = f"crc6f_boardid eq '{board}'" if board else ""
+        if not filter_q:
+            return jsonify({"success": True, "columns": []}), 200
 
         url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET}?$filter={urllib.parse.quote(filter_q, safe='')}"
         res = get_dataverse_session().get(url, headers=hdrs, timeout=15)
@@ -309,8 +309,8 @@ def get_columns(project_id):
         for r in value:
             cols.append({
                 "id": r.get("crc6f_hr_projectcolumnid"),
-                "name": r.get("crc6f_taskstatuscolumns"),
-                "color": (r.get("crc6f_colorcode") or "").strip()
+                "name": r.get("crc6f_columnname"),
+                "color": (r.get("crc6f_color") or "").strip()
             })
 
         return jsonify({"success": True, "columns": cols}), 200
@@ -332,10 +332,8 @@ def create_column(project_id):
 
         hdrs = dv_headers()
 
-        # Prevent duplicate names for same project+board
-        dup_filter = f"crc6f_projectid eq '{project_id}' and crc6f_taskstatuscolumns eq '{name}'"
-        if board:
-            dup_filter += f" and crc6f_boardid eq '{board}'"
+        # Prevent duplicate names for same board
+        dup_filter = f"crc6f_boardid eq '{board}' and crc6f_columnname eq '{name}'" if board else f"crc6f_columnname eq '{name}'"
 
         dup_url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET}?$filter={urllib.parse.quote(dup_filter, safe='')}"
 
@@ -344,12 +342,11 @@ def create_column(project_id):
         if dup_res.ok and dup_res.json().get("value"):
             return jsonify({"success": False, "error": "Column already exists"}), 400
 
-        tsb_id = f"TSB{uuid.uuid4().hex[:6].upper()}"
+        col_id = f"COL{uuid.uuid4().hex[:6].upper()}"
 
         payload = {
-            "crc6f_projectid": project_id,
-            "crc6f_taskstatuscolumns": name,
-            "crc6f_tsbid": tsb_id
+            "crc6f_columnname": name,
+            "crc6f_columnid": col_id
         }
 
         if board:
@@ -357,7 +354,7 @@ def create_column(project_id):
 
         # Save color
         if color:
-            payload["crc6f_colorcode"] = color.strip()
+            payload["crc6f_color"] = color.strip()
 
         for base_key, rpt_key in TASKSTATUS_RPT_MAP.items():
             if base_key in body:
@@ -397,9 +394,7 @@ def rename_column(project_id):
         hdrs = dv_headers()
 
         # find the column record
-        filter_query = f"crc6f_projectid eq '{project_id}' and crc6f_taskstatuscolumns eq '{old_name}'"
-        if board:
-            filter_query += f" and crc6f_boardid eq '{board}'"
+        filter_query = f"crc6f_boardid eq '{board}' and crc6f_columnname eq '{old_name}'" if board else f"crc6f_columnname eq '{old_name}'"
 
         url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET}?$filter={urllib.parse.quote(filter_query, safe='')}"
         res = get_dataverse_session().get(url, headers=hdrs, timeout=15)
@@ -416,7 +411,7 @@ def rename_column(project_id):
 
         # patch the column record with new name
         patch_url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET}({rec_guid})"
-        patch_body = {"crc6f_taskstatuscolumns": new_name}
+        patch_body = {"crc6f_columnname": new_name}
         for base_key, rpt_key in TASKSTATUS_RPT_MAP.items():
             if base_key in body:
                 patch_body[rpt_key] = body.get(base_key)
@@ -479,9 +474,7 @@ def delete_column(project_id):
             return jsonify({"success": False, "error": "Column has tasks, cannot delete"}), 400
 
         # find column record
-        filter_query = f"crc6f_projectid eq '{project_id}' and crc6f_taskstatuscolumns eq '{name}'"
-        if board:
-            filter_query += f" and crc6f_boardid eq '{board}'"
+        filter_query = f"crc6f_boardid eq '{board}' and crc6f_columnname eq '{name}'" if board else f"crc6f_columnname eq '{name}'"
 
         url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET}?$filter={urllib.parse.quote(filter_query, safe='')}"
         res = get_dataverse_session().get(url, headers=hdrs, timeout=15)
