@@ -3516,7 +3516,11 @@ function taskCardHtml(t, index, projectId) {
   // 🔹 Assignee initials (max 2)
   const assignedPeople = (t.assigned_to || "")
     .split(",")
-    .map((name) => name.trim().toUpperCase())
+    .map((name) => {
+      let cleanName = name.trim();
+      if (cleanName.includes(":")) cleanName = cleanName.split(":")[1].trim();
+      return cleanName.toUpperCase();
+    })
     .filter(Boolean)
     .map((n) => {
       const parts = n.split(" ");
@@ -4109,7 +4113,8 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
 
     // ✅ FIX — use your multi-select getter
     const assignedUsers = window.getAssignedUsers();
-    const assignedTo = assignedUsers.map((u) => u.name).join(", ");
+    // Store as "EMPID:Name" so backend can match by employee ID reliably
+    const assignedTo = assignedUsers.map((u) => `${u.id}:${u.name}`).join(", ");
 
     const boardIdValue = boardParam;
     const boardNameValue = resolvedBoardName || boardParam;
@@ -4286,7 +4291,11 @@ async function openTaskDetailsPage(projectId, taskId) {
       // Pre-selected values (convert from CSV string)
       const pre = (t.assigned_to || "")
         .split(",")
-        .map((x) => x.trim())
+        .map((x) => {
+          let cleanName = x.trim();
+          if (cleanName.includes(":")) cleanName = cleanName.split(":")[1].trim();
+          return cleanName;
+        })
         .filter((x) => x);
 
       const multi = initMultiSelect("assignedToEdit", contributors);
@@ -4368,7 +4377,8 @@ async function openTaskDetailsPage(projectId, taskId) {
 
       // Get selected users from multi-select
       const assignedList = window.getAssignedUsersEdit();
-      const assignedTo = assignedList.map((u) => u.name).join(", ");
+      // Store as "EMPID:Name" so backend can match by employee ID reliably
+      const assignedTo = assignedList.map((u) => `${u.id}:${u.name}`).join(", ");
 
       const payload = {
         task_name: document.getElementById("td-title").value.trim(),
