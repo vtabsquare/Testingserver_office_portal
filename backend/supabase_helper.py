@@ -212,15 +212,15 @@ class _SupabaseODataAdapter:
         filter_str = params.get("$filter", [None])[0]
         orderby_str = params.get("$orderby", [None])[0]
 
-        query = self._sb.table(entity).select(select_str)
+        def build_query():
+            q = self._sb.table(entity).select(select_str)
+            if filter_str:
+                q = self._apply_filter(q, filter_str)
+            if orderby_str:
+                q = self._apply_orderby(q, orderby_str)
+            return q
 
-        # Parse $filter
-        if filter_str:
-            query = self._apply_filter(query, filter_str)
-
-        # Parse $orderby
-        if orderby_str:
-            query = self._apply_orderby(query, orderby_str)
+        query = build_query()
 
         # $top
         if top:
@@ -230,8 +230,26 @@ class _SupabaseODataAdapter:
                 pass
 
         try:
-            resp = query.execute()
-            data = resp.data or []
+            if top:
+                # Explicit $top: single bounded request.
+                resp = query.execute()
+                data = resp.data or []
+            else:
+                # No $top given: PostgREST silently caps unbounded responses at its
+                # server-side "max rows" setting (commonly 1000). Paginate with
+                # .range() until a page comes back short, so large tables (e.g.
+                # crc6f_hr_taskdetailses) never get silently truncated.
+                data = []
+                page_size = 1000
+                offset = 0
+                while True:
+                    page_query = build_query().range(offset, offset + page_size - 1)
+                    resp = page_query.execute()
+                    page = resp.data or []
+                    data.extend(page)
+                    if len(page) < page_size:
+                        break
+                    offset += page_size
             return _MockResponse(200, {"value": data, "@odata.count": len(data)})
         except Exception as e:
             err_str = str(e)
