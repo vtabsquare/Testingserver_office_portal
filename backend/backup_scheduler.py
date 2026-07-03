@@ -407,11 +407,12 @@ def init_backup_scheduler(app, get_supabase_fn, read_cfg_fn, write_cfg_fn):
     global _scheduler
 
     try:
-        from apscheduler.schedulers.background import BackgroundScheduler
+        # Use GeventScheduler since the server runs with gunicorn --worker-class gevent
+        from apscheduler.schedulers.gevent import GeventScheduler as BackgroundScheduler
         from apscheduler.jobstores.memory      import MemoryJobStore
         from apscheduler.executors.pool        import ThreadPoolExecutor
     except ImportError:
-        logger.error('[BACKUP-SCHEDULER] APScheduler not installed.')
+        logger.error('[BACKUP-SCHEDULER] APScheduler or gevent not installed.')
         return None
 
     cfg = read_cfg_fn()
