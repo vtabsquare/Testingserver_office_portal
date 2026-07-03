@@ -1431,10 +1431,10 @@ const checkAndRunAutoBackup = async () => {
     }
 
     if (!config || config.enabled === false) return;
-    if (isBackupDue(config)) {
-      // Tiny delay so the dashboard UI finishes painting first
-      setTimeout(() => runAutoBackup(true), 1500);
-    }
+    // if (isBackupDue(config)) {
+    //   // Tiny delay so the dashboard UI finishes painting first
+    //   // setTimeout(() => runAutoBackup(true), 1500);
+    // }
   } catch (e) {
     console.warn('[AUTO-BACKUP] Config fetch failed:', e);
   }
