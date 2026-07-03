@@ -263,19 +263,34 @@ class _SupabaseODataAdapter:
                     return _MockResponse(404, text=err_str)
                 logger.warning(f"[ODataAdapter] Query failed for {entity}, retrying with select(*): {err_str[:120]}")
                 try:
-                    query2 = self._sb.table(entity).select("*")
-                    if filter_str:
-                        try:
-                            query2 = self._apply_filter(query2, filter_str)
-                        except Exception:
-                            pass
+                    def build_query2():
+                        q2 = self._sb.table(entity).select("*")
+                        if filter_str:
+                            try:
+                                q2 = self._apply_filter(q2, filter_str)
+                            except Exception:
+                                pass
+                        return q2
+
                     if top:
                         try:
-                            query2 = query2.limit(int(top))
+                            resp2 = build_query2().limit(int(top)).execute()
+                            data2 = resp2.data or []
                         except ValueError:
-                            pass
-                    resp2 = query2.execute()
-                    data2 = resp2.data or []
+                            resp2 = build_query2().execute()
+                            data2 = resp2.data or []
+                    else:
+                        # Same unbounded-pagination safeguard as the primary path above.
+                        data2 = []
+                        page_size = 1000
+                        offset = 0
+                        while True:
+                            resp2 = build_query2().range(offset, offset + page_size - 1).execute()
+                            page2 = resp2.data or []
+                            data2.extend(page2)
+                            if len(page2) < page_size:
+                                break
+                            offset += page_size
                     return _MockResponse(200, {"value": data2, "@odata.count": len(data2)})
                 except Exception as e2:
                     return _MockResponse(500, text=str(e2))
