@@ -261,7 +261,7 @@ columns_bp = Blueprint("project_columns", __name__, url_prefix="/api")
 
 DATAVERSE_BASE = os.getenv("RESOURCE")
 DATAVERSE_API = os.getenv("DATAVERSE_API", "/api/data/v9.2")
-ENTITY_SET = "crc6f_hr_taskstatusboards"
+ENTITY_SET = "crc6f_hr_projectcolumns"
 TASK_ENTITY = "crc6f_hr_taskdetailses"
 
 TASKSTATUS_RPT_MAP = {
@@ -308,9 +308,9 @@ def get_columns(project_id):
 
         for r in value:
             cols.append({
-                "id": r.get("crc6f_hr_taskstatusboardid"),
+                "id": r.get("crc6f_hr_projectcolumnid"),
                 "name": r.get("crc6f_taskstatuscolumns"),
-                "color": (r.get("crc6f_colorcode") or "").strip()   # ✅ Updated
+                "color": (r.get("crc6f_colorcode") or "").strip()
             })
 
         return jsonify({"success": True, "columns": cols}), 200
@@ -412,7 +412,7 @@ def rename_column(project_id):
             return jsonify({"success": False, "error": "Column not found"}), 404
 
         rec = items[0]
-        rec_guid = rec.get("crc6f_hr_taskstatusboardid")
+        rec_guid = rec.get("crc6f_hr_projectcolumnid")
 
         # patch the column record with new name
         patch_url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET}({rec_guid})"
@@ -493,7 +493,7 @@ def delete_column(project_id):
         if not items:
             return jsonify({"success": False, "error": "Column not found"}), 404
 
-        rec_guid = items[0].get("crc6f_hr_taskstatusboardid")
+        rec_guid = items[0].get("crc6f_hr_projectcolumnid")
         delete_url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET}({rec_guid})"
         del_res = get_dataverse_session().delete(delete_url, headers=hdrs, timeout=15)
 

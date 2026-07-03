@@ -235,6 +235,9 @@ class _SupabaseODataAdapter:
             return _MockResponse(200, {"value": data, "@odata.count": len(data)})
         except Exception as e:
             err_str = str(e)
+            # Table not found in schema cache (PGRST205) → return 404 immediately
+            if "PGRST205" in err_str or "Could not find the table" in err_str:
+                return _MockResponse(404, text=err_str)
             # Column doesn't exist -> retry with select("*") and no orderby
             if "does not exist" in err_str:
                 # If it's a table (relation) not found, return 404
