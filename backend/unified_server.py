@@ -3357,7 +3357,7 @@ def get_leave_allocation_by_experience(experience_years):
         return (3.0, 3.0, 6.0, "Type 3")
     else:
         # Default for new employees (< 1 year)
-        return (3.0, 3.0, 6.0, "Type 3")
+        return (0.0, 0.0, 0.0, "None")
     
     print(f"   [FETCH] Leave allocation: Type {allocation_type} - CL: {cl}, SL: {sl}, Total: {total}")
 
@@ -8178,9 +8178,9 @@ def get_all_leave_balances(employee_id):
         emp_url = f"{RESOURCE}/api/data/v9.2/{entity_set}{emp_filter}"
         emp_response = get_dataverse_session().get(emp_url, headers=headers, timeout=15)
         
-        # Default quotas for Type 3 (0-1 years experience)
-        cl_annual = 3
-        sl_annual = 3
+        # Default quotas for None (0 years experience)
+        cl_annual = 0
+        sl_annual = 0
         co_annual = 0   # Comp off doesn't have fixed annual quota
         
         if emp_response.status_code == 200:
@@ -8217,7 +8217,8 @@ def get_all_leave_balances(employee_id):
                             # Determine allocation based on experience
                             # Type 1: 3+ years -> CL=6, SL=6, Total=12
                             # Type 2: 2+ years -> CL=4, SL=4, Total=8
-                            # Type 3: <2 years -> CL=3, SL=3, Total=6
+                            # Type 3: 1+ years -> CL=3, SL=3, Total=6
+                            # None: <1 year -> CL=0, SL=0, Total=0
                             if experience_years >= 3:
                                 cl_annual = 6
                                 sl_annual = 6
@@ -8226,19 +8227,23 @@ def get_all_leave_balances(employee_id):
                                 cl_annual = 4
                                 sl_annual = 4
                                 print(f"   [OK] Allocation Type 2 (2+ years): CL={cl_annual}, SL={sl_annual}")
-                            else:
+                            elif experience_years >= 1:
                                 cl_annual = 3
                                 sl_annual = 3
-                                print(f"   [OK] Allocation Type 3 (<2 years): CL={cl_annual}, SL={sl_annual}")
+                                print(f"   [OK] Allocation Type 3 (1+ years): CL={cl_annual}, SL={sl_annual}")
+                            else:
+                                cl_annual = 0
+                                sl_annual = 0
+                                print(f"   [OK] Allocation None (0 years): CL={cl_annual}, SL={sl_annual}")
                     except Exception as e:
                         print(f"   [WARN] Error calculating experience: {e}")
-                        print(f"   Using default Type 3 allocation: CL={cl_annual}, SL={sl_annual}")
+                        print(f"   Using default None allocation: CL={cl_annual}, SL={sl_annual}")
                 else:
-                    print(f"   [WARN] No DOJ found, using default Type 3 allocation: CL={cl_annual}, SL={sl_annual}")
+                    print(f"   [WARN] No DOJ found, using default None allocation: CL={cl_annual}, SL={sl_annual}")
             else:
-                print(f"   [WARN] Employee record not found, using default Type 3 allocation: CL={cl_annual}, SL={sl_annual}")
+                print(f"   [WARN] Employee record not found, using default None allocation: CL={cl_annual}, SL={sl_annual}")
         else:
-            print(f"   [WARN] Failed to fetch employee record, using default Type 3 allocation: CL={cl_annual}, SL={sl_annual}")
+            print(f"   [WARN] Failed to fetch employee record, using default None allocation: CL={cl_annual}, SL={sl_annual}")
         
         # ============================================================
         # CALCULATE CONSUMED FROM ACTUAL LEAVE HISTORY (REAL-TIME)
@@ -12745,9 +12750,9 @@ def sync_leave_allocations():
                 doj_value = emp_record.get(field_map['doj'])
 
                 # Calculate experience and allocation
-                cl_annual = 3  # Default Type 3
-                sl_annual = 3
-                allocation_type = "Type 3"
+                cl_annual = 0  # Default None
+                sl_annual = 0
+                allocation_type = "None"
 
                 if doj_value:
                     try:
@@ -12773,6 +12778,10 @@ def sync_leave_allocations():
                                 cl_annual = 4
                                 sl_annual = 4
                                 allocation_type = "Type 2"
+                            elif experience_years >= 1:
+                                cl_annual = 3
+                                sl_annual = 3
+                                allocation_type = "Type 3"
                     except Exception as e:
                         print(f"   [WARN] Error calculating experience for {emp_id}: {e}")
 

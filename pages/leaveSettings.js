@@ -146,7 +146,8 @@ const getAllocationType = (experienceYears) => {
         const threshold = Number(t.experience || 0);
         if (experienceYears >= threshold) return t;
     }
-    return types[types.length - 1] || allocationTypes[allocationTypes.length - 1] || LEAVE_ALLOCATION_TYPES[LEAVE_ALLOCATION_TYPES.length - 1];
+    // If experience is less than the lowest tier (e.g., 0 years), return None allocation
+    return { type: 'None', experience: 0, casualLeave: 0, sickLeave: 0, totalQuota: 0 };
 };
 
 // Format date for display

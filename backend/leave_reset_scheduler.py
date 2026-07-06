@@ -39,7 +39,7 @@ _ALLOCATION_MAP = {
     "Type 2": {"cl": 4.0, "sl": 4.0, "total": 8.0},
     "Type 3": {"cl": 3.0, "sl": 3.0, "total": 6.0},
 }
-_DEFAULT_ALLOCATION = {"cl": 3.0, "sl": 3.0, "total": 6.0}
+_DEFAULT_ALLOCATION = {"cl": 0.0, "sl": 0.0, "total": 0.0}
 
 LEAVE_TABLE = "crc6f_hr_leavemangements"
 RESET_LOG_KEY = "last_annual_leave_reset_year"   # stored in metadata or checked by year
