@@ -18154,6 +18154,30 @@ def get_backup_scheduler_status():
         'config':   cfg,
     }), 200
 
+# ── Leave Reset endpoints ──────────────────────────────────────────────────────
+@app.route('/api/admin/leave-reset-status', methods=['GET'])
+def get_leave_reset_scheduler_status():
+    """Return current state of the annual leave reset scheduler."""
+    try:
+        import leave_reset_scheduler as _lr_sched
+        status = _lr_sched.get_leave_reset_status()
+        return jsonify({'success': True, 'scheduler': status}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/admin/leave-reset-now', methods=['POST'])
+def trigger_leave_reset_now():
+    """Manually trigger the annual leave balance reset (admin only)."""
+    try:
+        import leave_reset_scheduler as _lr_sched
+        summary = _lr_sched.perform_leave_reset(
+            get_supabase_fn=get_supabase,
+            triggered_by='manual admin trigger'
+        )
+        return jsonify({'success': True, 'summary': summary}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # Start server-side backup scheduler (runs independently of any browser session)
 try:
     _bk_sched.init_backup_scheduler(
@@ -18165,6 +18189,14 @@ try:
     print("[INIT] Background Backup Scheduler Started Successfully")
 except Exception as e:
     print(f"[INIT] Failed to start backup scheduler: {e}")
+
+# Start annual leave balance reset scheduler (resets CL/SL/CompOff on July 1 at 12 AM IST)
+try:
+    import leave_reset_scheduler as _lr_sched
+    _lr_sched.init_leave_reset_scheduler(get_supabase_fn=get_supabase)
+    print("[INIT] Annual Leave Reset Scheduler Started Successfully")
+except Exception as e:
+    print(f"[INIT] Failed to start leave reset scheduler: {e}")
 
 if __name__ == '__main__':
     print('\n' + '== ' * 30)
