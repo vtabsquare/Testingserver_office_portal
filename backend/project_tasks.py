@@ -43,15 +43,23 @@ def generate_task_id(task_type="Task"):
     prefix = "BUG" if str(task_type or "Task").strip().lower() == "bug" else "TASK"
     try:
         sb = get_supabase()
-        # Fetch all existing IDs whose value starts with the prefix
-        resp = (
-            sb.table(ENTITY_SET_TASKS)
-              .select("crc6f_taskid")
-              .ilike("crc6f_taskid", f"{prefix}%")
-              .limit(10000)
-              .execute()
-        )
-        rows = resp.data or []
+        rows = []
+        page_size = 1000
+        offset = 0
+        while True:
+            resp = (
+                sb.table(ENTITY_SET_TASKS)
+                  .select("crc6f_taskid")
+                  .ilike("crc6f_taskid", f"{prefix}%")
+                  .range(offset, offset + page_size - 1)
+                  .execute()
+            )
+            batch = resp.data or []
+            rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+
         max_num = 0
         pattern = re.compile(rf"^{prefix}(\d+)$", re.IGNORECASE)
         for r in rows:
@@ -166,8 +174,8 @@ def add_task(project_code):
         dv_payload = {k: v for k, v in dv_payload.items() if v not in (None, "", [])}
         url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_TASKS}"
 
-        # Retry up to 5 times on duplicate key conflict
-        for retry in range(5):
+        # Retry on duplicate key conflict in case another process inserted the same ID
+        for retry in range(50):
             res = get_dataverse_session().post(url, headers=hdrs, json=dv_payload, timeout=15)
             current_app.logger.info(f"Dataverse response {res.status_code} (attempt {retry+1}): {res.text[:200]}")
 
