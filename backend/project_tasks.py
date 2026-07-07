@@ -149,13 +149,18 @@ def add_task(project_code):
             check_url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_TASKS}?$filter=crc6f_taskid eq '{candidate_id}'"
             check_res = get_dataverse_session().get(check_url, headers=hdrs, timeout=10)
 
-            if check_res.ok:
-                existing = check_res.json().get("value", [])
-                if not existing:
-                    generated_id = candidate_id
-                    break
+            if not check_res.ok:
+                # Check request itself failed — trust the Supabase-generated ID and proceed
+                current_app.logger.warning(f"[add_task] Uniqueness check failed ({check_res.status_code}), using candidate {candidate_id} anyway")
+                generated_id = candidate_id
+                break
 
-            # Collision detected; increment numeric suffix and retry
+            existing = check_res.json().get("value", [])
+            if not existing:
+                generated_id = candidate_id
+                break
+
+            # Confirmed collision; increment numeric suffix and retry
             match = re.search(rf"{task_prefix}(\d+)", candidate_id)
             next_num = int(match.group(1)) + 1 if match else attempt + 1
             candidate_id = f"{task_prefix}{next_num:03d}"
