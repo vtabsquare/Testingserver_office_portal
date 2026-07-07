@@ -139,35 +139,9 @@ def add_task(project_code):
         task_type = str(body.get("task_type") or "Task").strip().lower()
         task_prefix = "BUG" if task_type == "bug" else "TASK"
 
-        # ✅ Generate and verify unique Task ID (retry if collision)
-        generated_id = None
-        candidate_id = generate_task_id(task_type)
-        attempt = 0
-        MAX_ATTEMPTS = 10
-
-        while attempt < MAX_ATTEMPTS:
-            check_url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_TASKS}?$filter=crc6f_taskid eq '{candidate_id}'"
-            check_res = get_dataverse_session().get(check_url, headers=hdrs, timeout=10)
-
-            if not check_res.ok:
-                # Check request itself failed — trust the Supabase-generated ID and proceed
-                current_app.logger.warning(f"[add_task] Uniqueness check failed ({check_res.status_code}), using candidate {candidate_id} anyway")
-                generated_id = candidate_id
-                break
-
-            existing = check_res.json().get("value", [])
-            if not existing:
-                generated_id = candidate_id
-                break
-
-            # Confirmed collision; increment numeric suffix and retry
-            match = re.search(rf"{task_prefix}(\d+)", candidate_id)
-            next_num = int(match.group(1)) + 1 if match else attempt + 1
-            candidate_id = f"{task_prefix}{next_num:03d}"
-            attempt += 1
-
-        if not generated_id:
-            return jsonify({"success": False, "error": "Unable to generate unique TASK ID"}), 400
+        # ✅ Generate unique Task ID via Supabase scan (already finds true max, no collision loop needed)
+        generated_id = generate_task_id(task_type)
+        current_app.logger.info(f"[add_task] Generated task ID: {generated_id}")
 
         # Resolve board identifier (accept both legacy board_name and new board_id field)
         board_identifier = body.get("board_id") or body.get("board_name")
