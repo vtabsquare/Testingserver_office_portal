@@ -48,6 +48,7 @@ def generate_task_id(task_type="Task"):
             sb.table(ENTITY_SET_TASKS)
               .select("crc6f_taskid")
               .ilike("crc6f_taskid", f"{prefix}%")
+              .limit(10000)
               .execute()
         )
         rows = resp.data or []
@@ -164,13 +165,28 @@ def add_task(project_code):
 
         dv_payload = {k: v for k, v in dv_payload.items() if v not in (None, "", [])}
         url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_TASKS}"
-        res = get_dataverse_session().post(url, headers=hdrs, json=dv_payload, timeout=15)
 
-        current_app.logger.info(f"Dataverse response {res.status_code}: {res.text}")
+        # Retry up to 5 times on duplicate key conflict
+        for retry in range(5):
+            res = get_dataverse_session().post(url, headers=hdrs, json=dv_payload, timeout=15)
+            current_app.logger.info(f"Dataverse response {res.status_code} (attempt {retry+1}): {res.text[:200]}")
 
-        if res.status_code in (200, 201, 204):
-            return jsonify({"success": True, "message": "Task created successfully"}), 201
-        else:
+            if res.status_code in (200, 201, 204):
+                return jsonify({"success": True, "message": "Task created successfully"}), 201
+
+            # Check for duplicate key error (Supabase returns 400 with code 23505)
+            resp_text = res.text or ""
+            if "23505" in resp_text or "already exists" in resp_text:
+                # Increment the task ID and retry
+                match = re.search(rf"({task_prefix})(\d+)", generated_id)
+                if match:
+                    generated_id = f"{match.group(1)}{int(match.group(2)) + 1:03d}"
+                    dv_payload["crc6f_taskid"] = generated_id
+                    current_app.logger.warning(f"[add_task] Duplicate key, retrying with {generated_id}")
+                    continue
+            break
+
+        if res.status_code not in (200, 201, 204):
             return jsonify({"success": False, "error": res.text}), res.status_code
 
     except Exception as e:
