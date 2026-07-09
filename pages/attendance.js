@@ -696,12 +696,23 @@ export const renderAttendanceTrackerPage = async (mode) => {
     const exportPayrollBtn = document.getElementById('export-payroll-btn');
     if (exportPayrollBtn && mode === 'team') {
         exportPayrollBtn.addEventListener('click', async () => {
-            let latestShiftSettings = null;
+            let latestShiftSettings;
             try {
                 latestShiftSettings = await fetchShiftSettings();
             } catch (err) {
-                console.warn('Unable to refresh shift settings before payroll export:', err);
+                console.error('Unable to refresh shift settings before payroll export:', err);
+                alert('Payroll export blocked: unable to load latest shift settings. Please refresh and try again.');
+                return;
             }
+
+            Object.keys(state.attendanceData || {}).forEach((empId) => {
+                const key = String(empId || '').trim().toUpperCase();
+                const workWeek = latestShiftSettings?.by_employee?.[key]?.work_week || latestShiftSettings?.defaults?.work_week;
+                if (workWeek && state.attendanceData[empId]) {
+                    state.attendanceData[empId].workWeek = normalizeWorkWeek(workWeek);
+                }
+            });
+
             exportTeamPayrollCSV(state.attendanceData, year, date.getMonth(), currentMonthHolidays, monthName, latestShiftSettings);
         });
     }
