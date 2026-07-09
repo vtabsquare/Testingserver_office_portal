@@ -825,7 +825,7 @@ const normalizeEmployeeFlagForWorkingDays = (value) => {
 };
 
 const getMonthlyWorkingDays = (year, monthIndex, employeeFlag, workWeek = 'mon-sat') => {
-    const includeSaturdays = normalizeWorkWeek(workWeek) === 'mon-sat' || normalizeEmployeeFlagForWorkingDays(employeeFlag) === 'Intern';
+    const includeSaturdays = normalizeWorkWeek(workWeek) === 'mon-sat';
     const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
     let workingDays = 0;
 

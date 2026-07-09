@@ -13,9 +13,7 @@ const normalizeEmployeeFlag = (value) => {
 
 /** Working days in month for employee shift (Mon–Fri vs Mon–Sat; interns include Saturday). */
 export function getMonthlyWorkingDays(year, monthIndex, employeeFlag, workWeek = 'mon-sat') {
-  const includeSaturdays =
-    normalizeWorkWeek(workWeek) === 'mon-sat' ||
-    normalizeEmployeeFlag(employeeFlag) === 'Intern';
+  const includeSaturdays = normalizeWorkWeek(workWeek) === 'mon-sat';
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
   let workingDays = 0;
 
