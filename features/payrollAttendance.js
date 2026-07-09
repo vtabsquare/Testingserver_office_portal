@@ -140,7 +140,7 @@ export function computeDayPaidCredit(dayData, isHoliday) {
 }
 
 export function computePaidDaysForEmployee(empData, year, monthIndex, holidays = []) {
-  const workWeek = normalizeWorkWeek(empData?.workWeek || 'mon-sat');
+  const workWeek = detectEffectiveWorkWeek(empData || {}, year, monthIndex);
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
   let paidDays = 0;
 
@@ -154,13 +154,39 @@ export function computePaidDaysForEmployee(empData, year, monthIndex, holidays =
   return Math.round(paidDays * 10) / 10;
 }
 
+/**
+ * Detect effective work week from actual Saturday attendance records.
+ * If every Saturday in the month has status DO (or no attendance record at all),
+ * the employee is Mon-Fri regardless of the stored workWeek metadata.
+ */
+function detectEffectiveWorkWeek(empData, year, monthIndex) {
+  const storedWorkWeek = normalizeWorkWeek(empData.workWeek || 'mon-sat');
+  if (storedWorkWeek === 'mon-fri') return 'mon-fri';
+
+  // Even if storedWorkWeek is mon-sat, check actual Saturday records
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const saturdays = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    if (new Date(year, monthIndex, d).getDay() === 6) saturdays.push(d);
+  }
+  if (saturdays.length === 0) return storedWorkWeek;
+
+  const allSaturdaysAreDO = saturdays.every((d) => {
+    const dayData = empData[d];
+    if (!dayData) return true; // no record = treated as DO/off
+    return String(dayData.status || '').toUpperCase() === 'DO';
+  });
+
+  return allSaturdaysAreDO ? 'mon-fri' : 'mon-sat';
+}
+
 export function buildPayrollExportRows(attendanceDataByEmployee, year, monthIndex, holidays = []) {
   const month = monthIndex + 1;
   const rows = [];
 
   Object.keys(attendanceDataByEmployee || {}).forEach((empId) => {
     const empData = attendanceDataByEmployee[empId] || {};
-    const workWeek = normalizeWorkWeek(empData.workWeek || 'mon-sat');
+    const workWeek = detectEffectiveWorkWeek(empData, year, monthIndex);
     const employeeFlag = normalizeEmployeeFlag(empData.employeeFlag);
     const workingDays = getMonthlyWorkingDays(year, monthIndex, employeeFlag, workWeek);
     const paidDays = computePaidDaysForEmployee(empData, year, monthIndex, holidays);
