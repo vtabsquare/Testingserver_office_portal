@@ -159,11 +159,10 @@ export function computePaidDaysForEmployee(empData, year, monthIndex, holidays =
  * If every Saturday in the month has status DO (or no attendance record at all),
  * the employee is Mon-Fri regardless of the stored workWeek metadata.
  */
-function detectEffectiveWorkWeek(empData, year, monthIndex) {
-  const storedWorkWeek = normalizeWorkWeek(empData.workWeek || 'mon-sat');
+function detectEffectiveWorkWeek(empData, year, monthIndex, workWeekOverride) {
+  const storedWorkWeek = normalizeWorkWeek(workWeekOverride || empData.workWeek || 'mon-sat');
   if (storedWorkWeek === 'mon-fri') return 'mon-fri';
 
-  // Even if storedWorkWeek is mon-sat, check actual Saturday records
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
   const saturdays = [];
   for (let d = 1; d <= daysInMonth; d++) {
@@ -172,24 +171,30 @@ function detectEffectiveWorkWeek(empData, year, monthIndex) {
   if (saturdays.length === 0) return storedWorkWeek;
 
   const allSaturdaysAreDO = saturdays.every((d) => {
-    const dayData = empData[d];
-    if (!dayData) return true; // no record = treated as DO/off
+    const dayData = empData[d] || empData[String(d).padStart(2, '0')];
+    if (!dayData) return false;
     return String(dayData.status || '').toUpperCase() === 'DO';
   });
 
   return allSaturdaysAreDO ? 'mon-fri' : 'mon-sat';
 }
 
-export function buildPayrollExportRows(attendanceDataByEmployee, year, monthIndex, holidays = []) {
+function getShiftWorkWeekForEmployee(shiftSettings, empId) {
+  const key = String(empId || '').trim().toUpperCase();
+  return shiftSettings?.by_employee?.[key]?.work_week || shiftSettings?.defaults?.work_week;
+}
+
+export function buildPayrollExportRows(attendanceDataByEmployee, year, monthIndex, holidays = [], shiftSettings = null) {
   const month = monthIndex + 1;
   const rows = [];
 
   Object.keys(attendanceDataByEmployee || {}).forEach((empId) => {
     const empData = attendanceDataByEmployee[empId] || {};
-    const workWeek = detectEffectiveWorkWeek(empData, year, monthIndex);
+    const shiftWorkWeek = getShiftWorkWeekForEmployee(shiftSettings, empId);
+    const workWeek = detectEffectiveWorkWeek(empData, year, monthIndex, shiftWorkWeek);
     const employeeFlag = normalizeEmployeeFlag(empData.employeeFlag);
     const workingDays = getMonthlyWorkingDays(year, monthIndex, employeeFlag, workWeek);
-    const paidDays = computePaidDaysForEmployee(empData, year, monthIndex, holidays);
+    const paidDays = computePaidDaysForEmployee({ ...empData, workWeek }, year, monthIndex, holidays);
 
     rows.push({
       employee_id: empId,
@@ -213,8 +218,8 @@ function csvEscape(value) {
   return s;
 }
 
-export function exportTeamPayrollCSV(attendanceDataByEmployee, year, monthIndex, holidays = [], monthName = '') {
-  const rows = buildPayrollExportRows(attendanceDataByEmployee, year, monthIndex, holidays);
+export function exportTeamPayrollCSV(attendanceDataByEmployee, year, monthIndex, holidays = [], monthName = '', shiftSettings = null) {
+  const rows = buildPayrollExportRows(attendanceDataByEmployee, year, monthIndex, holidays, shiftSettings);
   const headers = ['employee_id', 'employee_name', 'month', 'year', 'working_days', 'paid_days'];
   const csvLines = [
     headers.join(','),

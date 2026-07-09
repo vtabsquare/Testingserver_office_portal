@@ -695,8 +695,14 @@ export const renderAttendanceTrackerPage = async (mode) => {
     // Set up payroll export button listener
     const exportPayrollBtn = document.getElementById('export-payroll-btn');
     if (exportPayrollBtn && mode === 'team') {
-        exportPayrollBtn.addEventListener('click', () => {
-            exportTeamPayrollCSV(state.attendanceData, year, date.getMonth(), currentMonthHolidays, monthName);
+        exportPayrollBtn.addEventListener('click', async () => {
+            let latestShiftSettings = null;
+            try {
+                latestShiftSettings = await fetchShiftSettings();
+            } catch (err) {
+                console.warn('Unable to refresh shift settings before payroll export:', err);
+            }
+            exportTeamPayrollCSV(state.attendanceData, year, date.getMonth(), currentMonthHolidays, monthName, latestShiftSettings);
         });
     }
 
