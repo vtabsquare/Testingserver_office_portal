@@ -114,6 +114,42 @@ const attachMyTsEvents = () => {
 };
 
 const initials = (name) => (name || '').split(' ').filter(Boolean).slice(0, 2).map(s => s[0].toUpperCase()).join('') || 'NA';
+/**
+ * Get the best available date for sorting inbox items.
+ * Returns the latest usable date from common date fields, or epoch 0 if none.
+ */
+const getLatestSortDate = (item) => {
+    if (!item || typeof item !== 'object') return new Date(0);
+    const dateFields = [
+        'created_at',
+        'submitted_at',
+        'createdAt',
+        'createdon',
+        'created_date',
+        'submitted_on',
+        'appliedDate',
+        'decided_at',
+        'timestamp',
+        'dateWorked',
+        'start_date',
+        'date',
+        'updated_at',
+        'updatedAt',
+    ];
+    for (const field of dateFields) {
+        const value = item[field];
+        if (value) {
+            const d = new Date(value);
+            if (!Number.isNaN(d.getTime())) return d;
+        }
+    }
+    return new Date(0);
+};
+
+const sortByLatestFirst = (items) => {
+    if (!Array.isArray(items)) return [];
+    return items.sort((a, b) => getLatestSortDate(b) - getLatestSortDate(a));
+};
 const badgeColor = (seed) => {
     const colors = ['#3498db', '#9b59b6', '#e67e22', '#1abc9c', '#e74c3c', '#2ecc71', '#34495e'];
     let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
@@ -4674,6 +4710,8 @@ const loadInboxLeaves = async () => {
             status: r.status || 'Pending',
             paid_unpaid: 'Paid',
             rejection_reason: r.rejectionReason || '',
+            submitted_on: r.appliedDate || r.timestamp || r.dateWorked,
+            created_at: r.appliedDate || r.timestamp || r.dateWorked,
             _source: 'compoff',
             _raw: r,
         });
@@ -4737,10 +4775,7 @@ const loadInboxLeaves = async () => {
         }
 
         // Sort leaves descending (latest first)
-        leaves.sort((a, b) => {
-            const getSortDate = (item) => new Date(item.createdon || item.createdAt || item.created_at || item.submitted_on || item.start_date || '1900-01-01');
-            return getSortDate(b) - getSortDate(a); // Descending order
-        });
+        sortByLatestFirst(leaves);
         console.log(`âœ… Sorted ${leaves.length} leaves by date (latest first)`);
 
         if (leaves.length === 0) {
@@ -4924,7 +4959,7 @@ const loadInboxAttendance = async () => {
             items = items.filter(r => ['approved', 'rejected'].includes(String(r.status || '').toLowerCase()));
         }
 
-        items.sort((a, b) => new Date(b.created_date || 0) - new Date(a.created_date || 0));
+        sortByLatestFirst(items);
 
         if (!items.length) {
             listContainer.innerHTML = `
@@ -4959,7 +4994,7 @@ const loadInboxAttendance = async () => {
                     <div class="inbox-item-header">
                         <div>
                             <h4 style="font-size: 1.25rem; margin-bottom: 4px;">${employeeName}</h4>
-                            <span class="inbox-item-meta" style="font-size: 0.875rem; color: #666;">Attendance Report • ${employeeId}</span>
+                            <span class="inbox-item-meta" style="font-size: 0.875rem; color: #666;">Attendance Report ï¿½ ${employeeId}</span>
                         </div>
                         <span class="status-badge ${statusClass}">${status.charAt(0).toUpperCase() + status.slice(1)}</span>
                     </div>
@@ -5079,8 +5114,8 @@ const loadInboxTimesheets = async () => {
             );
         }
 
-        // Sort by submitted date (latest first)
-        items.sort((a, b) => new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0));
+        // Sort by latest available date (latest first)
+        sortByLatestFirst(items);
 
         if (items.length === 0) {
             listContainer.innerHTML = `
@@ -5171,7 +5206,7 @@ const loadInboxTimesheets = async () => {
 
         const groupedItems = Array.from(grouped.values())
             .filter(g => Array.isArray(g.rows) && g.rows.length)
-            .sort((a, b) => new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0));
+            .sort((a, b) => getLatestSortDate(b) - getLatestSortDate(a));
 
         if (groupedItems.length) {
             const cards = groupedItems.map(group => {
@@ -5405,7 +5440,7 @@ const loadInboxCompOff = async () => {
 
         // Deduplicate by id to prevent duplicate cards
         const uniqueItems = items.filter((req, idx, arr) => arr.findIndex(r => r.id === req.id) === idx);
-        uniqueItems.sort((a, b) => new Date(b.appliedDate || b.timestamp || 0) - new Date(a.appliedDate || a.timestamp || 0));
+        sortByLatestFirst(uniqueItems);
 
         if (uniqueItems.length === 0) {
             listContainer.innerHTML = `
