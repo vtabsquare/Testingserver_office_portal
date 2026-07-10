@@ -19,6 +19,7 @@ import { runWithSubmissionLoading } from '../utils/submissionLoading.js';
 let currentInboxTab = 'awaiting';
 let currentInboxCategory = 'leaves';
 let inboxActionMode = false;
+let inboxSortPreferences = { awaiting: 'desc', requests: 'desc', completed: 'desc' };
 let _resolvedEmpIdCache = '';
 let _resolvedEmpIdPromise = null;
 
@@ -150,6 +151,12 @@ const sortByLatestFirst = (items) => {
     if (!Array.isArray(items)) return [];
     return items.sort((a, b) => getLatestSortDate(b) - getLatestSortDate(a));
 };
+
+const sortByOldestFirst = (items) => {
+    if (!Array.isArray(items)) return [];
+    return items.sort((a, b) => getLatestSortDate(a) - getLatestSortDate(b));
+};
+
 const badgeColor = (seed) => {
     const colors = ['#3498db', '#9b59b6', '#e67e22', '#1abc9c', '#e74c3c', '#2ecc71', '#34495e'];
     let h = 0; for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
@@ -3183,10 +3190,18 @@ export const renderInboxPage = async () => {
             <div class="inbox-category" data-category="attendance">Attendance Report</div>
         </div>
         <div class="inbox-content">
-            <div class="inbox-tabs">
-                ${showAwaitingTab ? '<div class="inbox-tab active" data-tab="awaiting">Awaiting approval</div>' : ''}
-                <div class="inbox-tab ${showAwaitingTab ? '' : 'active'}" data-tab="requests">My requests</div>
-                <div class="inbox-tab" data-tab="completed">Completed</div>
+            <div class="inbox-tabs-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color, #e2e8f0);">
+                <div class="inbox-tabs" style="border-bottom: none; margin-bottom: 0;">
+                    ${showAwaitingTab ? '<div class="inbox-tab active" data-tab="awaiting">Awaiting approval</div>' : ''}
+                    <div class="inbox-tab ${showAwaitingTab ? '' : 'active'}" data-tab="requests">My requests</div>
+                    <div class="inbox-tab" data-tab="completed">Completed</div>
+                </div>
+                <div class="inbox-sort-control" style="padding-right: 1.5rem;">
+                    <select id="inbox-sort-select" class="input-control" style="padding: 0.35rem 2.2rem 0.35rem 1rem; border-radius: 999px; background-color: var(--bg-card, #fff); font-size: 0.85rem; border: 1px solid var(--border-color, #e2e8f0); height: auto;">
+                        <option value="desc">Latest to Old</option>
+                        <option value="asc">Old to Latest</option>
+                    </select>
+                </div>
             </div>
             <div class="inbox-list">
                 <div style="padding: 16px 20px;">
@@ -3245,6 +3260,11 @@ export const renderInboxPage = async () => {
                 document.querySelectorAll('.inbox-tab').forEach(t => t.classList.remove('active'));
                 e.currentTarget.classList.add('active');
                 currentInboxTab = e.currentTarget.getAttribute('data-tab');
+                
+                const sortSelect = document.getElementById('inbox-sort-select');
+                if (sortSelect) {
+                    sortSelect.value = inboxSortPreferences[currentInboxTab] || 'desc';
+                }
 
                 if (currentInboxCategory === 'leaves') {
                     loadInboxLeaves();
@@ -3256,7 +3276,23 @@ export const renderInboxPage = async () => {
             });
         });
 
-        // Load initial data for current category
+        // Sort control
+        const sortSelect = document.getElementById('inbox-sort-select');
+        if (sortSelect) {
+            sortSelect.value = inboxSortPreferences[currentInboxTab] || 'desc';
+            sortSelect.addEventListener('change', (e) => {
+                inboxSortPreferences[currentInboxTab] = e.target.value;
+                if (currentInboxCategory === 'leaves') {
+                    loadInboxLeaves();
+                } else if (currentInboxCategory === 'timesheet') {
+                    loadInboxTimesheets();
+                } else if (currentInboxCategory === 'attendance') {
+                    loadInboxAttendance();
+                }
+            });
+        }
+        
+        // Initial load
         if (currentInboxCategory === 'leaves') {
             await loadInboxLeaves();
         } else if (currentInboxCategory === 'timesheet') {
@@ -4775,7 +4811,11 @@ const loadInboxLeaves = async () => {
         }
 
         // Sort leaves descending (latest first)
-        sortByLatestFirst(leaves);
+        if (inboxSortPreferences[currentInboxTab] === 'asc') {
+            sortByOldestFirst(leaves);
+        } else {
+            sortByLatestFirst(leaves);
+        }
         console.log(`✅ Sorted ${leaves.length} leaves by date (latest first)`);
 
         if (leaves.length === 0) {
@@ -4959,7 +4999,11 @@ const loadInboxAttendance = async () => {
             items = items.filter(r => ['approved', 'rejected'].includes(String(r.status || '').toLowerCase()));
         }
 
-        sortByLatestFirst(items);
+        if (inboxSortPreferences[currentInboxTab] === 'asc') {
+            sortByOldestFirst(items);
+        } else {
+            sortByLatestFirst(items);
+        }
 
         if (!items.length) {
             listContainer.innerHTML = `
@@ -5115,7 +5159,11 @@ const loadInboxTimesheets = async () => {
         }
 
         // Sort by latest available date (latest first)
-        sortByLatestFirst(items);
+        if (inboxSortPreferences[currentInboxTab] === 'asc') {
+            sortByOldestFirst(items);
+        } else {
+            sortByLatestFirst(items);
+        }
 
         if (items.length === 0) {
             listContainer.innerHTML = `
@@ -5206,7 +5254,7 @@ const loadInboxTimesheets = async () => {
 
         const groupedItems = Array.from(grouped.values())
             .filter(g => Array.isArray(g.rows) && g.rows.length)
-            .sort((a, b) => getLatestSortDate(b) - getLatestSortDate(a));
+            .sort((a, b) => inboxSortPreferences[currentInboxTab] === 'asc' ? getLatestSortDate(a) - getLatestSortDate(b) : getLatestSortDate(b) - getLatestSortDate(a));
 
         if (groupedItems.length) {
             const cards = groupedItems.map(group => {
@@ -5440,7 +5488,11 @@ const loadInboxCompOff = async () => {
 
         // Deduplicate by id to prevent duplicate cards
         const uniqueItems = items.filter((req, idx, arr) => arr.findIndex(r => r.id === req.id) === idx);
-        sortByLatestFirst(uniqueItems);
+        if (inboxSortPreferences[currentInboxTab] === 'asc') {
+            sortByOldestFirst(uniqueItems);
+        } else {
+            sortByLatestFirst(uniqueItems);
+        }
 
         if (uniqueItems.length === 0) {
             listContainer.innerHTML = `

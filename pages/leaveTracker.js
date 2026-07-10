@@ -763,6 +763,39 @@ export const renderLeaveTrackerPage = async (
             </div>
             ${leaveViewMode === "my" ? paginator : ""}
         </div>
+        ${leaveViewMode === "team" ? `
+        <div class="card leave-history data-table-card" style="margin-top: 1.5rem;">
+            <div class="leave-table-header">
+                <div class="leave-table-title-group">
+                    <h3>Team Member Leave History</h3>
+                    <p class="leave-table-subtitle">Select a team member to view their leave history</p>
+                </div>
+            </div>
+            <div class="team-leave-filters" style="padding: 1rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; border-bottom: 1px solid var(--border-color);">
+                <div class="form-field" style="flex: 1; min-width: 250px;">
+                    <label class="form-label" for="team-history-emp-input">Employee</label>
+                    <div style="position: relative; width: 100%;">
+                        <input type="text" id="team-history-emp-input" class="input-control" placeholder="Search by name or ID..." autocomplete="off">
+                        <div id="team-emp-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; max-height: 250px; overflow-y: auto; background: var(--bg-card, #ffffff); border: 1px solid var(--border-color, #e2e8f0); border-radius: 4px; z-index: 1000; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-top: 4px;"></div>
+                    </div>
+                </div>
+                <div class="form-field">
+                    <label class="form-label" for="team-history-start">Start Date</label>
+                    <input type="date" id="team-history-start" class="input-control">
+                </div>
+                <div class="form-field">
+                    <label class="form-label" for="team-history-end">End Date</label>
+                    <input type="date" id="team-history-end" class="input-control">
+                </div>
+                <div class="form-field">
+                    <button id="team-history-clear-btn" class="btn btn-secondary" style="height: 42px;">Clear Filters</button>
+                </div>
+            </div>
+            <div id="team-history-container" style="padding: 1rem;">
+                <p class="placeholder-text" style="text-align: center; color: var(--text-muted); padding: 2rem 0;">Please select an employee to view their leave history.</p>
+            </div>
+        </div>
+        ` : ""}
     `;
 
   document.getElementById("app-content").innerHTML = getPageContentHTML(
@@ -794,6 +827,164 @@ export const renderLeaveTrackerPage = async (
           }
         }
         await renderLeaveTrackerPage(1, true);
+      });
+    }
+
+    if (leaveViewMode === "team") {
+      const empInput = document.getElementById("team-history-emp-input");
+      const dropdown = document.getElementById("team-emp-dropdown");
+      const startInput = document.getElementById("team-history-start");
+      const endInput = document.getElementById("team-history-end");
+      const clearBtn = document.getElementById("team-history-clear-btn");
+      const container = document.getElementById("team-history-container");
+      
+      const teamBalances = state.teamBalances || [];
+      let selectedEmpId = "";
+      
+      const populateDropdown = (filter = "") => {
+        dropdown.innerHTML = "";
+        const lowerFilter = filter.toLowerCase();
+        const filtered = teamBalances.filter(tb => 
+            (tb.employeeName || "").toLowerCase().includes(lowerFilter) || 
+            (tb.employeeId || "").toLowerCase().includes(lowerFilter)
+        );
+        
+        if (filtered.length === 0) {
+            dropdown.innerHTML = '<div style="padding: 10px 12px; color: var(--text-muted);">No results found</div>';
+            return;
+        }
+        
+        filtered.forEach(tb => {
+            const div = document.createElement("div");
+            div.style.padding = "10px 12px";
+            div.style.cursor = "pointer";
+            div.style.borderBottom = "1px solid var(--border-color)";
+            div.style.transition = "background-color 0.2s";
+            div.textContent = `${tb.employeeName} (${tb.employeeId})`;
+            
+            div.addEventListener("mouseenter", () => div.style.backgroundColor = "var(--bg-hover, #f1f5f9)");
+            div.addEventListener("mouseleave", () => div.style.backgroundColor = "transparent");
+            
+            div.addEventListener("mousedown", (e) => {
+                e.preventDefault(); // Prevent blur
+                empInput.value = `${tb.employeeName} (${tb.employeeId})`;
+                selectedEmpId = tb.employeeId;
+                dropdown.style.display = "none";
+                renderHistory();
+            });
+            
+            dropdown.appendChild(div);
+        });
+      };
+      
+      empInput.addEventListener("focus", () => {
+        populateDropdown(empInput.value);
+        dropdown.style.display = "block";
+      });
+      
+      empInput.addEventListener("input", (e) => {
+        selectedEmpId = "";
+        populateDropdown(e.target.value);
+        dropdown.style.display = "block";
+      });
+      
+      empInput.addEventListener("blur", () => {
+        dropdown.style.display = "none";
+      });
+      
+      const renderHistory = async () => {
+        const empId = selectedEmpId;
+        const start = startInput.value;
+        const end = endInput.value;
+        
+        // Verify valid employee ID
+        const isValid = teamBalances.some(tb => tb.employeeId === empId);
+        
+        if (!empId || !isValid) {
+          container.innerHTML = '<p class="placeholder-text" style="text-align: center; color: var(--text-muted); padding: 2rem 0;">Please select a valid employee to view their leave history.</p>';
+          return;
+        }
+        
+        const empName = teamBalances.find(tb => tb.employeeId === empId)?.employeeName || empId;
+        
+        container.innerHTML = '<div style="text-align: center; padding: 2rem;"><i class="fa-solid fa-spinner fa-spin fa-2x" style="color: var(--primary-color);"></i> Fetching leave history...</div>';
+        
+        try {
+          const allLeaves = await fetchEmployeeLeaves(empId, false);
+          let filteredLeaves = allLeaves || [];
+          
+          if (start) {
+            filteredLeaves = filteredLeaves.filter(l => l.start_date >= start);
+          }
+          if (end) {
+            filteredLeaves = filteredLeaves.filter(l => l.end_date <= end);
+          }
+          
+          filteredLeaves.sort((a, b) => {
+            const dateA = new Date(a.start_date || "1900-01-01");
+            const dateB = new Date(b.start_date || "1900-01-01");
+            return dateB - dateA;
+          });
+          
+          if (filteredLeaves.length === 0) {
+            container.innerHTML = `<p class="placeholder-text" style="text-align: center; color: var(--text-muted); padding: 2rem 0;">No leave history found for ${empName} with the selected filters.</p>`;
+            return;
+          }
+          
+          const rows = filteredLeaves.map(l => {
+            const isPending = (l.status || "pending").toLowerCase() === "pending";
+            const isCompOff = (l.leave_type || "").toLowerCase().includes("comp");
+            const compType = isCompOff && (l.paid_unpaid || "").toLowerCase() === "paid" ? "Compensatory Off" : l.paid_unpaid;
+            const duration = l.day_duration || (Number(l.total_days) > 0 && Number(l.total_days) < 1 ? "Half Day" : "Full Day");
+            
+            return `
+              <tr>
+                  <td>${l.employee_id || empId}</td>
+                  <td>${l.leave_type}</td>
+                  <td>${l.start_date}</td>
+                  <td>${l.end_date}</td>
+                  <td>${l.total_days}</td>
+                  <td>${duration}</td>
+                  <td>${compType || "-"}</td>
+                  <td><span class="status-badge ${(l.status || "pending").toLowerCase()}">${l.status || "Pending"}</span></td>
+              </tr>
+            `;
+          }).join("");
+          
+          container.innerHTML = `
+            <div class="table-container leave-table-scroll">
+                <table class="table leave-table">
+                    <thead>
+                        <tr>
+                            <th>Employee ID</th>
+                            <th>Leave Type</th>
+                            <th>Start Date</th>
+                            <th>End Date</th>
+                            <th>Days</th>
+                            <th>Duration</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+          `;
+        } catch (err) {
+          container.innerHTML = `<p class="placeholder-text error-message" style="text-align: center; padding: 2rem 0;">❌ Failed to load leave history: ${err.message}</p>`;
+        }
+      };
+      
+      empInput.addEventListener("change", renderHistory);
+      startInput.addEventListener("change", renderHistory);
+      endInput.addEventListener("change", renderHistory);
+      
+      clearBtn.addEventListener("click", () => {
+        empInput.value = "";
+        selectedEmpId = "";
+        startInput.value = "";
+        endInput.value = "";
+        renderHistory();
       });
     }
   }, 0);

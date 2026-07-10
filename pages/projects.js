@@ -4003,7 +4003,7 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
 
             <div class="form-field">
               <label class="form-label" for="tk-duetime">Due Time</label>
-              <input class="input-control" type="text" id="tk-duetime" placeholder="Select time" />
+              <input class="input-control" type="time" id="tk-duetime" />
             </div>
           </div>
         </div>
@@ -4027,15 +4027,7 @@ function renderTaskFormPage(projectId, boardName, defaultStatus = "New", workIte
 
   document.getElementById("tk-due").setAttribute("min", today);
 
-  // Initialize Flatpickr for Due Time
-  if (window.flatpickr) {
-    flatpickr("#tk-duetime", {
-      enableTime: true,
-      noCalendar: true,
-      dateFormat: "H:i",
-      time_24hr: true
-    });
-  }
+  // Native time input is used for Due Time instead of Flatpickr
 
   // =========================
   // Load Contributors

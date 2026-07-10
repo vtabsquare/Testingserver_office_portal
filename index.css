@@ -873,6 +873,11 @@ body.dark-theme .badge-coming-soon {
   gap: 2rem;
   transition: left var(--transition-slow), width var(--transition-slow), background-color var(--transition-normal), box-shadow var(--transition-normal);
   will-change: left, width;
+  pointer-events: none;
+}
+
+.header > * {
+  pointer-events: auto;
 }
 
 .page-shell {
