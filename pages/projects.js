@@ -4182,6 +4182,7 @@ async function openTaskDetailsPage(projectId, taskId) {
 
   const data = await res.json();
   const t = data.task || {};
+  const dueTimeValue = String(t.due_time || "").slice(0, 5);
 
   app.innerHTML = `
     <div class="card" style="max-width:900px; margin:24px auto 32px; padding:24px;">
@@ -4246,7 +4247,7 @@ async function openTaskDetailsPage(projectId, taskId) {
         </div>
 
         <div class="task-detail-group"><label>Due Time</label>
-          <input type="text" id="td-duetime" value="${t.due_time || ""
+          <input type="time" id="td-duetime" value="${dueTimeValue || ""
     }" readonly class="readonly-input">
         </div>
 
@@ -4346,15 +4347,6 @@ async function openTaskDetailsPage(projectId, taskId) {
       // Date UI rule
       const today = new Date().toISOString().split("T")[0];
       document.getElementById("td-due").setAttribute("min", today);
-
-      if (window.flatpickr) {
-        flatpickr("#td-duetime", {
-          enableTime: true,
-          noCalendar: true,
-          dateFormat: "H:i",
-          time_24hr: true
-        });
-      }
 
       editBtn.textContent = "Save";
     } else {

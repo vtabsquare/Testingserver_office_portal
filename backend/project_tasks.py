@@ -279,7 +279,7 @@ def get_task(guid):
             "crc6f_taskname", "crc6f_taskdescription",
             "crc6f_taskpriority", "crc6f_taskstatus",
             "crc6f_assignedto", "crc6f_assigneddate",
-            "crc6f_duedate", "crc6f_taskid"
+            "crc6f_duedate", "crc6f_duetime", "crc6f_taskid"
         ])
         url = f"{DATAVERSE_BASE}{DATAVERSE_API}/{ENTITY_SET_TASKS}({guid})?$select={select_fields}"
         res = get_dataverse_session().get(url, headers=hdrs, timeout=15)
@@ -298,6 +298,7 @@ def get_task(guid):
             "assigned_to": rec.get("crc6f_assignedto"),
             "assigned_date": rec.get("crc6f_assigneddate"),
             "due_date": rec.get("crc6f_duedate"),
+            "due_time": rec.get("crc6f_duetime"),
             "task_id": rec.get("crc6f_taskid"),
         }
         return jsonify({"success": True, "task": task}), 200
