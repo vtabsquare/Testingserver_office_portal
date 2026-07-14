@@ -13,19 +13,19 @@
 
 import { state } from '../state.js';
 
-// Configuration - TESTING VALUES (2 mins)
-const REVERIFY_INTERVAL_MS = 2 * 60 * 1000;      // 2 minutes for testing
-const WARNING_THRESHOLD_MS = 30 * 1000;          // Show warning 30 seconds before due
-const MISSED_THRESHOLD_MS = 60 * 1000;           // Mark as "missed" 1 min after due
-const MISSED_AUTO_HIDE_MS = 2 * 60 * 1000;       // Auto-hide missed alert after 2 min
-const CHECK_INTERVAL_MS = 5 * 1000;              // Check every 5 seconds
+// Configuration - PRODUCTION VALUES
+const REVERIFY_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours in production
+const WARNING_THRESHOLD_MS = 15 * 60 * 1000;     // Show warning 15 min before due
+const MISSED_THRESHOLD_MS = 30 * 60 * 1000;      // Mark as "missed" 30 min after due
+const MISSED_AUTO_HIDE_MS = 15 * 60 * 1000;      // Auto-hide missed alert after 15 min
+const CHECK_INTERVAL_MS = 60 * 1000;             // Check every 1 minute
 
-// ORIGINAL PRODUCTION VALUES (Keep commented out)
-// const REVERIFY_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours in production
-// const WARNING_THRESHOLD_MS = 15 * 60 * 1000;     // Show warning 15 min before due
-// const MISSED_THRESHOLD_MS = 30 * 60 * 1000;      // Mark as "missed" 30 min after due
-// const MISSED_AUTO_HIDE_MS = 15 * 60 * 1000;      // Auto-hide missed alert after 15 min
-// const CHECK_INTERVAL_MS = 60 * 1000;             // Check every 1 minute
+// TESTING MODE - 1 minute cycle (uncomment for testing)
+// const REVERIFY_INTERVAL_MS = 1 * 60 * 1000;      // 1 minute for testing
+// const WARNING_THRESHOLD_MS = 15 * 1000;          // Show warning 15 seconds before due
+// const MISSED_THRESHOLD_MS = 30 * 1000;           // Mark as "missed" 30 seconds after due
+// const MISSED_AUTO_HIDE_MS = 2 * 60 * 1000;       // Auto-hide missed alert after 2 min (testing)
+// const CHECK_INTERVAL_MS = 5 * 1000;              // Check every 5 seconds for faster testing
 
 // FaceAuth URL (should match backend config)
 const FACEAUTH_VERIFY_URL = 'https://biometrics.vtabsquare.com/external-verify';
