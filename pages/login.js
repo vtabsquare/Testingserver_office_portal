@@ -887,6 +887,8 @@ import { state } from "../state.js";
 import { listEmployees } from "../features/employeeApi.js";
 import { startNotificationPolling } from "../features/notificationApi.js";
 
+import { requestNotificationPermission } from '../features/faceAuthAlert.js';
+
 export const renderLoginPage = () => {
   const content = `
   <button id="theme-toggle" class="theme-toggle" aria-label="Toggle Theme"></button>
@@ -1673,6 +1675,15 @@ export const renderLoginPage = () => {
 
       // ===== SUCCESS =====
       handleSuccess();
+      
+      // Request push notification permission upon successful user gesture
+      try {
+        requestNotificationPermission().then(permission => {
+            console.log('[LOGIN] Notification permission status:', permission);
+        });
+      } catch (e) {
+          console.warn('[LOGIN] Failed to request notification permission:', e);
+      }
 
       const u = data.user || {};
       const displayName = u.name || u.full_name || u.username || email;

@@ -4756,6 +4756,49 @@ def face_verified_callback():
             "error": str(e)
         }), 500
 
+@app.route("/api/auth/faceauth-reverify-token", methods=["GET"])
+def get_faceauth_reverify_token():
+    """
+    Endpoint for generating a fresh FaceAuth token for an active session.
+    Used when a user needs to re-verify face but their original token is too old for the FaceAuth server to accept.
+    """
+    try:
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Invalid authorization header format'}), 401
+            
+        token = auth_header.split(' ')[1]
+        decoded = decode_token(token)
+        
+        if not decoded:
+            return jsonify({'error': 'Invalid or expired token'}), 401
+            
+        # Extract user data to generate a new token
+        user_data = {
+            "employee_id": decoded.get("employee_id"),
+            "email": decoded.get("email"),
+            "name": decoded.get("name"),
+            "role": decoded.get("role") or decoded.get("access_level"),
+            "access_level": decoded.get("access_level"),
+            "is_admin": decoded.get("is_admin", False),
+            "is_manager": decoded.get("is_manager", False),
+            "face_auth_required": decoded.get("face_auth_required", True)
+        }
+        
+        # Generate fresh token with face_verified=False (because they need to reverify)
+        fresh_token = generate_face_auth_token(user_data, face_verified=False)
+        
+        return jsonify({
+            "success": True,
+            "token": fresh_token
+        }), 200
+    except Exception as e:
+        print(f"[FACEAUTH] Error generating reverify token: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
 
 # ================== FACEAUTH SETTINGS API ==================
 

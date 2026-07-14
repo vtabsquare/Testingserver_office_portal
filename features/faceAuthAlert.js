@@ -13,19 +13,19 @@
 
 import { state } from '../state.js';
 
-// Configuration - PRODUCTION VALUES
-const REVERIFY_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours in production
-const WARNING_THRESHOLD_MS = 15 * 60 * 1000;     // Show warning 15 min before due
-const MISSED_THRESHOLD_MS = 30 * 60 * 1000;      // Mark as "missed" 30 min after due
-const MISSED_AUTO_HIDE_MS = 15 * 60 * 1000;      // Auto-hide missed alert after 15 min
-const CHECK_INTERVAL_MS = 60 * 1000;             // Check every 1 minute
+// Configuration - TESTING VALUES (2 mins)
+const REVERIFY_INTERVAL_MS = 2 * 60 * 1000;      // 2 minutes for testing
+const WARNING_THRESHOLD_MS = 30 * 1000;          // Show warning 30 seconds before due
+const MISSED_THRESHOLD_MS = 60 * 1000;           // Mark as "missed" 1 min after due
+const MISSED_AUTO_HIDE_MS = 2 * 60 * 1000;       // Auto-hide missed alert after 2 min
+const CHECK_INTERVAL_MS = 5 * 1000;              // Check every 5 seconds
 
-// TESTING MODE - 1 minute cycle (uncomment for testing)
-// const REVERIFY_INTERVAL_MS = 1 * 60 * 1000;      // 1 minute for testing
-// const WARNING_THRESHOLD_MS = 15 * 1000;          // Show warning 15 seconds before due
-// const MISSED_THRESHOLD_MS = 30 * 1000;           // Mark as "missed" 30 seconds after due
-// const MISSED_AUTO_HIDE_MS = 2 * 60 * 1000;       // Auto-hide missed alert after 2 min (testing)
-// const CHECK_INTERVAL_MS = 5 * 1000;              // Check every 5 seconds for faster testing
+// ORIGINAL PRODUCTION VALUES (Keep commented out)
+// const REVERIFY_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours in production
+// const WARNING_THRESHOLD_MS = 15 * 60 * 1000;     // Show warning 15 min before due
+// const MISSED_THRESHOLD_MS = 30 * 60 * 1000;      // Mark as "missed" 30 min after due
+// const MISSED_AUTO_HIDE_MS = 15 * 60 * 1000;      // Auto-hide missed alert after 15 min
+// const CHECK_INTERVAL_MS = 60 * 1000;             // Check every 1 minute
 
 // FaceAuth URL (should match backend config)
 const FACEAUTH_VERIFY_URL = 'https://biometrics.vtabsquare.com/external-verify';
@@ -285,7 +285,7 @@ function stopTitleFlash() {
 /**
  * Request notification permission from user
  */
-async function requestNotificationPermission() {
+export async function requestNotificationPermission() {
     if (!('Notification' in window)) {
         console.warn('[FACEAUTH-ALERT] Browser does not support notifications');
         return 'denied';
@@ -822,7 +822,7 @@ function updateAlertUI(statusData) {
 /**
  * Redirect to FaceAuth for re-verification
  */
-function redirectToFaceAuth() {
+async function redirectToFaceAuth() {
     const token = localStorage.getItem('face_auth_token');
     if (!token) {
         console.error('[FACEAUTH-ALERT] No face_auth_token found');
@@ -835,15 +835,49 @@ function redirectToFaceAuth() {
     const returnUrl = window.location.href;
     localStorage.setItem('faceauth_return_url', returnUrl);
     
-    // Build FaceAuth URL with token and callback
-    const callbackUrl = `${window.location.origin}/auth/face-callback`;
-    const encodedToken = encodeURIComponent(token);
-    const encodedCallback = encodeURIComponent(callbackUrl);
-    
-    const faceAuthUrl = `${FACEAUTH_VERIFY_URL}?token=${encodedToken}&callback_url=${encodedCallback}&purpose=reverification`;
-    
-    console.log('[FACEAUTH-ALERT] Redirecting to FaceAuth for re-verification');
-    window.location.href = faceAuthUrl;
+    try {
+        console.log('[FACEAUTH-ALERT] Requesting fresh reverification token...');
+        // Request a fresh token from the backend
+        const response = await fetch(`${API_BASE_URL}/api/auth/faceauth-reverify-token`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        if (!response.ok) {
+            console.error('[FACEAUTH-ALERT] Failed to get fresh token:', response.status);
+            alert('Your session has expired or is invalid. Please login again.');
+            localStorage.removeItem('face_auth_token');
+            localStorage.removeItem('authToken');
+            window.location.href = '/index.html#/login';
+            return;
+        }
+        
+        const data = await response.json();
+        if (!data.success || !data.token) {
+            console.error('[FACEAUTH-ALERT] Invalid response from reverify endpoint');
+            alert('An error occurred during verification. Please login again.');
+            window.location.href = '/index.html#/login';
+            return;
+        }
+        
+        const freshToken = data.token;
+        
+        // Build FaceAuth URL with fresh token and callback
+        const callbackUrl = `${window.location.origin}/auth/face-callback`;
+        const encodedToken = encodeURIComponent(freshToken);
+        const encodedCallback = encodeURIComponent(callbackUrl);
+        
+        const faceAuthUrl = `${FACEAUTH_VERIFY_URL}?token=${encodedToken}&callback_url=${encodedCallback}&purpose=reverification`;
+        
+        console.log('[FACEAUTH-ALERT] Redirecting to FaceAuth for re-verification');
+        window.location.href = faceAuthUrl;
+        
+    } catch (error) {
+        console.error('[FACEAUTH-ALERT] Error during token refresh:', error);
+        alert('A network error occurred. Please try again.');
+    }
 }
 
 /**
