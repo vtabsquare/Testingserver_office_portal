@@ -823,9 +823,16 @@ function updateAlertUI(statusData) {
  * Redirect to FaceAuth for re-verification
  */
 async function redirectToFaceAuth() {
-    const token = localStorage.getItem('face_auth_token');
+    let token = localStorage.getItem('face_auth_token');
+    
+    // Fallback to standard authToken if face_auth_token was somehow cleared
     if (!token) {
-        console.error('[FACEAUTH-ALERT] No face_auth_token found');
+        console.warn('[FACEAUTH-ALERT] No face_auth_token found, falling back to authToken');
+        token = localStorage.getItem('authToken');
+    }
+    
+    if (!token) {
+        console.error('[FACEAUTH-ALERT] No tokens found at all');
         alert('Session expired. Please login again.');
         window.location.href = '/index.html#/login';
         return;
