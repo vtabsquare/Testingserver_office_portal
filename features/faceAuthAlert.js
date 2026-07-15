@@ -97,7 +97,7 @@ function getLastVerifiedTimestamp() {
     }
     
     // Fall back to JWT token timestamp
-    const token = localStorage.getItem('face_auth_token');
+    const token = localStorage.getItem('face_auth_token') || sessionStorage.getItem('face_auth_token') || localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
     if (!token) return null;
     
     const payload = decodeJwtPayload(token);
@@ -823,12 +823,12 @@ function updateAlertUI(statusData) {
  * Redirect to FaceAuth for re-verification
  */
 async function redirectToFaceAuth() {
-    let token = localStorage.getItem('face_auth_token');
+    let token = localStorage.getItem('face_auth_token') || sessionStorage.getItem('face_auth_token');
     
     // Fallback to standard authToken if face_auth_token was somehow cleared
     if (!token) {
         console.warn('[FACEAUTH-ALERT] No face_auth_token found, falling back to authToken');
-        token = localStorage.getItem('authToken');
+        token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
     }
     
     if (!token) {
@@ -892,7 +892,8 @@ async function redirectToFaceAuth() {
  */
 function checkAndUpdate() {
     // Only check if user is authenticated
-    if (!state.authenticated && !localStorage.getItem('face_auth_token')) {
+    const hasToken = localStorage.getItem('face_auth_token') || sessionStorage.getItem('face_auth_token') || localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+    if (!state.authenticated && !hasToken) {
         return;
     }
 

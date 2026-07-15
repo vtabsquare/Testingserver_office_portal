@@ -311,7 +311,7 @@ if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
         const hasAuth = existingHeaders['Authorization'] || existingHeaders['authorization'];
         if (!hasAuth) {
           try {
-            const tk = localStorage.getItem('authToken') || '';
+            const tk = localStorage.getItem('authToken') || sessionStorage.getItem('authToken') || '';
             if (tk) {
               init = Object.assign({}, init || {});
               init.headers = Object.assign({}, existingHeaders, { 'Authorization': 'Bearer ' + tk });
