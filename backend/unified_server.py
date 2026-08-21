@@ -4315,6 +4315,164 @@ def _normalize_access_level(value):
     return "L1"
 
 
+# ==================== VTAB SSO ENDPOINT ====================
+
+@app.route('/api/auth/vtab-sso', methods=['GET'])
+def vtab_sso_login():
+    """
+    Accepts a trusted assertion from VTAB 360, securely matching the identity 
+    and bypassing biometrics via the existing JWT generator.
+    """
+    token_param = request.args.get("token")
+    if not token_param:
+        print("[SSO] Failed: Missing SSO token")
+        return jsonify({"status": "error", "message": "Missing SSO token"}), 400
+
+    vtab_secret = os.getenv("VTAB_SSO_SECRET")
+    if not vtab_secret:
+        print("[SSO] Failed: VTAB_SSO_SECRET configuration missing")
+        return jsonify({"status": "error", "message": "SSO configuration missing"}), 500
+
+    try:
+        import jwt
+        # 1. Verify the VTAB assertion
+        decoded = jwt.decode(
+            token_param, 
+            vtab_secret, 
+            algorithms=["HS256"], 
+            audience="officehub360",
+            issuer="vtab360"
+        )
+        
+        if decoded.get("purpose") != "vtab_sso":
+            print("[SSO] Failed: Invalid token purpose")
+            return jsonify({"status": "error", "message": "Invalid token purpose"}), 401
+            
+        vtab_email = decoded.get("email")
+        vtab_emp_id = decoded.get("employee_id")
+        vtab_name = decoded.get("name")
+        print(f"[SSO] VTAB Assertion Verified for: {vtab_email} ({vtab_emp_id})")
+        
+        # 2. Setup OfficeHub's internal headers for lookup
+        token = get_access_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "OData-MaxVersion": "4.0",
+            "OData-Version": "4.0",
+            "Accept": "application/json"
+        }
+        
+        # 3. Look up the login record using existing helper
+        record = _fetch_login_by_username(vtab_email, token, headers)
+        if not record:
+            print(f"[SSO] Failed: User not found in OfficeHub ({vtab_email})")
+            return jsonify({"status": "error", "message": "SSO user not found in OfficeHub"}), 401
+            
+        status = record.get("crc6f_user_status", "Active")
+        if status.lower() == "locked":
+            print(f"[SSO] Failed: Account locked ({vtab_email})")
+            return jsonify({"status": "locked", "message": "Account locked"}), 403
+
+        # Default employee attributes if employee table lookup fails
+        employee_id_value = record.get("crc6f_userid")
+        employee_designation = "Employee"
+        face_auth_required_for_employee = True
+        employee_name = None
+        
+        # Re-use OfficeHub's EXACT employee lookup logic
+        try:
+            entity_set = get_employee_entity_set(token)
+            field_map = get_field_map(entity_set)
+            email_field = field_map.get("email")
+            id_field = field_map.get("id")
+            
+            if email_field and id_field:
+                safe_email = (vtab_email or "").replace("'", "''")
+                select_cols = [id_field, email_field]
+                if field_map.get("fullname"): select_cols.append(field_map["fullname"])
+                if field_map.get("firstname"): select_cols.append(field_map["firstname"])
+                if field_map.get("lastname"): select_cols.append(field_map["lastname"])
+                if field_map.get("designation"): select_cols.append(field_map["designation"])
+                select_cols.append("crc6f_faceauthrequired")
+
+                url_emp = f"{BASE_URL}/{entity_set}?$top=1&$select={','.join(select_cols)}&$filter={email_field} eq '{safe_email}'"
+
+                resp = get_dataverse_session().get(url_emp, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    vals = resp.json().get("value", [])
+                    if vals:
+                        emp = vals[0]
+                        employee_id_value = emp.get(id_field)
+                        employee_designation = emp.get(field_map.get("designation"))
+                        employee_name = _get_employee_display_name(emp, field_map)
+                        face_auth_raw = emp.get("crc6f_faceauthrequired")
+                        if face_auth_raw is None or face_auth_raw == "" or str(face_auth_raw).lower() in ("yes", "true", "1"):
+                            face_auth_required_for_employee = True
+                        else:
+                            face_auth_required_for_employee = False
+        except Exception as e:
+            print("SSO ACCESS LOGIC ERROR:", e)
+            
+        display_name = employee_name or record.get('crc6f_employeename') or vtab_email
+
+        # 4. Strict Identity Match (employee ID + email + name)
+        oh_emp_id = (employee_id_value or "").strip().lower()
+        oh_email = (record.get("crc6f_username") or "").strip().lower()
+        oh_name = (display_name or "").strip().lower()
+        
+        vtab_emp_id_clean = (vtab_emp_id or "").strip().lower()
+        vtab_email_clean = (vtab_email or "").strip().lower()
+        vtab_name_clean = (vtab_name or "").strip().lower()
+
+        if not vtab_emp_id_clean or vtab_emp_id_clean != oh_emp_id:
+             print(f"[SSO] Failed: Identity mismatch on Employee ID (VTAB: {vtab_emp_id_clean} vs OH: {oh_emp_id})")
+             return jsonify({"status": "error", "message": "Identity mismatch (Employee ID)"}), 401
+        if not vtab_email_clean or vtab_email_clean != oh_email:
+             print(f"[SSO] Failed: Identity mismatch on Email (VTAB: {vtab_email_clean} vs OH: {oh_email})")
+             return jsonify({"status": "error", "message": "Identity mismatch (Email)"}), 401
+        if not vtab_name_clean or vtab_name_clean != oh_name:
+             print(f"[SSO] Failed: Identity mismatch on Name (VTAB: {vtab_name_clean} vs OH: {oh_name})")
+             return jsonify({"status": "error", "message": "Identity mismatch (Name)"}), 401
+
+        # 5. Determine access level (using OfficeHub's exact authorization logic)
+        access_level = _normalize_access_level(record.get("crc6f_accesslevel"))
+        is_admin_flag = access_level == "L3"
+        is_manager_flag = access_level in ("L2", "L3")
+        
+        designation_lower = (employee_designation or "").lower()
+        if "admin" in designation_lower: is_admin_flag = True
+        if "manager" in designation_lower: is_manager_flag = True
+
+        # 6. Build exact same user_data dict
+        user_data = {
+            "email": record.get("crc6f_username"),
+            "name": display_name,
+            "employee_id": employee_id_value,
+            "designation": employee_designation,
+            "access_level": access_level,
+            "role": access_level,
+            "is_admin": is_admin_flag,
+            "is_manager": is_manager_flag,
+            "face_auth_required": face_auth_required_for_employee
+        }
+        
+        print(f"[SSO] Success: Handshake complete for {vtab_email}. Issuing FaceAuth token (biometrics bypassed).")
+        # 7. Generate existing face auth token with biometrics bypassed
+        face_auth_token = generate_face_auth_token(user_data, face_verified=True)
+        
+        # 8. Redirect seamlessly to existing frontend callback
+        frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")
+        return redirect(f"{frontend_base}/auth/face-callback?token={face_auth_token}&face_verified=true")
+        
+    except jwt.ExpiredSignatureError:
+        print("[SSO] Failed: Token expired")
+        return jsonify({"status": "error", "message": "SSO token expired. Please click the app again in VTAB."}), 401
+    except Exception as e:
+        print(f"[SSO] Failed: Unexpected error: {str(e)}")
+        return jsonify({"status": "error", "message": f"SSO error: {str(e)}"}), 401
+
+
 @app.route("/api/login", methods=["POST"])
 def login():
     try:
