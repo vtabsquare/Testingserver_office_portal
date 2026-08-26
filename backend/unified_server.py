@@ -48,6 +48,8 @@ from attendance_scheduler import setup_scheduler as _setup_attendance_scheduler
 from overdue_tasks_notifier import bp_overdue
 from overdue_scheduler import setup_overdue_scheduler
 import backup_scheduler as _bk_sched
+from permission import permission_bp, setup_permission_scheduler
+from expected_checkout_scheduler import setup_expected_checkout_scheduler
 
 try:
     from zoneinfo import ZoneInfo
@@ -159,6 +161,7 @@ app.register_blueprint(bp_time)
 app.register_blueprint(chat_bp)
 app.register_blueprint(attendance_v2_bp)  # Backend-authoritative attendance (v2)
 app.register_blueprint(bp_overdue)  # Overdue tasks notification system
+app.register_blueprint(permission_bp)  # Hour-based Permission short-leave module
 
 # Start the midnight auto-checkout scheduler (daemon thread, no extra dependency)
 try:
@@ -171,6 +174,19 @@ try:
     setup_overdue_scheduler(app)
 except Exception as _overdue_err:
     print(f"[WARN] Failed to start overdue tasks scheduler: {_overdue_err}")
+
+# Start the permission auto-pause scheduler (checks every 60s for due permissions)
+try:
+    setup_permission_scheduler(app)
+except Exception as _perm_sched_err:
+    print(f"[WARN] Failed to start permission scheduler: {_perm_sched_err}")
+
+# Start the expected-checkout auto-pause scheduler (checks every 60s for
+# employees who have reached their projected expected checkout time)
+try:
+    setup_expected_checkout_scheduler(app)
+except Exception as _exp_sched_err:
+    print(f"[WARN] Failed to start expected-checkout scheduler: {_exp_sched_err}")
 
 def _coerce_client_local_datetime(client_time_str, timezone_name):
     """Convert client-supplied ISO timestamp into the user's local timezone if possible."""
@@ -9626,6 +9642,25 @@ def get_admin_attendance_monitoring_today():
 
             active_employees[emp_id] = _get_employee_display_name(rec, field_map) or emp_id
 
+        # 1.5) Load today's attendance records for the TRUE first check-in of the day.
+        # Unlike crc6f_hr_loginactivitytbs (whose checkin field is overwritten on every
+        # re-checkin after a break/permission pause), crc6f_table13s.crc6f_checkin is
+        # set once and preserved for the rest of the day (see attendance_service_v2.py
+        # checkin_v2: "if not existing_checkin: update_payload[FIELD_CHECKIN] = checkin_time").
+        first_checkin_by_employee = {}
+        try:
+            att_filter = f"?$select={FIELD_EMPLOYEE_ID},{FIELD_CHECKIN}&$filter={FIELD_DATE} eq '{today}'&$top=5000"
+            att_url = f"{BASE_URL}/{ATTENDANCE_ENTITY}{att_filter}"
+            att_resp = get_dataverse_session().get(att_url, headers=headers, timeout=30)
+            if att_resp.status_code == 200:
+                for row in att_resp.json().get('value', []):
+                    emp_id = _norm_emp(row.get(FIELD_EMPLOYEE_ID))
+                    checkin_val = row.get(FIELD_CHECKIN)
+                    if emp_id and checkin_val:
+                        first_checkin_by_employee[emp_id] = checkin_val
+        except Exception as att_err:
+            print(f"[WARN] Failed to load first check-in times for attendance monitor: {att_err}")
+
         # 2) Load today's login activity records
         select_login = ','.join([
             LA_FIELD_EMPLOYEE_ID,
@@ -9633,6 +9668,7 @@ def get_admin_attendance_monitoring_today():
             LA_FIELD_CHECKOUT_TIME,
             LA_FIELD_CHECKIN_TS,
             LA_FIELD_CHECKOUT_TS,
+            LA_FIELD_BASE_SECONDS,
         ])
         login_filter = f"?$select={select_login}&$filter={LA_FIELD_DATE} eq '{today}'&$top=5000"
         login_url = f"{BASE_URL}/{LOGIN_ACTIVITY_ENTITY}{login_filter}"
@@ -9653,6 +9689,59 @@ def get_admin_attendance_monitoring_today():
             if (not prev) or (_to_sort_key(row) >= _to_sort_key(prev)):
                 latest_by_employee[emp_id] = row
 
+        # Business-timezone localization + expected-checkout helper (additive fields only;
+        # existing "check_in"/"check_out" raw values are left untouched for compatibility).
+        try:
+            _biz_tz = ZoneInfo("Asia/Calcutta") if ZoneInfo else None
+        except Exception:
+            _biz_tz = None
+
+        # Any un-fulfilled Permission compensation ("Compensate Today" or a
+        # "Compensate This Week" makeup day landing on today) adds owed hours
+        # on top of the normal shift duration for that employee's expected
+        # checkout - see permission.py for how compensation_hours is set.
+        owed_hours_by_employee = {}
+        try:
+            from supabase_helper import query_records as _sb_query_records
+            comp_rows = _sb_query_records(
+                "crc6f_permissions",
+                filters={"crc6f_makeupdate": today, "crc6f_compensated": False},
+            )
+            for crow in comp_rows:
+                mode = str(crow.get("crc6f_compensationmode") or "none").strip().lower()
+                if mode == "none":
+                    continue
+                emp_id = _norm_emp(crow.get("crc6f_employeeid"))
+                hours = float(crow.get("crc6f_compensationhours") or 0)
+                if emp_id and hours > 0:
+                    owed_hours_by_employee[emp_id] = owed_hours_by_employee.get(emp_id, 0) + hours
+        except Exception as comp_err:
+            print(f"[WARN] Failed to load permission compensation for attendance monitor: {comp_err}")
+
+        def _localize_checkin(value):
+            """Return (HH:MM:SS local, HH:MM local) for a stored UTC ISO checkin timestamp."""
+            if not value:
+                return None, None
+            try:
+                raw = str(value).strip()
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                local_dt = dt.astimezone(_biz_tz) if _biz_tz else dt
+                return local_dt.strftime("%H:%M:%S"), local_dt.strftime("%H:%M")
+            except Exception:
+                return None, None
+
+        def _add_minutes_to_hhmm(hhmm, minutes):
+            if not hhmm or minutes is None:
+                return None
+            try:
+                h, m = hhmm.split(":")
+                total = (int(h) * 60 + int(m) + int(minutes)) % (24 * 60)
+                return f"{total // 60:02d}:{total % 60:02d}"
+            except Exception:
+                return None
+
         checked_in = []
         checked_in_ids = set()
         checked_out_ids = set()
@@ -9662,12 +9751,40 @@ def get_admin_attendance_monitoring_today():
             check_out = row.get(LA_FIELD_CHECKOUT_TIME)
             if check_in and not check_out:
                 checked_in_ids.add(emp_id)
+                shift = _resolve_employee_shift(emp_id) or {}
+                shift_start = shift.get("shift_start")
+                shift_end = shift.get("shift_end")
+                duration_minutes = _shift_duration_minutes_from_times(shift_start, shift_end)
+                # Display "Checked In At" using the TRUE first check-in of the day
+                # (from crc6f_table13s), not the current-session start (which gets
+                # overwritten every time someone resumes after a break/permission).
+                first_checkin_raw = first_checkin_by_employee.get(emp_id) or check_in
+                first_checkin_local_full, _ = _localize_checkin(first_checkin_raw)
+                # For the expected-checkout PROJECTION, use the CURRENT session's
+                # start plus whatever is still remaining after subtracting time
+                # already worked in earlier sessions today (crc6f_base_seconds).
+                # This avoids the checkout drifting later with every checkout/
+                # checkin cycle - it always converges back toward the same
+                # target regardless of how many breaks were taken.
+                _, session_start_hhmm = _localize_checkin(check_in)
+                base_seconds_already_worked = int(row.get(LA_FIELD_BASE_SECONDS) or 0)
+                owed_hours_today = owed_hours_by_employee.get(emp_id, 0)
+                remaining_minutes = None
+                if duration_minutes is not None:
+                    effective_duration_minutes = duration_minutes + int(round(owed_hours_today * 60))
+                    remaining_minutes = max(0, effective_duration_minutes - (base_seconds_already_worked // 60))
+                expected_checkout = _add_minutes_to_hhmm(session_start_hhmm, remaining_minutes)
                 checked_in.append({
                     "employee_id": emp_id,
                     "employee_name": active_employees.get(emp_id) or emp_id,
                     "check_in": check_in,
                     "check_out": None,
                     "status": "Checked In",
+                    "checkin_local": first_checkin_local_full,
+                    "shift_start": shift_start,
+                    "shift_end": shift_end,
+                    "expected_checkout": expected_checkout,
+                    "compensation_hours_today": owed_hours_today or 0,
                 })
             elif check_in and check_out:
                 checked_out_ids.add(emp_id)

@@ -6,6 +6,7 @@ export const renderSettingsLayout = (activeId, contentHTML) => {
     const settingsItems = [
         { id: 'leave-settings', path: '#/leave-settings', icon: 'fa-sliders', title: 'Leave Settings', req: 'leave_settings' },
         { id: 'shift-settings', path: '#/shift-settings', icon: 'fa-business-time', title: 'Shift Settings', req: 'shift_settings' },
+        { id: 'attendance-monitor', path: '#/attendance-monitor', icon: 'fa-satellite-dish', title: 'Attendance Monitor', req: 'attendance_monitor' },
         { id: 'login-settings', path: '#/login-settings', icon: 'fa-shield-halved', title: 'Login Settings', req: 'login_settings' },
         { id: 'faceauth-settings', path: '#/faceauth-settings', icon: 'fa-id-badge', title: 'FaceAuth Settings', req: 'faceauth_settings' },
         { id: 'role-settings', path: '#/role-settings', icon: 'fa-user-shield', title: 'Role Settings', req: 'role_settings' }

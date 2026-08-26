@@ -8,6 +8,7 @@ import { isAdminUser } from '../utils/accessControl.js';
 import { canViewApplication } from '../utils/roleSettings.js';
 import { state } from '../state.js';
 import { renderModal, closeModal } from '../components/modal.js';
+import { fetchCompensationDue } from '../features/permissionApi.js';
 
 const BASE_URL = API_BASE_URL.replace(/\/$/, '');
 const DASHBOARD_PATH = '#/admin-dashboard';
@@ -1849,6 +1850,73 @@ const attachTabSwitcher = () => {
   if (faTab) faTab.onclick = () => switchAdminTab('faceauth');
 };
 
+/**
+ * Small, self-contained "Permission Compensation Due" panel. Deliberately
+ * independent of loadAdminDashboardData()/refreshAndRender()'s tabbed
+ * pipeline - it appends itself once to #app-content and refreshes on its
+ * own, so it can't be affected by (or accidentally break) tab switching.
+ */
+const renderCompensationDuePanel = async () => {
+  const appContent = document.getElementById('app-content');
+  if (!appContent || !isAdminDashboardRoute()) return;
+
+  let panel = document.getElementById('compensation-due-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'compensation-due-panel';
+    panel.className = 'card';
+    panel.style.margin = '20px';
+    appContent.appendChild(panel);
+  }
+
+  try {
+    const due = await fetchCompensationDue();
+    if (!isAdminDashboardRoute()) return;
+
+    if (!due.length) {
+      panel.innerHTML = `
+        <h3 style="margin-bottom: 8px;"><i class="fa-solid fa-hourglass-half"></i> Permission Compensation Due</h3>
+        <p class="placeholder-text">No outstanding compensations.</p>
+      `;
+      return;
+    }
+
+    const rows = due.map((d) => `
+      <tr>
+        <td>${d.employeeId}</td>
+        <td>${d.employeeName}</td>
+        <td>${d.hoursDue}h</td>
+        <td>${d.makeupDate || '-'}</td>
+        <td><span class="status-badge ${d.overdue ? 'rejected' : 'pending'}">${d.overdue ? 'Overdue' : 'Due'}</span></td>
+      </tr>
+    `).join('');
+
+    panel.innerHTML = `
+      <h3 style="margin-bottom: 8px;"><i class="fa-solid fa-hourglass-half"></i> Permission Compensation Due</h3>
+      <p class="subtle" style="margin-bottom: 12px;">Employees who chose to compensate a Permission (today or a makeup day this week) but haven't yet worked off the owed hours.</p>
+      <div class="table-container">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Employee ID</th>
+              <th>Name</th>
+              <th>Hours Due</th>
+              <th>Makeup Day</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    console.warn('[ADMIN-DASHBOARD] Failed to load compensation due panel:', err);
+    if (isAdminDashboardRoute()) {
+      panel.innerHTML = `<p class="placeholder-text error-message">Failed to load compensation due: ${err.message || err}</p>`;
+    }
+  }
+};
+
 export const renderAdminDashboardPage = async () => {
   stopDashboardTimers();
   bindLiveRefreshHooks();
@@ -1869,6 +1937,7 @@ export const renderAdminDashboardPage = async () => {
   }
 
   await refreshAndRender(true);
+  renderCompensationDuePanel();
 
   // Silently check and run auto-backup if it is due (non-blocking)
   checkAndRunAutoBackup();
@@ -1879,5 +1948,6 @@ export const renderAdminDashboardPage = async () => {
       return;
     }
     await refreshAndRender(false, 'live');
+    renderCompensationDuePanel();
   }, 15000);
 };

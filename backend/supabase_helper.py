@@ -456,6 +456,7 @@ _PK_MAP = {
     "crc6f_hr_projectcolumns": "crc6f_hr_projectcolumnid",
     "crc6f_hr_onboardings": "crc6f_hr_onboardingid",
     "crc6f_hr_onboardingprogresslogs": "crc6f_hr_onboardingprogresslogid",
+    "crc6f_permissions": "crc6f_permissionid",
 }
 
 

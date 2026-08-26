@@ -10,6 +10,7 @@ import { listClients, createClient, updateClient, deleteClient, getNextClientId 
 import { fetchPendingLeaves } from '../features/leaveApi.js';
 import { notifyEmployeeLeaveApproval, notifyEmployeeLeaveRejection, updateNotificationBadge, notifyEmployeeCompOffGranted, notifyEmployeeCompOffRejected } from '../features/notificationApi.js';
 import { fetchCompOffRequests, approveCompOffRequest, rejectCompOffRequest } from '../features/compOffApi.js';
+import { fetchPermissionRequests, approvePermissionRequest, rejectPermissionRequest } from '../features/permissionApi.js';
 import { listEmployees } from '../features/employeeApi.js';
 import { isCheckedIn } from '../features/attendanceRenderer.js';
 import { apiBase } from '../config.js';
@@ -4735,6 +4736,13 @@ const loadInboxLeaves = async () => {
             console.warn('Failed to fetch comp off requests for inbox leaves:', compErr);
             compAll = [];
         }
+        let permAll = [];
+        try {
+            permAll = await fetchPermissionRequests();
+        } catch (permErr) {
+            console.warn('Failed to fetch permission requests for inbox leaves:', permErr);
+            permAll = [];
+        }
         // Normalize comp off requests into leave-like objects
         const normalizeComp = (r) => ({
             leave_id: `CO-${r.id}`,
@@ -4752,6 +4760,25 @@ const loadInboxLeaves = async () => {
             _raw: r,
         });
 
+        // Normalize permission requests into leave-like objects (audit-only; approval
+        // does not gate the auto-pause behavior, it's purely for record-keeping).
+        const normalizePermission = (r) => ({
+            leave_id: `PRM-${r.id}`,
+            employee_id: r.employeeId,
+            leave_type: `Permission (${r.startTime}-${r.endTime})`,
+            start_date: r.date,
+            end_date: r.date,
+            total_days: 0,
+            status: r.status || 'Pending',
+            paid_unpaid: '-',
+            reason: r.reason || '',
+            rejection_reason: r.rejectionReason || '',
+            submitted_on: r.createdAt || r.date,
+            created_at: r.createdAt || r.date,
+            _source: 'permission',
+            _raw: r,
+        });
+
         const isCompOffLeaveType = (leaveType) => {
             const lt = String(leaveType || '').trim().toLowerCase();
             return lt === 'co' || lt === 'comp off' || lt === 'compoff' || lt === 'compensatory off' || lt.includes('comp');
@@ -4761,7 +4788,8 @@ const loadInboxLeaves = async () => {
             // Fetch all pending leaves for admin
             const pendingLeaves = await fetchPendingLeaves();
             const compPending = compAll.filter(r => (r.status || 'pending').toLowerCase() === 'pending').map(normalizeComp);
-            leaves = (pendingLeaves || []);  // Backend now includes comp-off requests
+            const permPending = permAll.filter(r => (r.status || 'pending').toLowerCase() === 'pending').map(normalizePermission);
+            leaves = (pendingLeaves || []).concat(permPending);  // Backend now includes comp-off requests
             console.log(`📋 Loaded ${leaves.length} pending leave requests`);
         } else if (currentInboxTab === 'completed' && canViewTeamQueues) {
             // For admin in completed tab, fetch all employees' completed leaves
@@ -4781,11 +4809,12 @@ const loadInboxLeaves = async () => {
                 const allLeavesArrays = await Promise.all(allLeavesPromises);
                 const allLeaves = allLeavesArrays.flat();
                 const compCompleted = compAll.filter(r => ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizeComp);
+                const permCompleted = permAll.filter(r => ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizePermission);
 
                 // Filter for approved/rejected only
                 leaves = allLeaves.filter(l =>
                     (l.status?.toLowerCase() === 'approved' || l.status?.toLowerCase() === 'rejected')
-                ).concat(compCompleted);
+                ).concat(compCompleted).concat(permCompleted);
 
                 console.log(`📋 Loaded ${leaves.length} completed leaves from all employees`);
             } catch (err) {
@@ -4799,12 +4828,14 @@ const loadInboxLeaves = async () => {
 
             if (currentInboxTab === 'requests') {
                 const compMine = compAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && (r.status || 'pending').toLowerCase() === 'pending').map(normalizeComp);
-                leaves = (allLeaves || []).filter(l => l.status?.toLowerCase() === 'pending');  // Backend includes comp-off
+                const permMine = permAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && (r.status || 'pending').toLowerCase() === 'pending').map(normalizePermission);
+                leaves = (allLeaves || []).filter(l => l.status?.toLowerCase() === 'pending').concat(compMine).concat(permMine);
             } else if (currentInboxTab === 'completed') {
                 const compMineDone = compAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizeComp);
+                const permMineDone = permAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizePermission);
                 leaves = (allLeaves || []).filter(l =>
                     (l.status?.toLowerCase() === 'approved' || l.status?.toLowerCase() === 'rejected')
-                ).concat(compMineDone);
+                ).concat(compMineDone).concat(permMineDone);
             }
 
             console.log(`📋 Loaded ${leaves.length} ${currentInboxTab} leaves for user`);
@@ -4858,6 +4889,12 @@ const loadInboxLeaves = async () => {
             const isRejected = status.toLowerCase() === 'rejected';
             const isApproved = status.toLowerCase() === 'approved';
             const isCompOff = leave._source === 'compoff' || leave.request_type === 'compoff';
+            const isPermission = leave._source === 'permission';
+            const requestSource = isPermission ? 'permission' : (isCompOff ? 'compoff' : 'leave');
+            const rawRequestId = leave._raw?.id || leave.compoff_id || leave.id || '';
+            const periodText = isPermission
+                ? `${startDate}`
+                : `${startDate} to ${endDate} (${totalDays} day${totalDays > 1 ? 's' : ''})`;
 
             return `
                 <div class="inbox-item">
@@ -4869,17 +4906,22 @@ const loadInboxLeaves = async () => {
                         <span class="status-badge ${statusClass}">${status}</span>
                     </div>
                     <div class="inbox-item-body">
-                        <p><strong>Period:</strong> ${startDate} to ${endDate} (${totalDays} day${totalDays > 1 ? 's' : ''})</p>
-                        <p><strong>Type:</strong> ${paidUnpaid}</p>
-                        <p><strong>Leave ID:</strong> ${leaveId}</p>
+                        <p><strong>${isPermission ? 'Date' : 'Period'}:</strong> ${periodText}</p>
+                        ${!isPermission ? `<p><strong>Type:</strong> ${paidUnpaid}</p>` : ''}
+                        <p><strong>${isPermission ? 'Permission ID' : 'Leave ID'}:</strong> ${leaveId}</p>
                         ${leaveReason ? `<p><strong>Reason:</strong> ${leaveReason}</p>` : ''}
+                        ${isPermission ? `
+                            <p style="color:#5f6368; font-size: 0.85rem; margin-top: 8px;">
+                                <i class="fa-solid fa-circle-info"></i> Attendance auto-pauses at the start time regardless of approval status. This is for record-keeping only.
+                            </p>
+                        ` : ''}
                         ${isRejected && rejectionReason ? `
                             <div class="rejection-reason-box" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-top: 12px; border-radius: 4px;">
                                 <strong style="color: #856404;"><i class="fa-solid fa-info-circle"></i> Rejection Reason:</strong>
                                 <p style="margin: 8px 0 0 0; color: #856404;">${rejectionReason}</p>
                             </div>
                         ` : ''}
-                        ${isApproved && !isCompOff ? `
+                        ${isApproved && !isCompOff && !isPermission ? `
                             <div class="approval-comments-box" style="background: #fff3cd; border-left: 4px solid #34c759; padding: 12px; margin-top: 12px; border-radius: 4px;">
                                 <strong style="color: #2f855a;"><i class="fa-solid fa-comment"></i> Approval Comments:</strong>
                                 <p style="margin: 8px 0 0 0; color: #2f855a;">${approvalCommentsText || 'No comments added.'}</p>
@@ -4888,10 +4930,10 @@ const loadInboxLeaves = async () => {
                     </div>
                     ${showActions ? `
                         <div class="inbox-item-actions">
-                            <button class="btn btn-success btn-sm inbox-approve-btn" data-leave-id="${leaveId}" data-source="${isCompOff ? 'compoff' : 'leave'}" data-compoff-id="${isCompOff ? (leave._raw?.id || leave.compoff_id || leave.id || '') : ''}">
+                            <button class="btn btn-success btn-sm inbox-approve-btn" data-leave-id="${leaveId}" data-source="${requestSource}" data-compoff-id="${(isCompOff || isPermission) ? rawRequestId : ''}">
                                 <i class="fa-solid fa-check"></i> Approve
                             </button>
-                            <button class="btn btn-danger btn-sm inbox-reject-btn" data-leave-id="${leaveId}" data-source="${isCompOff ? 'compoff' : 'leave'}" data-compoff-id="${isCompOff ? (leave._raw?.id || leave.compoff_id || leave.id || '') : ''}">
+                            <button class="btn btn-danger btn-sm inbox-reject-btn" data-leave-id="${leaveId}" data-source="${requestSource}" data-compoff-id="${(isCompOff || isPermission) ? rawRequestId : ''}">
                                 <i class="fa-solid fa-times"></i> Reject
                             </button>
                         </div>
@@ -4910,6 +4952,9 @@ const loadInboxLeaves = async () => {
                     if (src === 'compoff') {
                         const requestId = e.currentTarget.getAttribute('data-compoff-id');
                         await handleCompOffApprove(requestId);
+                    } else if (src === 'permission') {
+                        const requestId = e.currentTarget.getAttribute('data-compoff-id');
+                        await handleInboxPermissionApprove(requestId);
                     } else {
                         const leaveId = e.currentTarget.getAttribute('data-leave-id');
                         await handleInboxApprove(leaveId);
@@ -4923,6 +4968,9 @@ const loadInboxLeaves = async () => {
                     if (src === 'compoff') {
                         const requestId = e.currentTarget.getAttribute('data-compoff-id');
                         showCompOffRejectModal(requestId);
+                    } else if (src === 'permission') {
+                        const requestId = e.currentTarget.getAttribute('data-compoff-id');
+                        showInboxPermissionRejectModal(requestId);
                     } else {
                         const leaveId = e.currentTarget.getAttribute('data-leave-id');
                         showInboxRejectModal(leaveId);
@@ -5686,6 +5734,55 @@ export const handleCompOffReject = async (e) => {
     } catch (err) {
         console.error('❌ Error rejecting comp off:', err);
         alert('❌ Failed to reject comp off');
+    }
+};
+
+// ---- Permission (audit-only approval; does not affect the auto-pause behavior) ----
+const handleInboxPermissionApprove = async (requestId) => {
+    if (!confirm('Approve this Permission request? (Note: attendance already auto-pauses regardless of approval.)')) return;
+    try {
+        const adminId = await resolveCurrentEmployeeId();
+        await approvePermissionRequest(requestId, adminId || state.user?.id || 'EMP001');
+        alert('✅ Permission request approved');
+        await loadInboxLeaves();
+        await updateNotificationBadge();
+    } catch (err) {
+        console.error('❌ Error approving permission request:', err);
+        alert('❌ Failed to approve permission request');
+    }
+};
+
+const showInboxPermissionRejectModal = (requestId) => {
+    const formHTML = buildRejectReasonForm({
+        eyebrow: 'Permission review',
+        textareaId: 'permissionRejectionReason',
+        hiddenId: 'permissionRejectId',
+        hiddenValue: requestId,
+        helperText: 'This is for record-keeping only; attendance has already auto-paused for this request.'
+    });
+    renderModal('Reject Permission Request', formHTML, 'permission-submit-reject-btn', 'normal', 'Reject');
+};
+
+export const handleInboxPermissionReject = async (e) => {
+    e.preventDefault();
+    const requestId = document.getElementById('permissionRejectId')?.value;
+    const reason = document.getElementById('permissionRejectionReason')?.value || '';
+
+    if (!requestId) {
+        alert('Error: Request ID not found');
+        return;
+    }
+
+    try {
+        const adminId = await resolveCurrentEmployeeId();
+        await rejectPermissionRequest(requestId, adminId || state.user?.id || 'EMP001', reason);
+        closeModal();
+        alert('✅ Permission request rejected');
+        await loadInboxLeaves();
+        await updateNotificationBadge();
+    } catch (err) {
+        console.error('❌ Error rejecting permission request:', err);
+        alert('❌ Failed to reject permission request');
     }
 };
 

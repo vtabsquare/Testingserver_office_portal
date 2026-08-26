@@ -10,22 +10,22 @@ let loadPromise = null;
 const DEFAULT_PERMISSIONS = {
     // Admin (L3) gets everything by default
     'L3': {
-        applications: ['home', 'admin_dashboard', 'employee', 'employees', 'interns', 'team_management', 'inbox', 'onboarding', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_clients', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'assets', 'settings', 'leave_settings', 'shift_settings', 'login_settings', 'faceauth_settings', 'role_settings', 'faceauth_admin'],
+        applications: ['home', 'admin_dashboard', 'employee', 'employees', 'interns', 'team_management', 'inbox', 'onboarding', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_clients', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'permission', 'assets', 'settings', 'leave_settings', 'shift_settings', 'login_settings', 'faceauth_settings', 'role_settings', 'faceauth_admin', 'attendance_monitor'],
         functions: ['view_admin_dashboard', 'view_employee_directory', 'view_interns', 'manage_onboarding', 'view_team_timesheet', 'manage_clients', 'view_team_attendance', 'view_team_leaves', 'manage_leave_settings', 'manage_shift_settings', 'manage_login_settings', 'manage_faceauth_settings', 'manage_role_settings', 'manage_team_hierarchy', 'inbox_action_mode']
     },
     // Manager (L2) gets team-oriented things
     'L2': {
-        applications: ['home', 'employee', 'employees', 'interns', 'inbox', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_clients', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'assets'],
+        applications: ['home', 'employee', 'employees', 'interns', 'inbox', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_clients', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'permission', 'assets'],
         functions: ['view_employee_directory', 'view_interns', 'view_team_timesheet', 'manage_clients', 'view_team_attendance', 'view_team_leaves', 'manage_team_hierarchy']
     },
     // Team Lead (L4) gets slightly less than manager
     'L4': {
-        applications: ['home', 'employee', 'employees', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'assets'],
+        applications: ['home', 'employee', 'employees', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_team_timesheet', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_team', 'attendance_holidays', 'leave_tracker', 'leave_my', 'leave_team', 'compoff', 'permission', 'assets'],
         functions: ['view_employee_directory', 'view_team_timesheet', 'view_team_attendance', 'view_team_leaves']
     },
     // User (L1) gets basic access
     'L1': {
-        applications: ['home', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_holidays', 'leave_tracker', 'leave_my', 'compoff', 'assets'],
+        applications: ['home', 'time_tracker', 'time_my_tasks', 'time_my_timesheet', 'time_projects', 'attendance_tracker', 'attendance_my', 'attendance_holidays', 'leave_tracker', 'leave_my', 'compoff', 'permission', 'assets'],
         functions: []
     }
 };

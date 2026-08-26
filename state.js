@@ -44,6 +44,7 @@ export const state = {
     leaves: {},      // key: employeeId -> { data, fetchedAt }
     attendance: {},  // key: `${employeeId}|${year}|${month}` -> { data, fetchedAt }
   },
+  permissionRequests: [],
   compOffs: [
     // { employeeId: "EMP001", employeeName: "Vigneshraja S", availableDays: 2.5 },
     // { employeeId: "EMP002", employeeName: "Jane Smith", availableDays: 3 },

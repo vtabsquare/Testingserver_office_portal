@@ -64,7 +64,8 @@ const APPLICATIONS_GROUPS = [
             { key: 'leave_tracker', name: 'Leave Tracker (Group)', icon: 'fa-plane-departure', desc: 'Parent menu for leaves' },
             { key: 'leave_my', name: 'My Leaves', icon: 'fa-calendar-minus', desc: 'Personal leave management' },
             { key: 'leave_team', name: 'Team Leaves', icon: 'fa-users-slash', desc: 'Review team leaves' },
-            { key: 'compoff', name: 'Comp Off', icon: 'fa-arrow-right-arrow-left', desc: 'Manage compensatory time off' }
+            { key: 'compoff', name: 'Comp Off', icon: 'fa-arrow-right-arrow-left', desc: 'Manage compensatory time off' },
+            { key: 'permission', name: 'Permission', icon: 'fa-hourglass-half', desc: 'Apply for hour-based permission (auto-pauses attendance)' }
         ]
     },
     {
@@ -75,6 +76,7 @@ const APPLICATIONS_GROUPS = [
             { key: 'settings', name: 'Settings (Group)', icon: 'fa-gear', desc: 'Parent menu for settings' },
             { key: 'leave_settings', name: 'Leave Settings', icon: 'fa-sliders', desc: 'Configure leave types and rules' },
             { key: 'shift_settings', name: 'Shift Settings', icon: 'fa-business-time', desc: 'Configure shift timings and weekly offs' },
+            { key: 'attendance_monitor', name: 'Attendance Monitor', icon: 'fa-satellite-dish', desc: 'Live check-in times and expected checkout (admin only)' },
             { key: 'login_settings', name: 'Login Settings', icon: 'fa-shield-halved', desc: 'Security and session controls' },
             { key: 'faceauth_settings', name: 'FaceAuth Settings', icon: 'fa-id-badge', desc: 'Facial recognition settings' },
             { key: 'role_settings', name: 'Role Settings', icon: 'fa-user-shield', desc: 'Access and permission controls' },

@@ -17,13 +17,18 @@ import {
   showEditCompOffBalanceModal,
   handleUpdateCompOffBalance,
 } from "./pages/comp_off.js";
+import {
+  showRequestPermissionModal,
+  handleRequestPermission,
+} from "./pages/permission.js";
 import { handleAttendanceNav, renderMyAttendancePage, renderTeamAttendancePage } from './pages/attendance.js';
 import { state } from './state.js';
 import { listEmployees, listAllEmployees } from './features/employeeApi.js';
 import { showAssetModal, handleSaveAsset, showDeleteConfirmModal, handleDeleteAsset, handleDeleteAsset as handleAssetDelete } from "./pages/assets.js";
 import { renderAssetsPage, fetchAssets } from './pages/assets.js'; // adjust path
-import { handleInboxRejectLeave, handleInboxApproveLeave, handleCompOffReject, handleTimesheetReject } from './pages/shared.js';
+import { handleInboxRejectLeave, handleInboxApproveLeave, handleCompOffReject, handleTimesheetReject, handleInboxPermissionReject } from './pages/shared.js';
 import { updateNotificationBadge, handleNotificationBellClick, startNotificationPolling } from './features/notificationApi.js';
+import { startPermissionBannerPolling, refreshPermissionBannerNow } from './features/permissionBanner.js';
 import { connectSocket } from './src/socket.js';
 import { initAiAssistant } from './components/AiAssistant.js';
 import { deriveRoleInfo } from './utils/accessHelpers.js';
@@ -1196,13 +1201,21 @@ const init = async () => {
   // Start notification polling for real-time updates
   startNotificationPolling();
 
+  // Start polling for an active "Permission" pause window (auto-pause banner)
+  startPermissionBannerPolling();
+
   // Initialize FaceAuth re-verification alert system
   initFaceAuthAlerts();
 
   // Global event listeners (delegation)
   document.body.addEventListener('click', (e) => {
     const target = e.target;
-    if (target.closest("#timer-btn")) handleTimerClick();
+    if (target.closest("#timer-btn")) {
+      handleTimerClick();
+      // Re-check the permission banner shortly after check-in/out instead of
+      // waiting for the next 30s poll.
+      setTimeout(() => { refreshPermissionBannerNow(); }, 1500);
+    }
     // Explicit logout option
     if (target.closest("#logout-btn")) {
       forceLogoutNow('User clicked logout', 'logout');
@@ -1232,6 +1245,7 @@ const init = async () => {
       showApplyLeaveModal({ applyForOthers: true });
     }
     if (target.id === "request-compoff-btn") showRequestCompOffModal();
+    if (target.id === "request-permission-btn") showRequestPermissionModal();
     // Edit Comp Off Balance
     const editCompOffBalanceBtn = target.closest(".edit-compoff-balance-btn");
     if (editCompOffBalanceBtn) {
@@ -1401,6 +1415,9 @@ const init = async () => {
       } else if (form.querySelector("#compoff-submit-reject-btn")) {
         handler = () => handleCompOffReject(e);
         message = 'Rejecting comp off request...';
+      } else if (form.querySelector("#permission-submit-reject-btn")) {
+        handler = () => handleInboxPermissionReject(e);
+        message = 'Rejecting permission request...';
       } else if (form.querySelector("#timesheet-submit-reject-btn")) {
         handler = () => handleTimesheetReject(e);
         message = 'Rejecting timesheet...';
@@ -1425,6 +1442,9 @@ const init = async () => {
       } else if (document.getElementById("update-compoff-balance-btn")) {
         handler = () => handleUpdateCompOffBalance(e);
         message = 'Updating comp off balance...';
+      } else if (document.getElementById("submit-permission-btn")) {
+        handler = () => handleRequestPermission(e);
+        message = 'Submitting permission request...';
       }
 
       if (handler) {

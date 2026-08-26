@@ -7,10 +7,10 @@ export const getSidebarHTML = () => {
     const canViewTeamLeaves = canViewApplication('leave_team');
     const canViewEmployeeModule = canViewApplication('employee') || canViewApplication('employees') || canViewApplication('interns') || canViewApplication('team_management');
     const canViewInternsModule = canViewApplication('interns');
-    const canViewSettings = canViewApplication('settings') || canViewApplication('leave_settings') || canViewApplication('login_settings') || canViewApplication('faceauth_settings') || canViewApplication('role_settings');
+    const canViewSettings = canViewApplication('settings') || canViewApplication('leave_settings') || canViewApplication('login_settings') || canViewApplication('faceauth_settings') || canViewApplication('role_settings') || canViewApplication('attendance_monitor');
     const canViewTimeTrackerModule = canViewApplication('time_tracker') || canViewApplication('time_my_tasks') || canViewApplication('time_my_timesheet') || canViewTeamTimesheet || canViewApplication('time_clients') || canViewApplication('time_projects');
     const canViewAttendanceModule = canViewApplication('attendance_tracker') || canViewApplication('attendance_my') || canViewTeamAttendance || canViewApplication('attendance_holidays');
-    const canViewLeaveModule = canViewApplication('leave_tracker') || canViewApplication('leave_my') || canViewTeamLeaves || canViewApplication('compoff');
+    const canViewLeaveModule = canViewApplication('leave_tracker') || canViewApplication('leave_my') || canViewTeamLeaves || canViewApplication('compoff') || canViewApplication('permission');
     
     return `
     <div class="sidebar-header">
@@ -87,6 +87,7 @@ export const getSidebarHTML = () => {
                 ${canViewApplication('leave_my') ? '<li><a href="#/leave-my" class="nav-link" data-page="leave-my">My Leaves</a></li>' : ''}
                 ${canViewTeamLeaves ? '<li><a href="#/leave-team" class="nav-link" data-page="leave-team">My Team Leaves</a></li>' : ''}
                 ${canViewApplication('compoff') ? '<li><a href="#/compoff" class="nav-link" data-page="compoff">Comp Off</a></li>' : ''}
+                ${canViewApplication('permission') ? '<li><a href="#/permission" class="nav-link" data-page="permission">Permission</a></li>' : ''}
             </ul>
         </li>` : ''}
         ${canViewApplication('assets') ? '<li><a href="#/assets" class="nav-link" data-page="assets"><i class="fa-solid fa-box"></i> Assets</a></li>' : ''}
@@ -98,6 +99,7 @@ export const getSidebarHTML = () => {
                 if (canViewApplication('login_settings')) return '#/login-settings';
                 if (canViewApplication('faceauth_settings')) return '#/faceauth-settings';
                 if (canViewApplication('role_settings')) return '#/role-settings';
+                if (canViewApplication('attendance_monitor')) return '#/attendance-monitor';
                 return '#/settings';
             })()}" class="nav-link" data-page="settings">
                 <i class="fa-solid fa-gear" style="margin-right: 8px;"></i>Settings
@@ -119,6 +121,7 @@ export const getHeaderHTML = (user, timer) => `
     <div class="header-greeting header-visible" style="font-size:1.1rem; font-weight:600; color:var(--text-primary); margin-right:auto; display:flex; align-items:center;">
         ${getGreeting()}, ${user.name ? user.name.split(' ')[0] : 'User'}!
     </div>
+    <div id="permission-banner-slot"></div>
 
     <div class="header-search">
         <i class="fa-solid fa-search"></i>
