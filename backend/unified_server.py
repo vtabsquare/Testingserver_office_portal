@@ -9691,10 +9691,10 @@ def get_admin_attendance_monitoring_today():
 
         # Business-timezone localization + expected-checkout helper (additive fields only;
         # existing "check_in"/"check_out" raw values are left untouched for compatibility).
-        try:
-            _biz_tz = ZoneInfo("Asia/Calcutta") if ZoneInfo else None
-        except Exception:
-            _biz_tz = None
+        # Uses _attendance_business_tz(), which falls back to a fixed UTC+5:30 offset
+        # if the server environment is missing IANA tzdata (ZoneInfo lookup would
+        # otherwise silently fall back to raw UTC and show wrong times in production).
+        _biz_tz = _attendance_business_tz()
 
         # Any un-fulfilled Permission compensation ("Compensate Today" or a
         # "Compensate This Week" makeup day landing on today) adds owed hours
