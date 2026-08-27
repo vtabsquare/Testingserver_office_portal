@@ -3189,6 +3189,7 @@ export const renderInboxPage = async () => {
             <div class="inbox-category active" data-category="leaves">Leaves</div>
             <div class="inbox-category" data-category="timesheet">Timesheet</div>
             <div class="inbox-category" data-category="attendance">Attendance Report</div>
+            <div class="inbox-category" data-category="permission">Permission</div>
         </div>
         <div class="inbox-content">
             <div class="inbox-tabs-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color, #e2e8f0);">
@@ -3251,6 +3252,8 @@ export const renderInboxPage = async () => {
                     loadInboxTimesheets();
                 } else if (currentInboxCategory === 'attendance') {
                     loadInboxAttendance();
+                } else if (currentInboxCategory === 'permission') {
+                    loadInboxPermissions();
                 }
             });
         });
@@ -3273,6 +3276,8 @@ export const renderInboxPage = async () => {
                     loadInboxTimesheets();
                 } else if (currentInboxCategory === 'attendance') {
                     loadInboxAttendance();
+                } else if (currentInboxCategory === 'permission') {
+                    loadInboxPermissions();
                 }
             });
         });
@@ -3289,6 +3294,8 @@ export const renderInboxPage = async () => {
                     loadInboxTimesheets();
                 } else if (currentInboxCategory === 'attendance') {
                     loadInboxAttendance();
+                } else if (currentInboxCategory === 'permission') {
+                    loadInboxPermissions();
                 }
             });
         }
@@ -3300,6 +3307,8 @@ export const renderInboxPage = async () => {
             await loadInboxTimesheets();
         } else if (currentInboxCategory === 'attendance') {
             await loadInboxAttendance();
+        } else if (currentInboxCategory === 'permission') {
+            await loadInboxPermissions();
         }
     }, 0);
 };
@@ -4736,13 +4745,6 @@ const loadInboxLeaves = async () => {
             console.warn('Failed to fetch comp off requests for inbox leaves:', compErr);
             compAll = [];
         }
-        let permAll = [];
-        try {
-            permAll = await fetchPermissionRequests();
-        } catch (permErr) {
-            console.warn('Failed to fetch permission requests for inbox leaves:', permErr);
-            permAll = [];
-        }
         // Normalize comp off requests into leave-like objects
         const normalizeComp = (r) => ({
             leave_id: `CO-${r.id}`,
@@ -4760,25 +4762,6 @@ const loadInboxLeaves = async () => {
             _raw: r,
         });
 
-        // Normalize permission requests into leave-like objects (audit-only; approval
-        // does not gate the auto-pause behavior, it's purely for record-keeping).
-        const normalizePermission = (r) => ({
-            leave_id: `PRM-${r.id}`,
-            employee_id: r.employeeId,
-            leave_type: `Permission (${r.startTime}-${r.endTime})`,
-            start_date: r.date,
-            end_date: r.date,
-            total_days: 0,
-            status: r.status || 'Pending',
-            paid_unpaid: '-',
-            reason: r.reason || '',
-            rejection_reason: r.rejectionReason || '',
-            submitted_on: r.createdAt || r.date,
-            created_at: r.createdAt || r.date,
-            _source: 'permission',
-            _raw: r,
-        });
-
         const isCompOffLeaveType = (leaveType) => {
             const lt = String(leaveType || '').trim().toLowerCase();
             return lt === 'co' || lt === 'comp off' || lt === 'compoff' || lt === 'compensatory off' || lt.includes('comp');
@@ -4788,8 +4771,7 @@ const loadInboxLeaves = async () => {
             // Fetch all pending leaves for admin
             const pendingLeaves = await fetchPendingLeaves();
             const compPending = compAll.filter(r => (r.status || 'pending').toLowerCase() === 'pending').map(normalizeComp);
-            const permPending = permAll.filter(r => (r.status || 'pending').toLowerCase() === 'pending').map(normalizePermission);
-            leaves = (pendingLeaves || []).concat(permPending);  // Backend now includes comp-off requests
+            leaves = (pendingLeaves || []).concat(compPending);  // Backend now includes comp-off requests
             console.log(`📋 Loaded ${leaves.length} pending leave requests`);
         } else if (currentInboxTab === 'completed' && canViewTeamQueues) {
             // For admin in completed tab, fetch all employees' completed leaves
@@ -4809,12 +4791,11 @@ const loadInboxLeaves = async () => {
                 const allLeavesArrays = await Promise.all(allLeavesPromises);
                 const allLeaves = allLeavesArrays.flat();
                 const compCompleted = compAll.filter(r => ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizeComp);
-                const permCompleted = permAll.filter(r => ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizePermission);
 
                 // Filter for approved/rejected only
                 leaves = allLeaves.filter(l =>
                     (l.status?.toLowerCase() === 'approved' || l.status?.toLowerCase() === 'rejected')
-                ).concat(compCompleted).concat(permCompleted);
+                ).concat(compCompleted);
 
                 console.log(`📋 Loaded ${leaves.length} completed leaves from all employees`);
             } catch (err) {
@@ -4828,14 +4809,12 @@ const loadInboxLeaves = async () => {
 
             if (currentInboxTab === 'requests') {
                 const compMine = compAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && (r.status || 'pending').toLowerCase() === 'pending').map(normalizeComp);
-                const permMine = permAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && (r.status || 'pending').toLowerCase() === 'pending').map(normalizePermission);
-                leaves = (allLeaves || []).filter(l => l.status?.toLowerCase() === 'pending').concat(compMine).concat(permMine);
+                leaves = (allLeaves || []).filter(l => l.status?.toLowerCase() === 'pending').concat(compMine);
             } else if (currentInboxTab === 'completed') {
                 const compMineDone = compAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizeComp);
-                const permMineDone = permAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && ['approved', 'rejected'].includes((r.status || '').toLowerCase())).map(normalizePermission);
                 leaves = (allLeaves || []).filter(l =>
                     (l.status?.toLowerCase() === 'approved' || l.status?.toLowerCase() === 'rejected')
-                ).concat(compMineDone).concat(permMineDone);
+                ).concat(compMineDone);
             }
 
             console.log(`📋 Loaded ${leaves.length} ${currentInboxTab} leaves for user`);
@@ -4985,6 +4964,148 @@ const loadInboxLeaves = async () => {
             <div class="placeholder-text">
                 <i class="fa-solid fa-exclamation-triangle fa-3x" style="color:#e74c3c; margin-bottom: 1rem;"></i>
                 <p>Error loading leave requests.</p>
+            </div>
+        `;
+    }
+};
+
+
+// ---- Permission (dedicated Inbox category, separate from Leaves) ----
+const loadInboxPermissions = async () => {
+    const canViewTeamQueues = isManagerOrAdmin();
+    const listContainer = document.querySelector('.inbox-list');
+
+    if (!listContainer) return;
+
+    listContainer.innerHTML = `
+        <div class="placeholder-text">
+            <i class="fa-solid fa-spinner fa-spin fa-3x" style="color:#ddd; margin-bottom: 1rem;"></i>
+            <p>Loading permission requests...</p>
+        </div>
+    `;
+
+    try {
+        const allEmployees = await listEmployees(1, 5000);
+        const employeeMap = {};
+        (allEmployees.items || []).forEach(emp => {
+            if (emp.employee_id) {
+                employeeMap[emp.employee_id.toUpperCase()] = `${emp.first_name || ''} ${emp.last_name || ''}`.trim();
+            }
+        });
+
+        let permAll = [];
+        try {
+            permAll = await fetchPermissionRequests();
+        } catch (permErr) {
+            console.warn('Failed to fetch permission requests for inbox:', permErr);
+            permAll = [];
+        }
+
+        let requests = [];
+        if (currentInboxTab === 'awaiting' && canViewTeamQueues) {
+            requests = permAll.filter(r => (r.status || 'pending').toLowerCase() === 'pending');
+        } else if (currentInboxTab === 'completed') {
+            if (canViewTeamQueues) {
+                requests = permAll.filter(r => ['approved', 'rejected'].includes((r.status || '').toLowerCase()));
+            } else {
+                const empId = await resolveCurrentEmployeeId();
+                requests = permAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && ['approved', 'rejected'].includes((r.status || '').toLowerCase()));
+            }
+        } else {
+            const empId = await resolveCurrentEmployeeId();
+            requests = permAll.filter(r => String(r.employeeId).toUpperCase() === String(empId).toUpperCase() && (r.status || 'pending').toLowerCase() === 'pending');
+        }
+
+        const dated = requests.map(r => ({ ...r, start_date: r.date, created_at: r.createdAt || r.date }));
+        if (inboxSortPreferences[currentInboxTab] === 'asc') {
+            sortByOldestFirst(dated);
+        } else {
+            sortByLatestFirst(dated);
+        }
+
+        if (dated.length === 0) {
+            listContainer.innerHTML = `
+                <div class="placeholder-text">
+                    <i class="fa-solid fa-envelope-open fa-3x" style="color:#ddd; margin-bottom: 1rem;"></i>
+                    <p>No permission requests found.</p>
+                </div>
+            `;
+            return;
+        }
+
+        const showActions = currentInboxTab === 'awaiting' && inboxActionMode;
+
+        const permCards = dated.map(r => {
+            const employeeName = employeeMap[r.employeeId?.toUpperCase()] || r.employeeId;
+            const status = r.status || 'Pending';
+            const statusClass = status.toLowerCase();
+            const isRejected = statusClass === 'rejected';
+            const compensationText = r.compensationMode === 'today'
+                ? `Compensate today (${r.compensationHours}h)${r.compensated ? ' • Compensated ✅' : ''}`
+                : r.compensationMode === 'week'
+                    ? `Compensate this week on ${r.makeupDate || '-'} (${r.compensationHours}h)${r.compensated ? ' • Compensated ✅' : ''}`
+                    : "Don't compensate";
+
+            return `
+                <div class="inbox-item">
+                    <div class="inbox-item-header">
+                        <div>
+                            <h4 style="font-size: 1.25rem; margin-bottom: 4px;">${employeeName}</h4>
+                            <span class="inbox-item-meta" style="font-size: 0.875rem; color: #666;">Permission (${r.startTime}-${r.endTime}) • ${r.employeeId}</span>
+                        </div>
+                        <span class="status-badge ${statusClass}">${status}</span>
+                    </div>
+                    <div class="inbox-item-body">
+                        <p><strong>Date:</strong> ${r.date}</p>
+                        <p><strong>Permission ID:</strong> ${r.permissionId || r.id}</p>
+                        ${r.reason ? `<p><strong>Reason:</strong> ${r.reason}</p>` : ''}
+                        <p><strong>Compensation:</strong> ${compensationText}</p>
+                        <p style="color:#5f6368; font-size: 0.85rem; margin-top: 8px;">
+                            <i class="fa-solid fa-circle-info"></i> Attendance auto-pauses at the start time regardless of approval status. This is for record-keeping only.
+                        </p>
+                        ${isRejected && r.rejectionReason ? `
+                            <div class="rejection-reason-box" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin-top: 12px; border-radius: 4px;">
+                                <strong style="color: #856404;"><i class="fa-solid fa-info-circle"></i> Rejection Reason:</strong>
+                                <p style="margin: 8px 0 0 0; color: #856404;">${r.rejectionReason}</p>
+                            </div>
+                        ` : ''}
+                    </div>
+                    ${showActions ? `
+                        <div class="inbox-item-actions">
+                            <button class="btn btn-success btn-sm inbox-perm-approve-btn" data-permission-id="${r.id}">
+                                <i class="fa-solid fa-check"></i> Approve
+                            </button>
+                            <button class="btn btn-danger btn-sm inbox-perm-reject-btn" data-permission-id="${r.id}">
+                                <i class="fa-solid fa-times"></i> Reject
+                            </button>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }).join('');
+
+        listContainer.innerHTML = permCards;
+
+        if (showActions) {
+            document.querySelectorAll('.inbox-perm-approve-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const requestId = e.currentTarget.getAttribute('data-permission-id');
+                    await handleInboxPermissionApprove(requestId);
+                });
+            });
+            document.querySelectorAll('.inbox-perm-reject-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const requestId = e.currentTarget.getAttribute('data-permission-id');
+                    showInboxPermissionRejectModal(requestId);
+                });
+            });
+        }
+    } catch (err) {
+        console.error('❌ Error loading inbox permissions:', err);
+        listContainer.innerHTML = `
+            <div class="placeholder-text">
+                <i class="fa-solid fa-exclamation-triangle fa-3x" style="color:#e74c3c; margin-bottom: 1rem;"></i>
+                <p>Error loading permission requests.</p>
             </div>
         `;
     }
@@ -5744,7 +5865,7 @@ const handleInboxPermissionApprove = async (requestId) => {
         const adminId = await resolveCurrentEmployeeId();
         await approvePermissionRequest(requestId, adminId || state.user?.id || 'EMP001');
         alert('✅ Permission request approved');
-        await loadInboxLeaves();
+        await loadInboxPermissions();
         await updateNotificationBadge();
     } catch (err) {
         console.error('❌ Error approving permission request:', err);
@@ -5778,7 +5899,7 @@ export const handleInboxPermissionReject = async (e) => {
         await rejectPermissionRequest(requestId, adminId || state.user?.id || 'EMP001', reason);
         closeModal();
         alert('✅ Permission request rejected');
-        await loadInboxLeaves();
+        await loadInboxPermissions();
         await updateNotificationBadge();
     } catch (err) {
         console.error('❌ Error rejecting permission request:', err);

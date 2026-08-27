@@ -501,15 +501,41 @@ def _get_worked_seconds_for_date(employee_id, date_str):
     return 0
 
 
+def _upgrade_attendance_status_to_present(employee_id, date_str):
+    """
+    Retroactively upgrade the ORIGINAL permission day's attendance status to
+    Present once its compensation has been fulfilled on the makeup day. The
+    permission day itself is short by the permission's duration (attendance
+    auto-paused during that window), so without this it would otherwise stay
+    stuck at Half-day/Absent even after the employee has made up the hours.
+    """
+    from attendance_service_v2 import fetch_attendance_record, ATTENDANCE_ENTITY, FIELD_RECORD_ID, FIELD_STATUS
+
+    try:
+        att = fetch_attendance_record(employee_id, date_str)
+        if not att:
+            return
+        record_id = att.get(FIELD_RECORD_ID) or att.get("crc6f_table13id")
+        if not record_id or att.get(FIELD_STATUS) == "P":
+            return
+        update_record(ATTENDANCE_ENTITY, record_id, {FIELD_STATUS: "P"})
+        print(f"[PERMISSION-SCHEDULER] Upgraded {employee_id} attendance on {date_str} to Present "
+              f"(compensation fulfilled)")
+    except Exception as e:
+        print(f"[PERMISSION-SCHEDULER] Failed to upgrade attendance status for {employee_id} on {date_str}: {e}")
+
+
 def _process_compensation_fulfillment():
     """
     For any un-fulfilled compensation whose makeup_date has arrived (today
     or earlier), check whether that day's total worked seconds now covers
     the normal shift requirement PLUS the owed hours. If so, mark it
-    compensated so it drops off the "due" list. If the makeup day passes
-    without enough hours worked, it just stays flagged as overdue - no
-    retroactive penalty beyond whatever the original permission day's own
-    Present/Half-day/Absent status already reflects.
+    compensated so it drops off the "due" list, and retroactively upgrade
+    the ORIGINAL permission day's attendance status to Present (it would
+    otherwise stay short/HL forever since the permission's auto-pause
+    already happened on that day). If the makeup day passes without enough
+    hours worked, it just stays flagged as overdue - no retroactive penalty
+    beyond whatever the original permission day's own status already reflects.
     """
     from unified_server import _resolve_employee_shift, _shift_duration_minutes_from_times
 
@@ -545,6 +571,11 @@ def _process_compensation_fulfillment():
                           f"({row.get('crc6f_permission_code')}) on {makeup_date}")
                 except Exception as mark_err:
                     print(f"[PERMISSION-SCHEDULER] Failed to mark compensation fulfilled for {record_id}: {mark_err}")
+                    continue
+
+                permission_date = str(row.get("crc6f_date") or "")[:10]
+                if permission_date:
+                    _upgrade_attendance_status_to_present(employee_id, permission_date)
     except Exception as e:
         print(f"[PERMISSION-SCHEDULER] Compensation fulfillment check error: {e}")
         traceback.print_exc()
