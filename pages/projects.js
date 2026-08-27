@@ -3307,19 +3307,52 @@ const crmTab = async (project) => {
 // ==========================
 function showAddColumnModal(projectId, boardParam) {
   const formHTML = `
-    <div class="form-group" style="display:flex; flex-direction:column; gap:10px;">
-      <div style="display:flex; flex-direction:column; gap:6px;">
-        <label for="col-name" style="font-weight:600;">Column Name</label>
-        <input type="text" id="col-name" placeholder="Enter column name (e.g., 'In Review')" style="padding:10px; border-radius:10px; border:1px solid var(--border-color);" maxlength="50" />
-        <small style="color:#64748b;">Choose a name for your new status column</small>
+    <style>
+      #add-column-form-fields { display:flex; flex-direction:column; gap:18px; }
+      #add-column-form-fields .ac-field { display:flex; flex-direction:column; gap:6px; }
+      #add-column-form-fields .ac-field label { font-weight:600; font-size:0.9rem; color: var(--text-primary, #0f172a); }
+      #add-column-form-fields .ac-field input[type="text"] {
+        padding:10px 14px;
+        border-radius:10px;
+        border:1px solid var(--border-color, #d1d5db);
+        background: var(--surface-color, #fff);
+        color: var(--text-primary, #0f172a);
+        font-size:0.95rem;
+        width:100%;
+        box-sizing:border-box;
+      }
+      #add-column-form-fields .ac-field input[type="text"]:focus {
+        outline:none;
+        border-color:#2563eb;
+        box-shadow:0 0 0 3px rgba(37,99,235,0.15);
+      }
+      #add-column-form-fields .ac-color-row { display:flex; align-items:center; gap:10px; }
+      #add-column-form-fields .ac-color-row input[type="color"] {
+        width:48px;
+        height:40px;
+        padding:2px;
+        border-radius:8px;
+        border:1px solid var(--border-color, #d1d5db);
+        cursor:pointer;
+        background: var(--surface-color, #fff);
+        flex-shrink:0;
+      }
+      #add-column-form-fields .ac-color-row input[type="text"] { flex:1; }
+      #add-column-form-fields small { color:#64748b; font-size:0.8rem; }
+    </style>
+    <div id="add-column-form-fields">
+      <div class="ac-field">
+        <label for="col-name">Column Name</label>
+        <input type="text" id="col-name" placeholder="Enter column name (e.g., 'In Review')" maxlength="50" />
+        <small>Choose a name for your new status column</small>
       </div>
-      <div style="display:flex; flex-direction:column; gap:6px;">
-        <label for="col-color" style="font-weight:600;">Background Color</label>
-        <div style="display:flex; align-items:center; gap:10px;">
-          <input type="color" id="col-color" value="#e5e7eb" style="width:60px; height:40px; border-radius:8px; border:1px solid var(--border-color); cursor:pointer;" />
-          <input type="text" id="col-color-text" value="#e5e7eb" placeholder="#e5e7eb" style="flex:1; padding:10px; border-radius:10px; border:1px solid var(--border-color);" />
+      <div class="ac-field">
+        <label for="col-color">Background Color</label>
+        <div class="ac-color-row">
+          <input type="color" id="col-color" value="#e5e7eb" />
+          <input type="text" id="col-color-text" value="#e5e7eb" placeholder="#e5e7eb" />
         </div>
-        <small style="color:#64748b;">Choose a background color for this column</small>
+        <small>Choose a background color for this column</small>
       </div>
     </div>
   `;

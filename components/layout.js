@@ -12,11 +12,16 @@ export const getSidebarHTML = () => {
     const canViewAttendanceModule = canViewApplication('attendance_tracker') || canViewApplication('attendance_my') || canViewTeamAttendance || canViewApplication('attendance_holidays');
     const canViewLeaveModule = canViewApplication('leave_tracker') || canViewApplication('leave_my') || canViewTeamLeaves || canViewApplication('compoff') || canViewApplication('permission');
     
+    const currentTheme = (() => {
+        try { return document.body.getAttribute('data-theme') || 'light'; } catch { return 'light'; }
+    })();
+    const logoSrc = currentTheme === 'dark' ? '/vtab-logo.jpeg' : '/vtab-logo-blue.jpeg.jpeg';
+
     return `
     <div class="sidebar-header">
         <a href="#/" class="sidebar-brand nav-link" data-page="home">
             <div class="sidebar-logo">
-                <img src="/vtab-logo.jpeg" alt="VTAB SQUARE" width="48" height="48" />
+                <img id="sidebar-logo-img" src="${logoSrc}" alt="VTAB SQUARE" width="48" height="48" />
             </div>
             <span class="sidebar-title">VTAB SQUARE</span>
         </a>

@@ -170,6 +170,11 @@ const applyAppTheme = (theme) => {
       icon.classList.add(theme === 'dark' ? 'fa-moon' : 'fa-sun');
     }
   }
+
+  const logoImg = document.getElementById('sidebar-logo-img');
+  if (logoImg) {
+    logoImg.src = theme === 'dark' ? '/vtab-logo.jpeg' : '/vtab-logo-blue.jpeg.jpeg';
+  }
 };
 
 const getTimeBasedTheme = () => {
