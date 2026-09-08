@@ -947,6 +947,26 @@ const handleFaceAuthCallback = () => {
       
       // Store the current timestamp as last verification time (resets the 2-hour timer)
       localStorage.setItem('last_face_verified_at', String(Date.now()));
+
+      // Also persist it server-side (fire-and-forget) so the FaceAuth alert
+      // scheduler - which has no access to this browser's localStorage - can
+      // compute due/overdue/missed and notify the Monitoring Tool even when
+      // this tab is later closed.
+      try {
+        // `keepalive: true` is essential here - the page navigates away
+        // (window.location.href below) almost immediately after this fires,
+        // and a plain fetch() gets aborted by that navigation before it ever
+        // reaches the server. keepalive lets the browser complete it in the
+        // background instead, the same way navigator.sendBeacon would.
+        fetch(`${normalizeApiBase()}/api/auth/face-verified`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ employee_id: decoded.employee_id }),
+          keepalive: true,
+        }).catch((err) => console.warn('[FACEAUTH] Failed to persist server-side verification timestamp:', err));
+      } catch (err) {
+        console.warn('[FACEAUTH] Failed to persist server-side verification timestamp:', err);
+      }
       
       // Refresh FaceAuth alert status with new token (clears alert)
       refreshFaceAuthStatus();
@@ -1251,6 +1271,9 @@ const init = async () => {
     }
     if (target.id === "request-compoff-btn") showRequestCompOffModal();
     if (target.id === "request-permission-btn") showRequestPermissionModal();
+    if (target.id === "apply-permission-others-btn" || target.closest("#apply-permission-others-btn")) {
+      showRequestPermissionModal({ applyForOthers: true });
+    }
     // Edit Comp Off Balance
     const editCompOffBalanceBtn = target.closest(".edit-compoff-balance-btn");
     if (editCompOffBalanceBtn) {

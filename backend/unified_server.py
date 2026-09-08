@@ -50,6 +50,7 @@ from overdue_scheduler import setup_overdue_scheduler
 import backup_scheduler as _bk_sched
 from permission import permission_bp, setup_permission_scheduler
 from expected_checkout_scheduler import setup_expected_checkout_scheduler
+from face_auth_alert_scheduler import setup_face_auth_alert_scheduler
 
 try:
     from zoneinfo import ZoneInfo
@@ -187,6 +188,14 @@ try:
     setup_expected_checkout_scheduler(app)
 except Exception as _exp_sched_err:
     print(f"[WARN] Failed to start expected-checkout scheduler: {_exp_sched_err}")
+
+# Start the FaceAuth re-verification alert scheduler (checks every 60s for
+# checked-in employees due/overdue/missed on their 2-hour re-verification,
+# pushing alerts to the Monitoring Tool's Desktop Agent)
+try:
+    setup_face_auth_alert_scheduler(app)
+except Exception as _faceauth_sched_err:
+    print(f"[WARN] Failed to start FaceAuth alert scheduler: {_faceauth_sched_err}")
 
 def _coerce_client_local_datetime(client_time_str, timezone_name):
     """Convert client-supplied ISO timestamp into the user's local timezone if possible."""
@@ -4476,7 +4485,25 @@ def vtab_sso_login():
         print(f"[SSO] Success: Handshake complete for {vtab_email}. Issuing FaceAuth token (biometrics bypassed).")
         # 7. Generate existing face auth token with biometrics bypassed
         face_auth_token = generate_face_auth_token(user_data, face_verified=True)
-        
+
+        # Since this path marks the token face_verified=True (biometrics
+        # bypassed via trusted SSO), stamp the same server-side timestamp so
+        # the FaceAuth alert scheduler doesn't immediately think this
+        # employee is overdue on their next tick.
+        try:
+            from dataverse_helper import update_record_by_alt_key
+            update_record_by_alt_key(
+                "crc6f_table12s",
+                employee_id_value,
+                {
+                    "crc6f_lastfaceverifiedat": datetime.now(timezone.utc).isoformat(),
+                    "crc6f_lastfacealertlevel": None,
+                },
+                alt_key_field="crc6f_employeeid",
+            )
+        except Exception as persist_err:
+            print(f"[SSO] Failed to persist last_face_verified_at for {employee_id_value}: {persist_err}")
+
         # 8. Redirect seamlessly to existing frontend callback
         frontend_base = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")
         return redirect(f"{frontend_base}/auth/face-callback?token={face_auth_token}&face_verified=true")
@@ -4903,6 +4930,26 @@ def face_verified_callback():
         new_token = generate_face_auth_token(user_data, face_verified=True)
         
         print(f"[FACEAUTH] Face verified for employee: {normalized_emp_id}")
+
+        # Persist the verification timestamp server-side (previously only
+        # tracked in the browser's localStorage), so the FaceAuth alert
+        # scheduler can compute due/overdue/missed and notify the Monitoring
+        # Tool even when the OfficeHub tab is closed. Reset the alert level
+        # so the scheduler starts a fresh cycle for this employee.
+        try:
+            from dataverse_helper import update_record_by_alt_key
+            update_record_by_alt_key(
+                "crc6f_table12s",
+                normalized_emp_id,
+                {
+                    "crc6f_lastfaceverifiedat": datetime.now(timezone.utc).isoformat(),
+                    "crc6f_lastfacealertlevel": None,
+                },
+                alt_key_field="crc6f_employeeid",
+            )
+        except Exception as persist_err:
+            print(f"[FACEAUTH] Failed to persist last_face_verified_at for {normalized_emp_id}: {persist_err}")
+
         try:
             _append_auth_session_event(
                 "login",
@@ -18524,6 +18571,48 @@ try:
     print("[INIT] Annual Leave Reset Scheduler Started Successfully")
 except Exception as e:
     print(f"[INIT] Failed to start leave reset scheduler: {e}")
+
+# ================== MONITORING INTEGRATION (V1 ROUTES) ==================
+try:
+    original_checkin = app.view_functions.get('checkin')
+    original_checkout = app.view_functions.get('checkout')
+    
+    if original_checkin and original_checkout:
+        def wrapped_checkin(*args, **kwargs):
+            resp = original_checkin(*args, **kwargs)
+            try:
+                resp_obj = resp[0] if isinstance(resp, tuple) else resp
+                if resp_obj.status_code == 200:
+                    data = resp_obj.get_json()
+                    if data and data.get("success") and not data.get("already_checked_in"):
+                        emp_id = data.get("employee_id")
+                        if emp_id:
+                            from monitoring_integration import sync_monitoring_state
+                            sync_monitoring_state(emp_id, "active")
+            except Exception as e:
+                print(f"[MONITORING] V1 checkin wrapper error: {e}")
+            return resp
+            
+        def wrapped_checkout(*args, **kwargs):
+            resp = original_checkout(*args, **kwargs)
+            try:
+                resp_obj = resp[0] if isinstance(resp, tuple) else resp
+                if resp_obj.status_code == 200:
+                    data = resp_obj.get_json()
+                    if data and data.get("success"):
+                        emp_id = data.get("employee_id")
+                        if emp_id:
+                            from monitoring_integration import sync_monitoring_state
+                            sync_monitoring_state(emp_id, "paused")
+            except Exception as e:
+                print(f"[MONITORING] V1 checkout wrapper error: {e}")
+            return resp
+            
+        app.view_functions['checkin'] = wrapped_checkin
+        app.view_functions['checkout'] = wrapped_checkout
+        print("[INIT] V1 Monitoring wrappers successfully bound.")
+except Exception as wrapper_err:
+    print(f"[INIT] Failed to bind V1 Monitoring wrappers: {wrapper_err}")
 
 if __name__ == '__main__':
     print('\n' + '== ' * 30)
