@@ -696,6 +696,13 @@ def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
                     print(f"[ATTENDANCE-V2] Auto-close task stop failed for {emp}: {stop_err}")
 
                 emit_attendance_changed(emp, "auto_checkout_midnight")
+
+                try:
+                    from monitoring_integration import sync_monitoring_state
+                    sync_monitoring_state(emp, "paused")
+                except Exception as sync_err:
+                    print(f"[ATTENDANCE-V2] Sync monitoring state failed: {sync_err}")
+
                 closed += 1
             except Exception as row_err:
                 print(f"[ATTENDANCE-V2] Failed stale auto-close row: {row_err}")
@@ -869,7 +876,13 @@ def checkin_v2():
         
         # Emit socket event
         emit_attendance_changed(employee_id, "checkin")
-        
+
+        try:
+            from monitoring_integration import sync_monitoring_state
+            sync_monitoring_state(employee_id, "active")
+        except Exception as sync_err:
+            print(f"[ATTENDANCE-V2] Sync monitoring state failed: {sync_err}")
+
         return jsonify({
             "success": True,
             "attendance_id": attendance_id,
@@ -968,6 +981,12 @@ def perform_checkout_v2(employee_id, tz_name="Asia/Calcutta", location=None):
                 print(f"[ATTENDANCE-V2] Update attendance checkout error: {e}")
 
     emit_attendance_changed(employee_id, "checkout")
+
+    try:
+        from monitoring_integration import sync_monitoring_state
+        sync_monitoring_state(employee_id, "paused")
+    except Exception as sync_err:
+        print(f"[ATTENDANCE-V2] Sync monitoring state failed: {sync_err}")
 
     return {
         "success": True,
