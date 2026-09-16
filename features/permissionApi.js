@@ -31,6 +31,8 @@ const normalizeRequest = (item = {}) => ({
   compensationHours: Number(item.compensation_hours ?? item.compensationHours ?? 0) || 0,
   compensated: !!(item.compensated ?? false),
   compensatedAt: item.compensated_at || item.compensatedAt || '',
+  appliedBy: item.applied_by || item.appliedBy || '',
+  appliedForOthers: !!(item.applied_for_others ?? item.appliedForOthers ?? false),
 });
 
 const normalizeDueRow = (item = {}) => ({

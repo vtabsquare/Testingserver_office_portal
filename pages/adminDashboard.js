@@ -389,6 +389,53 @@ const buildTimesheetMonitorCard = (tsData) => {
   `;
 };
 
+const fetchOvertimeInsight = async () => {
+  try {
+    const res = await timedFetch(`${BASE_URL}/api/admin/overtime-insight/yesterday${buildAdminAuthQuery()}`, {}, 'adminOvertimeInsight');
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    console.warn('Overtime insight fetch failed:', err);
+    return null;
+  }
+};
+
+let _lastOvertimeData = null;
+
+export const renderAdminDashboard = async () => {
+  const container = document.getElementById('app-content');
+  if (!container) return;
+
+  container.innerHTML = getPageContentHTML('Admin Dashboard', `
+    <div style="padding: 24px; text-align: center;">
+      <i class="fa-solid fa-spinner fa-spin fa-2x" style="color:var(--primary-color);"></i>
+      <div style="margin-top: 16px; color: var(--text-secondary);">Loading admin dashboard...</div>
+    </div>
+  `);
+
+  try {
+    const [data, dueData, overtimeData] = await Promise.all([
+      loadAdminDashboardData(),
+      fetchCompensationDue().catch(() => []),
+      fetchOvertimeInsight()
+    ]);
+    _lastOvertimeData = overtimeData;
+    renderData(data, dueData);
+  } catch (error) {
+    console.error('Dashboard error:', error);
+    container.innerHTML = getPageContentHTML('Admin Dashboard', `
+      <div class="empty-state">
+        <i class="fa-solid fa-triangle-exclamation" style="font-size:48px;color:#d63031;margin-bottom:16px;"></i>
+        <h3>Failed to Load Dashboard</h3>
+        <p style="color:var(--text-secondary);">${escapeHtml(error.message)}</p>
+        <button class="vtab-btn" onclick="window.location.reload()" style="margin-top:16px;">
+          <i class="fa-solid fa-arrow-rotate-right"></i> Retry
+        </button>
+      </div>
+    `);
+  }
+};
+
 const loadAndRenderTimesheetMonitor = async (forceFetch = true) => {
   const container = document.getElementById('ts-monitor-container');
   if (!container) return;
@@ -732,6 +779,21 @@ const patchLiveWorkSection = (liveData = {}) => {
 };
 
 const buildDashboardLayout = (data) => {
+  const overtimeInsights = (_lastOvertimeData && _lastOvertimeData.insights) ? _lastOvertimeData.insights : [];
+  let overtimeTableRows = `<tr><td colspan="4" style="text-align:center;color:var(--text-secondary);padding:24px;">No overtime recorded yesterday.</td></tr>`;
+  if (overtimeInsights.length > 0) {
+    overtimeTableRows = overtimeInsights.map(row => `
+      <tr>
+        <td>
+          <div style="font-weight:600;color:var(--text-primary);">${escapeHtml(row.employee_name)}</div>
+          <div style="font-size:12px;color:var(--text-secondary);">${escapeHtml(row.employee_id)}</div>
+        </td>
+        <td><span style="display:inline-block;padding:2px 8px;border-radius:12px;background:#fff3cd;color:#856404;font-weight:600;font-size:12px;">${row.overtime_hours}h</span></td>
+        <td><div style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(row.tasks)}">${escapeHtml(row.tasks)}</div></td>
+      </tr>
+    `).join('');
+  }
+
   const combinedLeaveRows = [
     ...(data.leaveRows || []),
     ...(data.upcomingLeaveRows || []),
@@ -1010,6 +1072,32 @@ const buildDashboardLayout = (data) => {
               </thead>
               <tbody>
                 ${leaveTableRows}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 4: Overtime Insight -->
+      <div class="admin-layout-grid" style="grid-template-columns: 1fr; margin-top: 24px;">
+        <div class="admin-card-v2">
+          <div class="admin-card-header">
+            <div>
+              <div class="admin-section-label">Insights</div>
+              <h3 class="admin-section-title">Yesterday's Overtime</h3>
+            </div>
+          </div>
+          <div style="flex:1;max-height:280px;overflow-y:auto;">
+            <table class="admin-table-v2">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Overtime Hours</th>
+                  <th>Tasks Worked On</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${overtimeTableRows}
               </tbody>
             </table>
           </div>

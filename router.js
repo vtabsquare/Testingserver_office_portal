@@ -48,6 +48,7 @@ const loaders = {
   "/onboarding": async () => (await import('./pages/onboarding.js')).renderOnboardingPage,
   "/interns/detail": async () => (await import('./pages/internDetail.js')).renderInternDetailPage,
   "/faceauth-settings": async () => (await import('./pages/faceAuthSettings.js')).renderFaceAuthSettings,
+  "/faceauth-reverify": async () => (await import('./pages/faceAuthReverify.js')).renderFaceAuthReverifyPage,
   "/role-settings": async () => (await import('./pages/roleSettings.js')).renderRoleSettingsPage,
   "/settings": async () => async () => {
     const { renderSettingsLayout } = await import('./components/settingsLayout.js');

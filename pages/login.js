@@ -1459,7 +1459,7 @@ export const renderLoginPage = () => {
   // mini robot bounce on valid email
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   emailInput.addEventListener("input", (e) => {
-    if (emailRegex.test(e.target.value)) {
+    if (miniRobot && emailRegex.test(e.target.value)) {
       if (!miniRobot.classList.contains("bounce")) {
         miniRobot.classList.add("bounce");
         setTimeout(() => miniRobot.classList.remove("bounce"), 1000);

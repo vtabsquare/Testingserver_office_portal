@@ -354,8 +354,8 @@ def upsert_login_activity(employee_id, date_str, payload):
             try:
                 existing_checkout = existing.get(LA_FIELD_CHECKOUT_TIME) or existing.get(LA_FIELD_CHECKOUT_TS)
                 clearing_checkout = (
-                    (LA_FIELD_CHECKOUT_TIME in patch_payload and patch_payload.get(LA_FIELD_CHECKOUT_TIME) is None)
-                    or (LA_FIELD_CHECKOUT_TS in patch_payload and patch_payload.get(LA_FIELD_CHECKOUT_TS) is None)
+                    (LA_FIELD_CHECKOUT_TIME in patch_payload and not patch_payload.get(LA_FIELD_CHECKOUT_TIME))
+                    or (LA_FIELD_CHECKOUT_TS in patch_payload and not patch_payload.get(LA_FIELD_CHECKOUT_TS))
                 )
                 reopening = bool(existing_checkout and clearing_checkout)
             except Exception:
@@ -527,7 +527,7 @@ def fetch_open_login_activity_for_checkout(employee_id, today_date=None):
         filter_q = (
             f"$filter={LA_FIELD_EMPLOYEE_ID} eq '{safe_emp}' "
             f"and {LA_FIELD_CHECKIN_TS} ne null "
-            f"and {LA_FIELD_CHECKOUT_TS} eq null"
+            f"and ({LA_FIELD_CHECKOUT_TS} eq null or {LA_FIELD_CHECKOUT_TS} eq 0)"
         )
         url = f"{_get_base_url()}/{LOGIN_ACTIVITY_ENTITY}?{filter_q}&$orderby={LA_FIELD_DATE} desc&$top=20"
         resp = s.get(url, headers=headers, timeout=15)
@@ -586,7 +586,7 @@ def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
         filter_q = (
             f"$filter={LA_FIELD_EMPLOYEE_ID} eq '{safe_emp}' "
             f"and {LA_FIELD_CHECKIN_TS} ne null "
-            f"and {LA_FIELD_CHECKOUT_TS} eq null "
+            f"and ({LA_FIELD_CHECKOUT_TS} eq null or {LA_FIELD_CHECKOUT_TS} eq 0) "
             f"and {LA_FIELD_DATE} lt '{local_today}'"
         )
         url = f"{_get_base_url()}/{LOGIN_ACTIVITY_ENTITY}?{filter_q}&$orderby={LA_FIELD_DATE} asc"
@@ -603,7 +603,7 @@ def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
                 filter_q2 = (
                     f"$filter={LA_FIELD_EMPLOYEE_ID} eq '{safe_emp}' "
                     f"and {LA_FIELD_CHECKIN_TS} ne null "
-                    f"and {LA_FIELD_CHECKOUT_TS} eq null "
+                    f"and ({LA_FIELD_CHECKOUT_TS} eq null or {LA_FIELD_CHECKOUT_TS} eq 0) "
                     f"and {LA_FIELD_DATE} lt '{local_today}T00:00:00Z'"
                 )
                 url2 = f"{_get_base_url()}/{LOGIN_ACTIVITY_ENTITY}?{filter_q2}&$orderby={LA_FIELD_DATE} asc"
@@ -621,7 +621,7 @@ def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
                 filter_q3 = (
                     f"$filter={LA_FIELD_EMPLOYEE_ID} eq '{safe_emp}' "
                     f"and {LA_FIELD_CHECKIN_TS} ne null "
-                    f"and {LA_FIELD_CHECKOUT_TS} eq null"
+                    f"and ({LA_FIELD_CHECKOUT_TS} eq null or {LA_FIELD_CHECKOUT_TS} eq 0)"
                 )
                 url3 = f"{_get_base_url()}/{LOGIN_ACTIVITY_ENTITY}?{filter_q3}&$orderby={LA_FIELD_DATE} asc"
                 print(f"[ATTENDANCE-V2] Auto-close broad query (no date filter): {url3}")
@@ -696,13 +696,13 @@ def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
                     print(f"[ATTENDANCE-V2] Auto-close task stop failed for {emp}: {stop_err}")
 
                 emit_attendance_changed(emp, "auto_checkout_midnight")
-
+                
                 try:
                     from monitoring_integration import sync_monitoring_state
                     sync_monitoring_state(emp, "paused")
                 except Exception as sync_err:
                     print(f"[ATTENDANCE-V2] Sync monitoring state failed: {sync_err}")
-
+                
                 closed += 1
             except Exception as row_err:
                 print(f"[ATTENDANCE-V2] Failed stale auto-close row: {row_err}")
@@ -738,6 +738,32 @@ def _invalidate_status_cache(emp_id):
 
 # ================== API ROUTES ==================
 
+def _checkin_overtime_status(employee_id, today_date, base_seconds):
+    """
+    If an employee is resuming a session (base_seconds > 0 from earlier
+    today), figure out whether they've already worked past their expected
+    checkout (shift duration + any owed permission-compensation hours). If
+    so, this check-in should be flagged/logged as overtime rather than
+    silently treated as a normal continuation of the shift.
+    Returns (is_overtime: bool, expected_checkout_seconds: int|None).
+    """
+    if base_seconds <= 0:
+        return False, None
+    try:
+        from unified_server import _resolve_employee_shift, _shift_duration_minutes_from_times
+        from expected_checkout_scheduler import _owed_compensation_hours_today
+        shift = _resolve_employee_shift(employee_id) or {}
+        duration_minutes = _shift_duration_minutes_from_times(shift.get("shift_start"), shift.get("shift_end"))
+        if duration_minutes is None:
+            return False, None
+        owed_hours = _owed_compensation_hours_today(employee_id, today_date)
+        expected_checkout_seconds = int(duration_minutes * 60 + owed_hours * 3600)
+        return base_seconds >= expected_checkout_seconds, expected_checkout_seconds
+    except Exception as e:
+        print(f"[ATTENDANCE-V2] Overtime check failed for {employee_id}: {e}")
+        return False, None
+
+
 @attendance_v2_bp.route('/checkin', methods=['POST'])
 def checkin_v2():
     """
@@ -749,6 +775,8 @@ def checkin_v2():
         employee_id = (data.get('employee_id') or '').strip().upper()
         tz_name = data.get('timezone', 'UTC')
         location = data.get('location')
+        confirm_overtime = bool(data.get('confirm_overtime'))
+        overtime_reason = str(data.get('overtime_reason') or '').strip()
         
         if not employee_id:
             return jsonify({"success": False, "error": "MISSING_EMPLOYEE_ID"}), 400
@@ -828,7 +856,21 @@ def checkin_v2():
                 base_seconds = 0
         
         print(f"[ATTENDANCE-V2] CHECK-IN base_seconds={base_seconds} for {employee_id} on {today_date}")
-        
+
+        # If resuming now would already be past today's expected checkout
+        # (shift + owed compensation hours), require the client to confirm
+        # this is an intentional overtime check-in before actually creating
+        # the session, so it can be flagged/logged distinctly.
+        is_overtime, expected_checkout_seconds = _checkin_overtime_status(employee_id, today_date, base_seconds)
+        if is_overtime and not confirm_overtime:
+            return jsonify({
+                "success": False,
+                "error": "OVERTIME_CONFIRMATION_REQUIRED",
+                "message": "You've already completed today's expected shift hours. Checking in now will be logged as overtime.",
+                "total_seconds_today": base_seconds,
+                "expected_checkout_seconds": expected_checkout_seconds,
+            }), 200
+
         attendance_id = None
         record_id = None
         
@@ -845,6 +887,18 @@ def checkin_v2():
                 existing_checkin = existing_att.get(FIELD_CHECKIN)
                 if not existing_checkin:
                     update_payload[FIELD_CHECKIN] = checkin_time
+                if is_overtime:
+                    import json
+                    meta = existing_att.get("metadata") or {}
+                    if isinstance(meta, str):
+                        try:
+                            meta = json.loads(meta)
+                        except:
+                            meta = {}
+                    meta["is_overtime"] = True
+                    if overtime_reason:
+                        meta["overtime_reason"] = overtime_reason
+                    update_payload["metadata"] = meta
                 update_record(ATTENDANCE_ENTITY, record_id, update_payload)
             except Exception as e:
                 print(f"[ATTENDANCE-V2] Update attendance record error: {e}")
@@ -857,6 +911,10 @@ def checkin_v2():
                 FIELD_DATE: today_date,
                 FIELD_CHECKIN: checkin_time
             }
+            if is_overtime:
+                record_data["metadata"] = {"is_overtime": True}
+                if overtime_reason:
+                    record_data["metadata"]["overtime_reason"] = overtime_reason
             try:
                 created = create_record(ATTENDANCE_ENTITY, record_data)
                 record_id = created.get(FIELD_RECORD_ID) or created.get("crc6f_table13id")
@@ -869,20 +927,22 @@ def checkin_v2():
             LA_FIELD_CHECKIN_TS: checkin_ts,
             LA_FIELD_BASE_SECONDS: base_seconds,
             LA_FIELD_CHECKIN_LOCATION: location_to_string(location),
-            LA_FIELD_CHECKOUT_TIME: None,
-            LA_FIELD_CHECKOUT_TS: None
+            LA_FIELD_CHECKOUT_TIME: "",
+            LA_FIELD_CHECKOUT_TS: 0
         }
         upsert_login_activity(employee_id, today_date, la_payload)
         
         # Emit socket event
         emit_attendance_changed(employee_id, "checkin")
-
+        
         try:
             from monitoring_integration import sync_monitoring_state
             sync_monitoring_state(employee_id, "active")
         except Exception as sync_err:
             print(f"[ATTENDANCE-V2] Sync monitoring state failed: {sync_err}")
 
+        _invalidate_status_cache(employee_id)
+        
         return jsonify({
             "success": True,
             "attendance_id": attendance_id,
@@ -892,6 +952,7 @@ def checkin_v2():
             "is_active_session": True,
             "session_count": 1,
             "status_code": derive_status(base_seconds, employee_id),
+            "is_overtime": is_overtime,
             "display": {
                 "checkin_local": localize_time(now_utc, tz_name),
                 "date_local": today_date,
@@ -988,6 +1049,8 @@ def perform_checkout_v2(employee_id, tz_name="Asia/Calcutta", location=None):
     except Exception as sync_err:
         print(f"[ATTENDANCE-V2] Sync monitoring state failed: {sync_err}")
 
+    _invalidate_status_cache(employee_id)
+
     return {
         "success": True,
         "employee_id": employee_id,
@@ -1014,14 +1077,13 @@ def list_employee_ids_with_open_session_today(tz_name="Asia/Calcutta"):
         seen = set()
         try:
             sb = _supabase_client()
-            resp = (
+            query = (
                 sb.table(LOGIN_ACTIVITY_ENTITY)
                 .select(f"{LA_FIELD_EMPLOYEE_ID},{LA_FIELD_DATE}")
-                .is_(LA_FIELD_CHECKOUT_TS, "null")
+                .or_(f"{LA_FIELD_CHECKOUT_TS}.is.null,{LA_FIELD_CHECKOUT_TS}.eq.0")
                 .not_.is_(LA_FIELD_CHECKIN_TS, "null")
-                .limit(5000)
-                .execute()
             )
+            resp = query.limit(5000).execute()
             for row in resp.data or []:
                 row_date = str(row.get(LA_FIELD_DATE) or "")[:10]
                 if row_date != local_today:
@@ -1040,7 +1102,7 @@ def list_employee_ids_with_open_session_today(tz_name="Asia/Calcutta"):
         s = get_dataverse_session()
         filter_q = (
             f"$filter={LA_FIELD_CHECKIN_TS} ne null "
-            f"and {LA_FIELD_CHECKOUT_TS} eq null"
+            f"and ({LA_FIELD_CHECKOUT_TS} eq null or {LA_FIELD_CHECKOUT_TS} eq 0)"
         )
         url = f"{_get_base_url()}/{LOGIN_ACTIVITY_ENTITY}?{filter_q}&$top=5000"
         resp = s.get(url, headers=headers, timeout=20)
@@ -1421,6 +1483,7 @@ def force_close_stale_sessions(employee_id):
         employee_id = employee_id.strip().upper()
         tz_name = (request.json or {}).get('timezone', 'Asia/Calcutta')
         result = _auto_close_stale_sessions(employee_id, tz_name)
+        _invalidate_status_cache(employee_id)
         return jsonify({"success": True, "closed": result.get("closed", 0), "employee_id": employee_id})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

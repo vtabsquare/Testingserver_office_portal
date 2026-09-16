@@ -12,7 +12,7 @@ import { notifyEmployeeLeaveApproval, notifyEmployeeLeaveRejection, updateNotifi
 import { fetchCompOffRequests, approveCompOffRequest, rejectCompOffRequest } from '../features/compOffApi.js';
 import { fetchPermissionRequests, approvePermissionRequest, rejectPermissionRequest } from '../features/permissionApi.js';
 import { listEmployees } from '../features/employeeApi.js';
-import { isCheckedIn } from '../features/attendanceRenderer.js';
+import { isCheckedIn, stopActiveTaskTimerOnCheckout } from '../features/attendanceRenderer.js';
 import { apiBase } from '../config.js';
 import { cachedFetch, TTL } from '../features/cache.js';
 import { runWithSubmissionLoading } from '../utils/submissionLoading.js';
@@ -707,12 +707,24 @@ export const renderMyTasksPage = async () => {
             const res = await fetch(`${API}/time-entries/active/${empId}`);
             const result = await res.json().catch(() => ({ success: false }));
             
+            const localActive = getActive();
+
             if (!result.success || !result.active_timer) {
+                if (localActive && !localActive.paused) {
+                    console.warn('[MY_TASKS] Backend has no active timer but local is running. Syncing...');
+                    if (!isCheckedIn()) {
+                        // User is checked out (e.g. expected checkout auto-pause), force stop task timer
+                        await stopActiveTaskTimerOnCheckout(empId);
+                    } else {
+                        // Backend just lost the timer for some other reason, clear it
+                        clearActive();
+                        window.dispatchEvent(new CustomEvent('taskTimerStopped', { detail: { reason: 'backend_sync' } }));
+                    }
+                }
                 return;
             }
 
             const backendTimer = result.active_timer;
-            const localActive = getActive();
             
             // If backend has an active timer but local doesn't match, sync it
             if (backendTimer && backendTimer.task_guid) {
@@ -967,6 +979,7 @@ export const renderMyTasksPage = async () => {
 
     let timerInterval = null;
     let checkInStateInterval = null;
+    let taskTimerStoppedListenerBound = false;
 
     const updateTimers = () => {
         const active = getActive();
@@ -1233,6 +1246,14 @@ export const renderMyTasksPage = async () => {
         checkInStateInterval = setInterval(() => {
             updatePlayButtonStates();
         }, 1000);
+
+        // Repaint immediately (instead of waiting for the next 1s tick) when
+        // attendance checkout (manual OR auto-pause via the expected-checkout /
+        // permission schedulers) force-stops the task timer in the background.
+        if (!taskTimerStoppedListenerBound) {
+            taskTimerStoppedListenerBound = true;
+            window.addEventListener('taskTimerStopped', () => render());
+        }
 
         document.querySelectorAll('.task-link').forEach(btn => {
             btn.addEventListener('click', (e) => {

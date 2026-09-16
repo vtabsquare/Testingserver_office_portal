@@ -10,7 +10,9 @@ ALTER TABLE crc6f_permissions
     ADD COLUMN IF NOT EXISTS crc6f_makeupdate DATE,
     ADD COLUMN IF NOT EXISTS crc6f_compensationhours NUMERIC(5,2) DEFAULT 0,
     ADD COLUMN IF NOT EXISTS crc6f_compensated BOOLEAN DEFAULT FALSE,
-    ADD COLUMN IF NOT EXISTS crc6f_compensatedat TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS crc6f_compensatedat TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS crc6f_appliedby VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS crc6f_appliedforothers BOOLEAN DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_crc6f_permissions_makeupdate ON crc6f_permissions(crc6f_makeupdate);
 CREATE INDEX IF NOT EXISTS idx_crc6f_permissions_compensated ON crc6f_permissions(crc6f_compensated);

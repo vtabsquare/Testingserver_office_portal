@@ -170,31 +170,6 @@ try:
 except Exception as _sched_err:
     print(f"[WARN] Failed to start attendance scheduler: {_sched_err}")
 
-# Start the overdue tasks notification scheduler (runs daily at 9 AM)
-try:
-    setup_overdue_scheduler(app)
-except Exception as _overdue_err:
-    print(f"[WARN] Failed to start overdue tasks scheduler: {_overdue_err}")
-
-# Start the permission auto-pause scheduler (checks every 60s for due permissions)
-try:
-    setup_permission_scheduler(app)
-except Exception as _perm_sched_err:
-    print(f"[WARN] Failed to start permission scheduler: {_perm_sched_err}")
-
-# Start the expected-checkout auto-pause scheduler (checks every 60s for
-# employees who have reached their projected expected checkout time)
-try:
-    setup_expected_checkout_scheduler(app)
-except Exception as _exp_sched_err:
-    print(f"[WARN] Failed to start expected-checkout scheduler: {_exp_sched_err}")
-
-# Start the FaceAuth re-verification alert scheduler (checks every 60s for
-# checked-in employees due/overdue/missed on their 2-hour re-verification,
-# pushing alerts to the Monitoring Tool's Desktop Agent)
-try:
-    setup_face_auth_alert_scheduler(app)
-except Exception as _faceauth_sched_err:
     print(f"[WARN] Failed to start FaceAuth alert scheduler: {_faceauth_sched_err}")
 
 def _coerce_client_local_datetime(client_time_str, timezone_name):
@@ -7524,6 +7499,9 @@ def apply_leave():
             data.get("day_duration") or data.get("dayDuration") or "full"
         )
 
+        if day_duration == "half":
+            paid_unpaid = "Unpaid"
+
         # Format employee ID
         if applied_by_raw:
             if applied_by_raw.isdigit():
@@ -9551,6 +9529,81 @@ def get_upcoming_leaves():
             "error": str(e),
             "leaves": []
         }), 500
+
+
+@app.route('/api/admin/overtime-insight/yesterday', methods=['GET'])
+def get_admin_overtime_insight_yesterday():
+    try:
+        from dataverse_helper import query_records
+        from datetime import datetime, timedelta, timezone
+        
+        biz_tz = _attendance_business_tz()
+        now_local = datetime.now(timezone.utc).astimezone(biz_tz)
+        yesterday_str = (now_local - timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        # Query ALL attendance records from yesterday and filter in python
+        attendance_records = query_records("crc6f_table13s", filters={"crc6f_date": yesterday_str})
+        
+        overtime_insights = []
+        for att in attendance_records:
+            meta = att.get("metadata") or {}
+            if isinstance(meta, str):
+                import json
+                try:
+                    meta = json.loads(meta)
+                except:
+                    meta = {}
+            if not meta.get("is_overtime"):
+                continue
+
+            emp_id = att.get("crc6f_employeeid")
+            if not emp_id: continue
+            
+            emp_name = get_employee_name(emp_id) or emp_id
+            
+            # calculate overtime hours (total duration - shift duration)
+            total_duration = float(att.get("crc6f_duration") or 0)
+            from unified_server import _resolve_employee_shift, _shift_duration_minutes_from_times
+            shift = _resolve_employee_shift(emp_id) or {}
+            duration_minutes = _shift_duration_minutes_from_times(
+                shift.get("shift_start"), shift.get("shift_end")
+            )
+            shift_hours = (duration_minutes or 480) / 60.0
+            
+            # overtime is anything beyond the normal shift
+            ot_hours = max(0.0, total_duration - shift_hours)
+            
+            # Even if ot_hours is calculated as 0, they marked it as overtime, so we show it anyway
+            # but maybe we should show the total duration if ot_hours is 0
+            if ot_hours <= 0:
+                # Fallback if their duration wasn't properly updated
+                ot_hours = total_duration if total_duration > 0 else 0
+                
+            # get tasks worked yesterday
+            task_url = f"{BASE_URL}/crc6f_hr_timesheetlogs?$filter=crc6f_employee_id eq '{emp_id}' and crc6f_work_date eq '{yesterday_str}'"
+            task_resp = get_dataverse_session().get(task_url, headers=headers)
+            tasks = []
+            if task_resp.status_code == 200:
+                for t in task_resp.json().get('value', []):
+                    t_name = t.get("crc6f_task_name")
+                    if t_name and t_name not in tasks:
+                        tasks.append(t_name)
+            
+            overtime_insights.append({
+                "employee_id": emp_id,
+                "employee_name": emp_name,
+                "overtime_hours": round(ot_hours, 2),
+                "tasks": ", ".join(tasks) if tasks else "No tasks logged"
+            })
+            
+        return jsonify({
+            "success": True, 
+            "date": yesterday_str,
+            "insights": overtime_insights
+        })
+    except Exception as e:
+        print(f"Error in overtime insight: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/admin/attendance-monitoring/today', methods=['GET'])
@@ -18622,5 +18675,31 @@ if __name__ == '__main__':
     print('Frontend should connect to: http://localhost:5000/api/*')
     print('\n' + '='*80 + '\n')
 
-    app.run(host='0.0.0.0', port=5000, debug=True)
-
+    try:
+        setup_overdue_scheduler(app)
+    except Exception as _overdue_err:
+        print(f"[WARN] Failed to start overdue tasks scheduler: {_overdue_err}")
+    
+    try:
+        from permission import setup_permission_scheduler
+        setup_permission_scheduler(app, _resolve_employee_shift, _shift_duration_minutes_from_times)
+    except Exception as _perm_sched_err:
+        print(f"[WARN] Failed to start permission scheduler: {_perm_sched_err}")
+    
+    try:
+        from expected_checkout_scheduler import setup_expected_checkout_scheduler
+        setup_expected_checkout_scheduler(app, _resolve_employee_shift, _shift_duration_minutes_from_times)
+    except Exception as _exp_sched_err:
+        print(f"[WARN] Failed to start expected-checkout scheduler: {_exp_sched_err}")
+        
+    try:
+        from face_auth_alert_scheduler import setup_face_auth_alert_scheduler
+        setup_face_auth_alert_scheduler(app)
+    except Exception as _face_err:
+        print(f"[WARN] Failed to start face auth scheduler: {_face_err}")
+    
+    # IMPORTANT: use_reloader=False prevents Werkzeug from spawning a parent+child
+    # process pair. With use_reloader=True (default when debug=True), background
+    # scheduler threads run in BOTH processes, and the parent process never reloads
+    # code on file save — causing "ghost" schedulers running stale logic forever.
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)

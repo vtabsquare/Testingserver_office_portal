@@ -105,13 +105,17 @@ def _normalize_permission_row(row):
         "compensation_hours": float(row.get("crc6f_compensationhours") or 0),
         "compensated": bool(row.get("crc6f_compensated") or False),
         "compensated_at": row.get("crc6f_compensatedat"),
+        "applied_by": row.get("crc6f_appliedby") or None,
+        "applied_for_others": bool(row.get("crc6f_appliedforothers") or False),
     }
 
 
 def _get_employee_work_week(employee_id):
-    """Lazy import to avoid a circular import with unified_server at module load time."""
     try:
-        from unified_server import _resolve_employee_shift
+        global RESOLVE_SHIFT_FUNC
+        if not RESOLVE_SHIFT_FUNC:
+            return "mon-sat"
+        _resolve_employee_shift = RESOLVE_SHIFT_FUNC
         shift = _resolve_employee_shift(employee_id) or {}
         return str(shift.get("work_week") or "mon-sat").strip().lower()
     except Exception:
@@ -176,6 +180,14 @@ def create_permission():
         compensation_mode = str(data.get('compensation_mode') or data.get('compensationMode') or 'none').strip().lower()
         makeup_date_str = str(data.get('makeup_date') or data.get('makeupDate') or '').strip()
 
+        # "Apply for Others": an admin logging a permission on behalf of another
+        # employee (e.g. the employee informed they'd be out but never submitted
+        # the request themselves). This is the only case allowed to backdate the
+        # start time to earlier *today* - everything else about the request
+        # (same-day only, compensation rules) still applies as normal.
+        applied_by = _normalize_employee_id(data.get('applied_by') or data.get('appliedBy'))
+        applied_for_others = bool(data.get('applied_for_others') or data.get('appliedForOthers'))
+
         if not employee_id:
             return jsonify({"success": False, "error": "employee_id is required"}), 400
         if not date_str:
@@ -197,15 +209,7 @@ def create_permission():
         except ValueError:
             return jsonify({"success": False, "error": "date must be in YYYY-MM-DD format"}), 400
 
-        # Past times are rejected server-side too (UI already disables them).
-        now_local = _now_local()
-        if req_date < now_local.date():
-            return jsonify({"success": False, "error": "Cannot apply permission for a past date"}), 400
-        if req_date == now_local.date():
-            start_dt_local = datetime.combine(req_date, start_t, tzinfo=_get_biz_tz())
-            if start_dt_local < now_local:
-                return jsonify({"success": False, "error": "Start time cannot be in the past"}), 400
-
+        # Past times are rejected server-side too (UI already disables them),
         # Compensation hours owed = the permission's own duration.
         duration_seconds = (
             (end_t.hour * 3600 + end_t.minute * 60 + end_t.second)
@@ -249,20 +253,25 @@ def create_permission():
             payload["crc6f_makeupdate"] = makeup_date.isoformat()
         if reason:
             payload["crc6f_reason"] = reason
+        if applied_for_others:
+            payload["crc6f_appliedforothers"] = True
+            if applied_by:
+                payload["crc6f_appliedby"] = applied_by
 
         created = create_record(PERMISSION_ENTITY, payload)
         normalized = _normalize_permission_row(created or payload)
 
-        return jsonify({
-            "success": True,
-            "message": "Permission request submitted successfully",
-            "request": normalized,
-        }), 201
-    except Exception as e:
-        print(f"[ERROR] Failed to create permission request: {e}")
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 500
-    finally:
+        # If the window's start time has already passed (backdated "apply for
+        # others" entry), don't wait for the next scheduler tick - pause the
+        # employee's attendance (if an active session exists) immediately so
+        # the record-keeping reflects reality right away.
+        if applied_for_others and req_date == now_local.date() and now_local.time() >= start_t:
+            try:
+                _process_single_due_permission(created or payload, normalized.get("id"))
+            except Exception as immediate_err:
+                print(f"[PERMISSION] Immediate processing failed for backdated request: {immediate_err}")
+                traceback.print_exc()
+
         try:
             if employee_id:
                 emp_name = get_employee_name(employee_id) or employee_id
@@ -292,7 +301,18 @@ def create_permission():
                         async_send=True,
                     )
         except Exception as mail_err:
-            print(f"[WARN] Failed to send permission request notification: {mail_err}")
+            print(f"[WARN] Failed to send permission request email: {mail_err}")
+            traceback.print_exc()
+
+        return jsonify({
+            "success": True,
+            "message": "Permission request submitted successfully",
+            "request": normalized,
+        }), 201
+    except Exception as e:
+        print(f"[ERROR] Failed to create permission request: {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @permission_bp.route('/<request_id>/approve', methods=['POST'])
@@ -409,6 +429,47 @@ def get_active_permission(employee_id):
 
 # ================== AUTO-PAUSE SCHEDULER ==================
 
+def _process_single_due_permission(row, record_id=None):
+    """
+    Force-checkout the employee tied to a single permission row (if they have
+    an active session), then mark the permission as processed either way so
+    it is never retried by the scheduler. Shared by the scheduler tick and
+    the "apply for others" immediate-processing path for backdated entries.
+    """
+    from attendance_service_v2 import perform_checkout_v2
+
+    employee_id = _normalize_employee_id(row.get("crc6f_employeeid"))
+    record_id = record_id or row.get("crc6f_permissionid")
+    if not employee_id or not record_id:
+        return
+    try:
+        now_utc = int(datetime.now(timezone.utc).timestamp())
+        pause_end = int(row.get("crc6f_pauseend") or 0)
+        if pause_end > 0 and now_utc >= pause_end:
+            print(f"[PERMISSION-SCHEDULER] Permission {row.get('crc6f_permission_code')} is for a past time. Skipping auto-pause.")
+        else:
+            result = perform_checkout_v2(employee_id, tz_name=PERMISSION_TZ)
+            if result.get("success"):
+                print(f"[PERMISSION-SCHEDULER] Auto-paused attendance for {employee_id} "
+                      f"(permission {row.get('crc6f_permission_code')})")
+            elif result.get("error") == "NO_ACTIVE_SESSION":
+                print(f"[PERMISSION-SCHEDULER] {employee_id} had no active session at permission "
+                      f"start time - nothing to pause ({row.get('crc6f_permission_code')})")
+            else:
+                print(f"[PERMISSION-SCHEDULER] Checkout failed for {employee_id}: {result.get('error')}")
+    except Exception as checkout_err:
+        print(f"[PERMISSION-SCHEDULER] Error force-checking-out {employee_id}: {checkout_err}")
+        traceback.print_exc()
+    finally:
+        # Mark processed regardless of outcome so we never retry/spam.
+        try:
+            update_record(PERMISSION_ENTITY, record_id, {
+                "crc6f_pausedat": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as mark_err:
+            print(f"[PERMISSION-SCHEDULER] Failed to mark permission {record_id} as paused: {mark_err}")
+
+
 def _process_due_permissions():
     """
     Find today's permissions whose start_time has arrived and that haven't
@@ -416,8 +477,6 @@ def _process_due_permissions():
     with an active session, then mark the permission as processed either way
     so it is never retried.
     """
-    from attendance_service_v2 import perform_checkout_v2
-
     try:
         now_local = _now_local()
         today_str = now_local.date().isoformat()
@@ -433,35 +492,8 @@ def _process_due_permissions():
             if now_local.time() >= start_t:
                 due_rows.append(row)
 
-        if not due_rows:
-            return
-
         for row in due_rows:
-            employee_id = _normalize_employee_id(row.get("crc6f_employeeid"))
-            record_id = row.get("crc6f_permissionid")
-            if not employee_id or not record_id:
-                continue
-            try:
-                result = perform_checkout_v2(employee_id, tz_name=PERMISSION_TZ)
-                if result.get("success"):
-                    print(f"[PERMISSION-SCHEDULER] Auto-paused attendance for {employee_id} "
-                          f"(permission {row.get('crc6f_permission_code')})")
-                elif result.get("error") == "NO_ACTIVE_SESSION":
-                    print(f"[PERMISSION-SCHEDULER] {employee_id} had no active session at permission "
-                          f"start time - nothing to pause ({row.get('crc6f_permission_code')})")
-                else:
-                    print(f"[PERMISSION-SCHEDULER] Checkout failed for {employee_id}: {result.get('error')}")
-            except Exception as checkout_err:
-                print(f"[PERMISSION-SCHEDULER] Error force-checking-out {employee_id}: {checkout_err}")
-                traceback.print_exc()
-            finally:
-                # Mark processed regardless of outcome so we never retry/spam.
-                try:
-                    update_record(PERMISSION_ENTITY, record_id, {
-                        "crc6f_pausedat": datetime.now(timezone.utc).isoformat(),
-                    })
-                except Exception as mark_err:
-                    print(f"[PERMISSION-SCHEDULER] Failed to mark permission {record_id} as paused: {mark_err}")
+            _process_single_due_permission(row)
     except Exception as e:
         print(f"[PERMISSION-SCHEDULER] Tick error: {e}")
         traceback.print_exc()
@@ -537,7 +569,13 @@ def _process_compensation_fulfillment():
     hours worked, it just stays flagged as overdue - no retroactive penalty
     beyond whatever the original permission day's own status already reflects.
     """
-    from unified_server import _resolve_employee_shift, _shift_duration_minutes_from_times
+    import sys
+    _mod = sys.modules.get('unified_server') or sys.modules.get('__main__')
+    if _mod and hasattr(_mod, '_resolve_employee_shift'):
+        _resolve_employee_shift = _mod._resolve_employee_shift
+        _shift_duration_minutes_from_times = _mod._shift_duration_minutes_from_times
+    else:
+        from unified_server import _resolve_employee_shift, _shift_duration_minutes_from_times
 
     try:
         today_str = _now_local().date().isoformat()
@@ -602,9 +640,16 @@ def _tick():
             _scheduler_timer.start()
 
 
-def setup_permission_scheduler(app=None):
+# Global pointers to avoid circular imports
+RESOLVE_SHIFT_FUNC = None
+SHIFT_DURATION_FUNC = None
+
+def setup_permission_scheduler(app=None, resolve_func=None, duration_func=None):
     """Start the permission auto-pause scheduler. Safe to call multiple times."""
-    global _scheduler_running
+    global _scheduler_running, RESOLVE_SHIFT_FUNC, SHIFT_DURATION_FUNC
+    
+    if resolve_func: RESOLVE_SHIFT_FUNC = resolve_func
+    if duration_func: SHIFT_DURATION_FUNC = duration_func
 
     if _scheduler_running:
         print("[PERMISSION-SCHEDULER] Already running, skipping duplicate setup")

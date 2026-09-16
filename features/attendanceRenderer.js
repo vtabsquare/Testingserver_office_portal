@@ -151,7 +151,7 @@ export async function fetchAttendanceStatus(employeeId) {
  * Send check-in request to backend.
  * Frontend does NOT start timer - waits for backend confirmation.
  */
-export async function performCheckIn(employeeId, location = null) {
+export async function performCheckIn(employeeId, location = null, overtimeOptions = {}) {
     if (!employeeId) {
         throw new Error('Employee ID required');
     }
@@ -164,6 +164,12 @@ export async function performCheckIn(employeeId, location = null) {
     if (location) {
         payload.location = location;
     }
+    if (overtimeOptions?.confirmOvertime) {
+        payload.confirm_overtime = true;
+    }
+    if (overtimeOptions?.overtimeReason) {
+        payload.overtime_reason = overtimeOptions.overtimeReason;
+    }
     
     const response = await fetch(`${BASE_URL}/api/v2/attendance/checkin`, {
         method: 'POST',
@@ -174,6 +180,11 @@ export async function performCheckIn(employeeId, location = null) {
     const data = await response.json();
     
     if (!response.ok || !data.success) {
+        if (data.error === 'OVERTIME_CONFIRMATION_REQUIRED') {
+            const err = new Error(data.message || "You've already completed today's expected shift hours.");
+            err.code = 'OVERTIME_CONFIRMATION_REQUIRED';
+            throw err;
+        }
         throw new Error(data.message || data.error || 'Check-in failed');
     }
     
@@ -282,7 +293,7 @@ async function _handleMidnightReset(employeeId) {
     }
 }
 
-async function stopActiveTaskTimerOnCheckout(employeeId, checkoutUtc = null) {
+export async function stopActiveTaskTimerOnCheckout(employeeId, checkoutUtc = null) {
     const uid = String(employeeId || '').trim().toUpperCase();
     if (!uid) return;
 
@@ -641,8 +652,22 @@ export async function handleTimerClick() {
             console.log('[ATTENDANCE-RENDERER] Check-out successful');
         } else {
             // Check in
-            await performCheckIn(employeeId, location);
-            console.log('[ATTENDANCE-RENDERER] Check-in successful');
+            try {
+                await performCheckIn(employeeId, location);
+                console.log('[ATTENDANCE-RENDERER] Check-in successful');
+            } catch (checkinErr) {
+                if (checkinErr.code === 'OVERTIME_CONFIRMATION_REQUIRED') {
+                    const proceed = confirm(
+                        `${checkinErr.message}\n\nContinue checking in? This session will be logged as overtime.`
+                    );
+                    if (!proceed) return;
+                    const overtimeReason = (window.prompt('Optional: add a reason for this overtime check-in', '') || '').trim();
+                    await performCheckIn(employeeId, location, { confirmOvertime: true, overtimeReason });
+                    console.log('[ATTENDANCE-RENDERER] Overtime check-in successful');
+                } else {
+                    throw checkinErr;
+                }
+            }
         }
         
         // Refresh status to ensure sync

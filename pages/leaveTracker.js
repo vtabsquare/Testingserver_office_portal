@@ -1084,7 +1084,7 @@ export const showApplyLeaveModal = (options = {}) => {
 
   // Get today's date in YYYY-MM-DD format
   const today = new Date().toISOString().split("T")[0];
-  const dateMinAttr = applyForOthers ? "" : ` min="${today}"`;
+  const dateMinAttr = "";
   const employeeSelectionField = applyForOthers
     ? `
                     <div class="form-field with-icon">
@@ -1342,6 +1342,7 @@ export const showApplyLeaveModal = (options = {}) => {
       const refreshCompensationOptions = async () => {
         if (!leaveSel || !compSel) return;
         const leaveType = leaveSel.value;
+        const isHalf = getDayDurationMode() === "half";
         const paidOption = Array.from(compSel.options).find(
           (o) => o.value === "Paid"
         );
@@ -1352,7 +1353,7 @@ export const showApplyLeaveModal = (options = {}) => {
         const targetEmpId = getTargetEmployeeId();
         setSubmitDisabled(applyForOthers && !targetEmpId);
 
-        if (!targetEmpId) {
+        if (!targetEmpId || isHalf) {
           if (paidOption) paidOption.disabled = true;
           if (compOffOption) compOffOption.disabled = true;
           compSel.value = "Unpaid";

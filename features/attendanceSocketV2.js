@@ -3,7 +3,27 @@
 // On any event, client fetches fresh data from backend API
 
 import { state } from '../state.js';
-import { fetchAttendanceStatus, updateTimerDisplay } from './attendanceRenderer.js';
+import {
+    fetchAttendanceStatus,
+    updateTimerDisplay,
+    isCheckedIn,
+    stopActiveTaskTimerOnCheckout,
+} from './attendanceRenderer.js';
+
+// If a status refresh shows the employee is no longer checked in (e.g. the
+// expected-checkout / permission auto-pause schedulers force-checked them
+// out server-side), make sure any task timer still ticking locally in "My
+// Tasks" is stopped too - mirrors what performCheckOut() already does for a
+// manual checkout initiated from this browser.
+async function syncTaskTimerWithAttendance(employeeId) {
+    try {
+        if (!isCheckedIn()) {
+            await stopActiveTaskTimerOnCheckout(employeeId);
+        }
+    } catch (err) {
+        console.warn('[ATTENDANCE-SOCKET-V2] Failed to sync task timer with attendance state:', err);
+    }
+}
 
 let socket = null;
 let isConnected = false;
@@ -129,6 +149,7 @@ function setupEventHandlers() {
         // ✅ Fetch fresh data from backend
         await fetchAttendanceStatus(employeeId);
         updateTimerDisplay();
+        await syncTaskTimerWithAttendance(employeeId);
     });
 
     // Server says refresh needed
@@ -141,6 +162,7 @@ function setupEventHandlers() {
         // ✅ Fetch fresh data from backend
         await fetchAttendanceStatus(employeeId);
         updateTimerDisplay();
+        await syncTaskTimerWithAttendance(employeeId);
     });
 
     // ================== LEGACY EVENT HANDLERS ==================
@@ -171,6 +193,7 @@ function setupEventHandlers() {
         if (employeeId) {
             await fetchAttendanceStatus(employeeId);
             updateTimerDisplay();
+            await syncTaskTimerWithAttendance(employeeId);
         }
     });
 
@@ -185,6 +208,7 @@ function setupEventHandlers() {
         if (employeeId) {
             await fetchAttendanceStatus(employeeId);
             updateTimerDisplay();
+            await syncTaskTimerWithAttendance(employeeId);
         }
     });
 

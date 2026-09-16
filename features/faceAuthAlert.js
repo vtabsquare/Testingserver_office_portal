@@ -20,13 +20,6 @@ const MISSED_THRESHOLD_MS = 30 * 60 * 1000;      // Mark as "missed" 30 min afte
 const MISSED_AUTO_HIDE_MS = 15 * 60 * 1000;      // Auto-hide missed alert after 15 min
 const CHECK_INTERVAL_MS = 60 * 1000;             // Check every 1 minute
 
-// TESTING MODE - 1 minute cycle (uncomment for testing)
-// const REVERIFY_INTERVAL_MS = 1 * 60 * 1000;      // 1 minute for testing
-// const WARNING_THRESHOLD_MS = 15 * 1000;          // Show warning 15 seconds before due
-// const MISSED_THRESHOLD_MS = 30 * 1000;           // Mark as "missed" 30 seconds after due
-// const MISSED_AUTO_HIDE_MS = 2 * 60 * 1000;       // Auto-hide missed alert after 2 min (testing)
-// const CHECK_INTERVAL_MS = 5 * 1000;              // Check every 5 seconds for faster testing
-
 // FaceAuth URL (should match backend config)
 const FACEAUTH_VERIFY_URL = 'https://biometrics.vtabsquare.com/external-verify';
 
@@ -820,9 +813,12 @@ function updateAlertUI(statusData) {
 }
 
 /**
- * Redirect to FaceAuth for re-verification
+ * Redirect to FaceAuth for re-verification.
+ * Exported so a dedicated route (e.g. the deep link opened by the Monitoring
+ * Tool's native OS notification) can trigger the exact same flow as the
+ * in-app banner's "Verify Now" button.
  */
-async function redirectToFaceAuth() {
+export async function redirectToFaceAuth() {
     let token = localStorage.getItem('face_auth_token') || sessionStorage.getItem('face_auth_token');
     
     // Fallback to standard authToken if face_auth_token was somehow cleared

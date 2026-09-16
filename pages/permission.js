@@ -7,6 +7,8 @@ import {
   fetchPermissionRequests,
 } from "../features/permissionApi.js";
 import { fetchShiftSettings } from "../features/shiftSettingsApi.js";
+import { listEmployees } from "../features/employeeApi.js";
+import { isAdminUser } from "../utils/accessControl.js";
 
 // -------------------------------------------------------------
 // Local time helpers (disable past times for today's date)
@@ -60,6 +62,7 @@ const getPermissionContentHTML = () => {
             <td>${req.reason || "-"}</td>
             <td><span class="status-badge ${req.status.toLowerCase()}">${req.status}</span></td>
             <td>${formatCompensationLabel(req)}</td>
+            <td>${req.appliedForOthers ? `👤 ${req.appliedBy || "Admin"}` : "-"}</td>
         </tr>
     `
     )
@@ -82,11 +85,12 @@ const getPermissionContentHTML = () => {
                             <th>Reason</th>
                             <th>Status</th>
                             <th>Compensation</th>
+                            <th>Applied By Admin</th>
                         </tr>
                     </thead>
                     <tbody>
                         ${requestRows ||
-    `<tr><td colspan="5" class="placeholder-text">No permission requests found.</td></tr>`
+    `<tr><td colspan="6" class="placeholder-text">No permission requests found.</td></tr>`
     }
                     </tbody>
                 </table>
@@ -114,10 +118,20 @@ export const renderPermissionPage = async () => {
     state.permissionRequests = [];
   }
 
-  const controls = `
-    <button id="request-permission-btn" class="btn btn-primary">
-      <i class="fa-solid fa-plus"></i> REQUEST PERMISSION
+  const applyForOthersBtn = isAdminUser()
+    ? `
+    <button id="apply-permission-others-btn" class="btn btn-secondary">
+      <i class="fa-solid fa-user-plus"></i> APPLY FOR OTHERS
     </button>
+  `
+    : "";
+  const controls = `
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <button id="request-permission-btn" class="btn btn-primary">
+          <i class="fa-solid fa-plus"></i> REQUEST PERMISSION
+        </button>
+        ${applyForOthersBtn}
+    </div>
   `;
   const content = getPermissionContentHTML();
 
@@ -126,19 +140,29 @@ export const renderPermissionPage = async () => {
     content,
     controls
   );
-  // Note: the "REQUEST PERMISSION" button click is handled by the global
-  // delegated click listener in index.js (mirrors request-compoff-btn).
+  // Note: the "REQUEST PERMISSION" / "APPLY FOR OTHERS" button clicks are
+  // handled by the global delegated click listener in index.js (mirrors
+  // request-compoff-btn).
 };
 
-export const showRequestPermissionModal = async () => {
+export const showRequestPermissionModal = async (options = {}) => {
+  const applyForOthers = Boolean(options?.applyForOthers);
+
+  if (applyForOthers && !isAdminUser()) {
+    alert("Only admins can apply permission for other employees.");
+    return;
+  }
+
   const today = getTodayDateStr();
   const nowTime = getNowTimeStr();
+  const selfEmpId = String(state.user?.id || state.user?.employee_id || "").toUpperCase();
 
   // Look up the employee's work week (mon-fri / mon-sat) to constrain the
   // "Compensate This Week" makeup-day picker to real remaining work days.
+  // For "apply for others" this is refreshed once an employee is picked.
   let workWeek = "mon-sat";
   try {
-    const empId = state.user?.id || state.user?.employee_id;
+    const empId = applyForOthers ? "" : selfEmpId;
     const settings = await fetchShiftSettings();
     const row = (settings?.employees || []).find(
       (e) => String(e.employee_id || "").toUpperCase() === String(empId || "").toUpperCase()
@@ -149,13 +173,26 @@ export const showRequestPermissionModal = async () => {
   }
   const remainingWorkDates = getRemainingWorkWeekDates(workWeek);
 
+  const employeeSelectionField = applyForOthers
+    ? `
+                    <div class="form-field">
+                        <label class="form-label" for="permissionEmployeeId">Employee</label>
+                        <select id="permissionEmployeeId" class="input-control" required>
+                            <option value="" selected>Select employee</option>
+                        </select>
+                    </div>
+      `
+    : "";
+
   const formHTML = `
         <div class="modal-form modern-form leave-form permission-request-form">
+            <input type="hidden" id="permission-apply-mode" value="${applyForOthers ? "others" : "self"}">
             <div class="form-section">
                 <div class="form-grid">
+                    ${employeeSelectionField}
                     <div class="form-field">
                         <label class="form-label" for="permissionDate">Date</label>
-                        <input type="date" id="permissionDate" class="input-control" min="${today}" value="${today}" required>
+                        <input type="date" id="permissionDate" class="input-control" value="${today}" ${applyForOthers ? "readonly" : ""} required>
                     </div>
                     <div class="form-field">
                         <label class="form-label" for="permissionStartTime">Start Time</label>
@@ -165,7 +202,7 @@ export const showRequestPermissionModal = async () => {
                         <label class="form-label" for="permissionEndTime">End Time</label>
                         <input type="time" id="permissionEndTime" class="input-control" required>
                     </div>
-                    <div class="form-field">
+                    <div class="form-field" style="grid-column: 1 / -1;">
                         <label class="form-label" for="permissionReason">Reason</label>
                         <textarea id="permissionReason" class="input-control" rows="4" placeholder="Enter reason" required></textarea>
                     </div>
@@ -197,23 +234,45 @@ export const showRequestPermissionModal = async () => {
             </div>
         </div>
     `;
-  renderModal("Request Permission", formHTML, "submit-permission-btn");
+  renderModal(
+    applyForOthers ? "Apply Permission for Others" : "Request Permission",
+    formHTML,
+    "submit-permission-btn",
+    "normal",
+    applyForOthers ? "Apply Permission" : "Submit"
+  );
 
-  // Disable past start times when the selected date is today.
+  // Populate the employee dropdown for "apply for others".
+  if (applyForOthers) {
+    const employeeSel = document.getElementById("permissionEmployeeId");
+    if (employeeSel) {
+      try {
+        const allEmployees = await listEmployees(1, 5000);
+        const options = (allEmployees.items || [])
+          .map((emp) => {
+            const employeeId = String(emp.employee_id || emp.id || "").trim().toUpperCase();
+            const employeeName =
+              `${emp.first_name || ""} ${emp.last_name || ""}`.trim() || emp.name || employeeId;
+            return { employeeId, employeeName };
+          })
+          .filter((emp) => emp.employeeId && emp.employeeId !== selfEmpId)
+          .sort((a, b) => a.employeeName.localeCompare(b.employeeName, undefined, { sensitivity: "base" }));
+
+        options.forEach((emp) => {
+          const option = document.createElement("option");
+          option.value = emp.employeeId;
+          option.textContent = `${emp.employeeName} (${emp.employeeId})`;
+          employeeSel.appendChild(option);
+        });
+      } catch (err) {
+        console.warn("Failed to load employee options for apply-for-others:", err);
+        employeeSel.innerHTML = '<option value="" selected>Unable to load employees</option>';
+      }
+    }
+  }
+
   const dateInput = document.getElementById("permissionDate");
   const startInput = document.getElementById("permissionStartTime");
-  const applyMinTime = () => {
-    if (dateInput.value === today) {
-      startInput.min = nowTime;
-      if (startInput.value && startInput.value < nowTime) {
-        startInput.value = "";
-      }
-    } else {
-      startInput.removeAttribute("min");
-    }
-  };
-  dateInput?.addEventListener("change", applyMinTime);
-  applyMinTime();
 
   // Show/hide the makeup-day picker based on the selected compensation mode.
   const makeupField = document.getElementById("permissionMakeupDateField");
@@ -227,7 +286,20 @@ export const showRequestPermissionModal = async () => {
 export const handleRequestPermission = async (e) => {
   e.preventDefault();
 
-  const employeeId = state.user?.id || state.user?.employee_id;
+  const applyMode = String(
+    document.getElementById("permission-apply-mode")?.value || "self"
+  ).trim().toLowerCase();
+  const applyForOthers = applyMode === "others";
+  const selfEmpId = String(state.user?.id || state.user?.employee_id || "").toUpperCase();
+
+  if (applyForOthers && !isAdminUser()) {
+    alert("Only admins can apply permission for other employees.");
+    return;
+  }
+
+  const employeeId = applyForOthers
+    ? String(document.getElementById("permissionEmployeeId")?.value || "").trim().toUpperCase()
+    : selfEmpId;
   const date = document.getElementById("permissionDate")?.value || "";
   const startTime = document.getElementById("permissionStartTime")?.value || "";
   const endTime = document.getElementById("permissionEndTime")?.value || "";
@@ -236,6 +308,11 @@ export const handleRequestPermission = async (e) => {
   const compensationMode =
     document.querySelector('input[name="compensationMode"]:checked')?.value || "none";
   const makeupDate = document.getElementById("permissionMakeupDate")?.value || "";
+
+  if (applyForOthers && !employeeId) {
+    alert("Please select an employee.");
+    return;
+  }
 
   if (!employeeId || !date || !startTime || !endTime || !trimmedReason) {
     alert("Please fill all required fields.");
@@ -248,10 +325,6 @@ export const handleRequestPermission = async (e) => {
   }
 
   const today = getTodayDateStr();
-  if (date === today && startTime < getNowTimeStr()) {
-    alert("Start time cannot be in the past.");
-    return;
-  }
   if (date < today) {
     alert("Cannot apply permission for a past date.");
     return;
@@ -270,6 +343,8 @@ export const handleRequestPermission = async (e) => {
       reason: trimmedReason,
       compensation_mode: compensationMode,
       makeup_date: compensationMode === "week" ? makeupDate : undefined,
+      applied_for_others: applyForOthers,
+      applied_by: applyForOthers ? selfEmpId : undefined,
     });
     closeModal();
     await renderPermissionPage();
