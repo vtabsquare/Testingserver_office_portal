@@ -118,14 +118,22 @@ def supabase_fetch_open_login_rows(employee_id, prefer_date=None):
             sb.table(LOGIN_ACTIVITY_ENTITY)
             .select("*")
             .eq(LA_FIELD_EMPLOYEE_ID, emp)
-            .is_(LA_FIELD_CHECKOUT_TS, "null")
         )
         try:
             q = q.not_.is_(LA_FIELD_CHECKIN_TS, "null")
         except Exception:
             pass
         resp = q.order(LA_FIELD_DATE, desc=True).limit(15).execute()
-        rows = resp.data or []
+        
+        # Filter for open sessions (checkout is null or 0)
+        open_rows = []
+        for row in (resp.data or []):
+            checkout_ts = row.get(LA_FIELD_CHECKOUT_TS)
+            if checkout_ts is not None and checkout_ts != 0:
+                continue
+            open_rows.append(row)
+            
+        rows = open_rows
         if prefer_date:
             today_rows = []
             for row in rows:
@@ -1079,12 +1087,14 @@ def list_employee_ids_with_open_session_today(tz_name="Asia/Calcutta"):
             sb = _supabase_client()
             query = (
                 sb.table(LOGIN_ACTIVITY_ENTITY)
-                .select(f"{LA_FIELD_EMPLOYEE_ID},{LA_FIELD_DATE}")
-                .or_(f"{LA_FIELD_CHECKOUT_TS}.is.null,{LA_FIELD_CHECKOUT_TS}.eq.0")
+                .select(f"{LA_FIELD_EMPLOYEE_ID},{LA_FIELD_DATE},{LA_FIELD_CHECKOUT_TS}")
                 .not_.is_(LA_FIELD_CHECKIN_TS, "null")
             )
             resp = query.limit(5000).execute()
             for row in resp.data or []:
+                checkout_ts = row.get(LA_FIELD_CHECKOUT_TS)
+                if checkout_ts is not None and checkout_ts != 0:
+                    continue
                 row_date = str(row.get(LA_FIELD_DATE) or "")[:10]
                 if row_date != local_today:
                     continue
