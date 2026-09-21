@@ -171,6 +171,7 @@ def create_permission():
     end_time_str = ""
     date_str = ""
     try:
+        now_local = _now_local()
         data = request.get_json() or {}
         employee_id = _normalize_employee_id(data.get('employee_id') or data.get('employeeId'))
         date_str = str(data.get('date') or '').strip()
