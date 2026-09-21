@@ -96,47 +96,31 @@ def _process_expected_checkouts():
                 # Check both Dataverse (att_record.metadata) AND Supabase directly,
                 # because Dataverse OData may not return the 'metadata' JSONB column.
                 _is_overtime_session = False
+                # Supabase direct check is fast and reliable for overtime metadata
                 try:
-                    att_record = fetch_attendance_record(employee_id, session_date)
-                    if att_record:
-                        meta = att_record.get("metadata") or {}
-                        if isinstance(meta, str):
+                    from supabase_helper import get_supabase as _get_sb
+                    _sb = _get_sb()
+                    _sb_resp = (
+                        _sb.table("crc6f_table13s")
+                        .select("metadata")
+                        .eq("crc6f_employeeid", employee_id)
+                        .eq("crc6f_date", session_date)
+                        .limit(1)
+                        .execute()
+                    )
+                    for _sb_row in (_sb_resp.data or []):
+                        _sb_meta = _sb_row.get("metadata") or {}
+                        if isinstance(_sb_meta, str):
                             import json
                             try:
-                                meta = json.loads(meta)
+                                _sb_meta = json.loads(_sb_meta)
                             except Exception:
-                                meta = {}
-                        if meta.get("is_overtime"):
+                                _sb_meta = {}
+                        if _sb_meta.get("is_overtime"):
                             _is_overtime_session = True
-                except Exception:
-                    pass
-
-                # Supabase direct check as authoritative fallback
-                if not _is_overtime_session:
-                    try:
-                        from supabase_helper import get_supabase as _get_sb
-                        _sb = _get_sb()
-                        _sb_resp = (
-                            _sb.table("crc6f_table13s")
-                            .select("metadata")
-                            .eq("crc6f_employeeid", employee_id)
-                            .eq("crc6f_date", session_date)
-                            .limit(1)
-                            .execute()
-                        )
-                        for _sb_row in (_sb_resp.data or []):
-                            _sb_meta = _sb_row.get("metadata") or {}
-                            if isinstance(_sb_meta, str):
-                                import json
-                                try:
-                                    _sb_meta = json.loads(_sb_meta)
-                                except Exception:
-                                    _sb_meta = {}
-                            if _sb_meta.get("is_overtime"):
-                                _is_overtime_session = True
-                                break
-                    except Exception as _sb_err:
-                        print(f"[EXPECTED-CHECKOUT-SCHEDULER] Supabase overtime check failed for {employee_id}: {_sb_err}")
+                            break
+                except Exception as _sb_err:
+                    print(f"[EXPECTED-CHECKOUT-SCHEDULER] Supabase overtime check failed for {employee_id}: {_sb_err}")
 
                 if _is_overtime_session:
                     print(f"[EXPECTED-CHECKOUT-SCHEDULER] SKIPPING {employee_id} on {session_date} - is_overtime=True")
