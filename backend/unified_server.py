@@ -18692,16 +18692,12 @@ except Exception as _face_err:
     print(f"[WARN] Failed to start face auth scheduler: {_face_err}")
 
 if __name__ == '__main__':
-    print('
-' + '== ' * 30)
+    print('\n' + '== ' * 30)
     print('UNIFIED OFFICE TOOL SERVER STARTING...')
-    print('== ' * 30 + '
-')
+    print('== ' * 30 + '\n')
     print('Server running on: http://localhost:5000')
     print('Frontend should connect to: http://localhost:5000/api/*')
-    print('
-' + '='*80 + '
-')
+    print('\n' + '='*80 + '\n')
 
     # IMPORTANT: use_reloader=False prevents Werkzeug from spawning a parent+child
 
