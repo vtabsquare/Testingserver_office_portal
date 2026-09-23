@@ -711,15 +711,11 @@ export const renderMyTasksPage = async () => {
 
             if (!result.success || !result.active_timer) {
                 if (localActive && !localActive.paused) {
-                    console.warn('[MY_TASKS] Backend has no active timer but local is running. Syncing...');
-                    if (!isCheckedIn()) {
-                        // User is checked out (e.g. expected checkout auto-pause), force stop task timer
-                        await stopActiveTaskTimerOnCheckout(empId);
-                    } else {
-                        // Backend just lost the timer for some other reason, clear it
-                        clearActive();
-                        window.dispatchEvent(new CustomEvent('taskTimerStopped', { detail: { reason: 'backend_sync' } }));
-                    }
+                    // Backend is source of truth: if it has no active timer, always stop the local one.
+                    // Do NOT rely on isCheckedIn() — its cache is stale right after auto-checkout.
+                    console.warn('[MY_TASKS] Backend has no active timer but local is running. Force stopping...');
+                    clearActive();
+                    window.dispatchEvent(new CustomEvent('taskTimerStopped', { detail: { reason: 'backend_sync' } }));
                 }
                 return;
             }
