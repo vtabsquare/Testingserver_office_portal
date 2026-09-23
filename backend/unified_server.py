@@ -18667,38 +18667,44 @@ try:
 except Exception as wrapper_err:
     print(f"[INIT] Failed to bind V1 Monitoring wrappers: {wrapper_err}")
 
+
+try:
+    setup_overdue_scheduler(app)
+except Exception as _overdue_err:
+    print(f"[WARN] Failed to start overdue tasks scheduler: {_overdue_err}")
+
+try:
+    from permission import setup_permission_scheduler
+    setup_permission_scheduler(app, _resolve_employee_shift, _shift_duration_minutes_from_times)
+except Exception as _perm_sched_err:
+    print(f"[WARN] Failed to start permission scheduler: {_perm_sched_err}")
+
+try:
+    from expected_checkout_scheduler import setup_expected_checkout_scheduler
+    setup_expected_checkout_scheduler(app, _resolve_employee_shift, _shift_duration_minutes_from_times)
+except Exception as _exp_sched_err:
+    print(f"[WARN] Failed to start expected-checkout scheduler: {_exp_sched_err}")
+    
+try:
+    from face_auth_alert_scheduler import setup_face_auth_alert_scheduler
+    setup_face_auth_alert_scheduler(app)
+except Exception as _face_err:
+    print(f"[WARN] Failed to start face auth scheduler: {_face_err}")
+
 if __name__ == '__main__':
-    print('\n' + '== ' * 30)
+    print('
+' + '== ' * 30)
     print('UNIFIED OFFICE TOOL SERVER STARTING...')
-    print('== ' * 30 + '\n')
+    print('== ' * 30 + '
+')
     print('Server running on: http://localhost:5000')
     print('Frontend should connect to: http://localhost:5000/api/*')
-    print('\n' + '='*80 + '\n')
+    print('
+' + '='*80 + '
+')
 
-    try:
-        setup_overdue_scheduler(app)
-    except Exception as _overdue_err:
-        print(f"[WARN] Failed to start overdue tasks scheduler: {_overdue_err}")
-    
-    try:
-        from permission import setup_permission_scheduler
-        setup_permission_scheduler(app, _resolve_employee_shift, _shift_duration_minutes_from_times)
-    except Exception as _perm_sched_err:
-        print(f"[WARN] Failed to start permission scheduler: {_perm_sched_err}")
-    
-    try:
-        from expected_checkout_scheduler import setup_expected_checkout_scheduler
-        setup_expected_checkout_scheduler(app, _resolve_employee_shift, _shift_duration_minutes_from_times)
-    except Exception as _exp_sched_err:
-        print(f"[WARN] Failed to start expected-checkout scheduler: {_exp_sched_err}")
-        
-    try:
-        from face_auth_alert_scheduler import setup_face_auth_alert_scheduler
-        setup_face_auth_alert_scheduler(app)
-    except Exception as _face_err:
-        print(f"[WARN] Failed to start face auth scheduler: {_face_err}")
-    
     # IMPORTANT: use_reloader=False prevents Werkzeug from spawning a parent+child
+
     # process pair. With use_reloader=True (default when debug=True), background
     # scheduler threads run in BOTH processes, and the parent process never reloads
     # code on file save — causing "ghost" schedulers running stale logic forever.
