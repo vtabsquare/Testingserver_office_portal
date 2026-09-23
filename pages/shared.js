@@ -514,7 +514,7 @@ export const renderTimeTrackerPage = () => {
 // Time Tracker subpages (placeholders)
 export const renderMyTasksPage = async () => {
     const user = state?.user || window.state?.user || {};
-    let empId = String((user.id || user.employee_id || user.employeeId || '')).trim();
+    let empId = String((user.id || user.employee_id || user.employeeId || '')).trim().toUpperCase();
     const empName = String((user.name || user.fullName || user.username || '')).trim();
     const email = String((user.email || user.mail || '')).trim();
 
@@ -1302,7 +1302,7 @@ export const renderMyTasksPage = async () => {
 export const renderMyTimesheetPage = async () => {
     const API = `${apiBase}/api`;
     const user = state?.user || window.state?.user || {};
-    let empId = String((user.id || user.employee_id || user.employeeId || '')).trim();
+    let empId = String((user.id || user.employee_id || user.employeeId || '')).trim().toUpperCase();
     let userNameLc = String((user.name || user.fullName || user.username || '')).trim().toLowerCase();
     if (!empId) {
         try { empId = await resolveCurrentEmployeeId(); } catch { }
