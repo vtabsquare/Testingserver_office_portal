@@ -1240,12 +1240,20 @@ export const renderMyTasksPage = async () => {
         // Update button states initially
         updatePlayButtonStates();
         
-        // Set up a periodic check to update button states when check-in status changes
-        // This handles the case where user checks in/out while on My Tasks page
+        // Set up a periodic check to update button states when check-in status changes.
+        // Every 30 seconds, also sync with the backend to detect auto-checkouts (e.g. from
+        // the expected-checkout scheduler) that stop the task timer without a page reload.
         if (checkInStateInterval) clearInterval(checkInStateInterval);
+        let _syncTickCounter = 0;
         checkInStateInterval = setInterval(() => {
             updatePlayButtonStates();
+            _syncTickCounter++;
+            if (_syncTickCounter >= 30) {
+                _syncTickCounter = 0;
+                syncActiveTimerFromBackend().catch(() => {});
+            }
         }, 1000);
+
 
         // Repaint immediately (instead of waiting for the next 1s tick) when
         // attendance checkout (manual OR auto-pause via the expected-checkout /

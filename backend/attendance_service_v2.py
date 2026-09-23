@@ -504,7 +504,8 @@ def _apply_force_logout_checkout_if_needed(employee_id, tz_name, username=None):
 
 def fetch_open_login_activity_for_checkout(employee_id, today_date=None):
     """
-    Find an open login-activity row for checkout. Prefer today's local date, then any open row.
+    Find an open login-activity row for checkout. Supabase-only (no Dataverse).
+    This keeps the expected-checkout scheduler fast — no 15s timeouts per employee.
     """
     emp = (employee_id or "").strip().upper()
     if not emp:
@@ -519,48 +520,9 @@ def fetch_open_login_activity_for_checkout(employee_id, today_date=None):
         if checkin_ts_val and not has_checkout:
             return row, row_date or today_date
 
-    if today_date:
-        la = fetch_login_activity(emp, today_date)
-        if la:
-            checkin_ts_val = la.get(LA_FIELD_CHECKIN_TS)
-            has_checkout = la.get(LA_FIELD_CHECKOUT_TS) or la.get(LA_FIELD_CHECKOUT_TIME)
-            if checkin_ts_val and not has_checkout:
-                return la, today_date
-
-    try:
-        token = get_access_token()
-        headers = _get_headers(token)
-        s = get_dataverse_session()
-        safe_emp = emp.replace("'", "''")
-        filter_q = (
-            f"$filter={LA_FIELD_EMPLOYEE_ID} eq '{safe_emp}' "
-            f"and {LA_FIELD_CHECKIN_TS} ne null "
-            f"and ({LA_FIELD_CHECKOUT_TS} eq null or {LA_FIELD_CHECKOUT_TS} eq 0)"
-        )
-        url = f"{_get_base_url()}/{LOGIN_ACTIVITY_ENTITY}?{filter_q}&$orderby={LA_FIELD_DATE} desc&$top=20"
-        resp = s.get(url, headers=headers, timeout=15)
-        if resp.status_code != 200:
-            return None, None
-
-        preferred = None
-        preferred_date = None
-        fallback = None
-        fallback_date = None
-        for row in resp.json().get("value", []):
-            row_date = str(row.get(LA_FIELD_DATE) or "")[:10]
-            checkin_ts_val = row.get(LA_FIELD_CHECKIN_TS)
-            has_checkout = row.get(LA_FIELD_CHECKOUT_TS) or row.get(LA_FIELD_CHECKOUT_TIME)
-            if not checkin_ts_val or has_checkout:
-                continue
-            if today_date and row_date == today_date:
-                return row, row_date
-            if not fallback:
-                fallback = row
-                fallback_date = row_date
-        return fallback, fallback_date
-    except Exception as e:
-        print(f"[ATTENDANCE-V2] fetch_open_login_activity_for_checkout error: {e}")
-        return None, None
+    # No open session found in Supabase for this employee today.
+    print(f"[ATTENDANCE-V2] fetch_open_login_activity_for_checkout: no open session for {emp} on {today_date}")
+    return None, None
 
 
 def _auto_close_stale_sessions(employee_id, tz_name="Asia/Calcutta"):
