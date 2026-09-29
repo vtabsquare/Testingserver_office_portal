@@ -149,8 +149,182 @@ def _write_entries(entries):
     os.replace(tmp, ENTRIES_FILE)
 
 
+def _fetch_task_meta_by_guid(task_guid: str) -> dict:
+    """
+    Look up task metadata (task_id, task_name, project_id) from Dataverse by guid.
+    Returns a dict with those keys, or empty dict on any failure.
+    This is used by auto-checkout to get the details needed to punch the timesheet.
+    """
+    try:
+        token = get_access_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "OData-Version": "4.0",
+        }
+        safe_guid = str(task_guid or "").strip().replace("'", "''")
+        url = (
+            f"{RESOURCE}{DV_API}/{ENTITY_SET_TASKS}"
+            f"({safe_guid})"
+            f"?$select=crc6f_taskid,crc6f_taskname,crc6f_projectid"
+        )
+        resp = get_dataverse_session().get(url, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                "task_id": data.get("crc6f_taskid") or "",
+                "task_name": data.get("crc6f_taskname") or "",
+                "project_id": data.get("crc6f_projectid") or "",
+            }
+    except Exception as e:
+        print(f"[AUTO-CHECKOUT] _fetch_task_meta_by_guid({task_guid}) failed: {e}")
+    return {}
+
+
+def _punch_timesheet_for_stopped_entry(rec: dict):
+    """
+    After auto-checkout stops a time entry, call this to write the elapsed time
+    into the Dataverse timesheet log — exactly the same as the manual stop flow.
+    rec must have: task_guid, user_id, start, end
+    """
+    try:
+        uid = str(rec.get("user_id") or "").strip().upper()
+        task_guid = str(rec.get("task_guid") or "").strip()
+        start_iso = rec.get("start") or ""
+        end_iso = rec.get("end") or ""
+
+        if not uid or not task_guid or not start_iso or not end_iso:
+            print(f"[AUTO-CHECKOUT] Skipping timesheet punch – missing fields: {rec}")
+            return
+
+        start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+        elapsed_seconds = int((end_dt - start_dt).total_seconds())
+
+        if elapsed_seconds <= 0:
+            print(f"[AUTO-CHECKOUT] Skipping timesheet punch – elapsed={elapsed_seconds}s for {uid} task={task_guid}")
+            return
+
+        # Look up task details from Dataverse
+        meta = _fetch_task_meta_by_guid(task_guid)
+        task_id = meta.get("task_id") or ""
+        task_name = meta.get("task_name") or task_id or task_guid
+        project_id = meta.get("project_id") or ""
+
+        # Calculate work_date in local IST (same timezone as the scheduler)
+        # Use end time as the work date anchor (the checkout moment)
+        work_date = end_dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+        billing_type = get_billing_type_for_contributor(uid, project_id)
+
+        token = get_access_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "OData-Version": "4.0",
+        }
+
+        hours_worked = round(elapsed_seconds / 3600, 4)
+        payload = {
+            "crc6f_employeeid": uid,
+            "crc6f_projectid": project_id,
+            "crc6f_taskid": task_id,
+            "crc6f_taskguid": task_guid,
+            "crc6f_taskname": task_name,
+            "crc6f_hoursworked": hours_worked,
+            "crc6f_workdescription": "",
+            "crc6f_approvalstatus": "Pending",
+            "crc6f_billingtype": billing_type,
+            "crc6f_workdate": work_date,
+        }
+        payload = {k: v for k, v in payload.items() if v is not None and v != ""}
+
+        # Check for existing Dataverse record for this (employee, task, date) and upsert
+        safe_emp = uid.replace("'", "''")
+        safe_date = work_date.replace("'", "''")
+        filter_parts = [
+            f"crc6f_employeeid eq '{safe_emp}'",
+            f"crc6f_workdate ge '{safe_date}'",
+            f"crc6f_workdate le '{safe_date}'",
+        ]
+        if project_id:
+            filter_parts.append(f"crc6f_projectid eq '{project_id.replace(chr(39), chr(39)*2)}'")
+        if task_id:
+            filter_parts.append(f"crc6f_taskid eq '{task_id.replace(chr(39), chr(39)*2)}'")
+        elif task_guid:
+            filter_parts.append(f"crc6f_taskguid eq '{task_guid.replace(chr(39), chr(39)*2)}'")
+
+        lookup_url = (
+            f"{RESOURCE}{DV_API}/crc6f_hr_timesheetlogs"
+            f"?$filter={' and '.join(filter_parts)}&$select=crc6f_hr_timesheetlogid,crc6f_hoursworked&$top=1"
+        )
+        lookup_resp = get_dataverse_session().get(lookup_url, headers=headers, timeout=15)
+        dv_saved = False
+        dv_id = None
+
+        if lookup_resp.status_code == 200:
+            existing = lookup_resp.json().get("value", [])
+            if existing:
+                row = existing[0]
+                dv_id = row.get("crc6f_hr_timesheetlogid")
+                prev_hours = float(row.get("crc6f_hoursworked") or 0)
+                merged_hours = round(prev_hours + hours_worked, 4)
+                patch_url = f"{RESOURCE}{DV_API}/crc6f_hr_timesheetlogs({dv_id})"
+                patch_resp = get_dataverse_session().patch(
+                    patch_url,
+                    headers=headers,
+                    json={"crc6f_hoursworked": merged_hours},
+                    timeout=15,
+                )
+                dv_saved = patch_resp.status_code in (200, 204)
+                print(f"[AUTO-CHECKOUT] PATCH timesheet {uid} task={task_id} date={work_date} -> {merged_hours}h status={patch_resp.status_code}")
+            else:
+                post_url = f"{RESOURCE}{DV_API}/crc6f_hr_timesheetlogs"
+                post_resp = get_dataverse_session().post(post_url, headers=headers, json=payload, timeout=15)
+                dv_saved = post_resp.status_code in (200, 201, 204)
+                print(f"[AUTO-CHECKOUT] POST timesheet {uid} task={task_id} date={work_date} -> {hours_worked}h status={post_resp.status_code}")
+
+        # Always write to local logs as a safety net (even if Dataverse succeeds)
+        logs = _read_logs()
+        found = False
+        for r in logs:
+            if (
+                r.get("employee_id") == uid
+                and _same_task_identity(r.get("task_guid"), r.get("task_id"), task_guid, task_id)
+                and r.get("work_date") == work_date
+            ):
+                r["seconds"] = int(r.get("seconds") or 0) + elapsed_seconds
+                r["dv_id"] = dv_id or r.get("dv_id")
+                r["sync_pending"] = not dv_saved
+                found = True
+                break
+        if not found:
+            logs.append({
+                "id": f"LOG-AUTO-{int(datetime.now().timestamp()*1000)}",
+                "employee_id": uid,
+                "project_id": project_id,
+                "task_guid": task_guid or None,
+                "task_id": task_id or None,
+                "task_name": task_name,
+                "seconds": elapsed_seconds,
+                "work_date": work_date,
+                "description": "",
+                "dv_id": dv_id,
+                "sync_pending": not dv_saved,
+                "last_sync_error": "" if dv_saved else "Auto-checkout Dataverse write failed",
+                "created_at": _now_iso(),
+            })
+        _write_logs(logs)
+        print(f"[AUTO-CHECKOUT] Timesheet punch complete: {uid} task={task_id} {elapsed_seconds}s -> {work_date} dv_saved={dv_saved}")
+
+    except Exception as e:
+        print(f"[AUTO-CHECKOUT] _punch_timesheet_for_stopped_entry failed (non-blocking): {e}")
+        traceback.print_exc()
+
+
 def stop_active_task_entries_for_user(user_id, stop_iso=None):
-    """Force-stop all active task entries for a user (best-effort helper)."""
+    """Force-stop all active task entries for a user and punch their time into the timesheet."""
     uid = str(user_id or "").strip().upper()
     if not uid:
         return {"stopped": 0}
@@ -158,15 +332,20 @@ def stop_active_task_entries_for_user(user_id, stop_iso=None):
     entries = _read_entries()
     stopped = 0
     stop_value = stop_iso or _now_iso()
+    stopped_entries = []
 
     for rec in entries:
         rec_uid = str(rec.get("user_id") or "").strip().upper()
         if rec_uid == uid and not rec.get("end"):
             rec["end"] = stop_value
             stopped += 1
+            stopped_entries.append(dict(rec))  # snapshot for timesheet punch
 
     if stopped:
         _write_entries(entries)
+        # Punch each stopped task's time into the timesheet (same as manual checkout)
+        for stopped_rec in stopped_entries:
+            _punch_timesheet_for_stopped_entry(stopped_rec)
 
     return {"stopped": stopped}
 
